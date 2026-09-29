@@ -1,0 +1,15 @@
+# secrets and local state
+.env
+.env.*
+!.env.example
+session.json
+data/
+
+# python
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/

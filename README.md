@@ -1,13 +1,12 @@
 # jevlab
 
-**An offline search lab for [Trick Jev](https://i-wanna-date-jev.begin-363.workers.dev).** Players build phrases, and
-Jev, a classifier language model, reads each phrase as context and answers a question. The goal is to push Jev's
-probability for a target answer as high as it will go, using as few words as possible. jevlab snapshots the site,
-searches for winning phrases against a local replica of Jev, and publishes the winners when you are ready.
+**An offline search lab for playing [Trick Jev](https://trickjev.com).** 
 
-![jevlab lab TUI](screenshots/lab.png)
+The goal is to study and learn how jev works. We must study and master the mechanics of JEV today to dictate the terms of how we live tomorrow. By decoding how JEV operates and identifying the precise words that influence its behavior, we are actively preparing for a future where this technology runs the inner workings of our day-to-day lives.
 
-## Why it's hard
+![jevlab home screen](docs/lab.png)
+
+## The challenges with understanding Jev
 
 - **Black box.** Jev exposes no gradients, no logits, and no internals. We only get the final answer probability.
 - **Quantized.** Every answer is rounded to 0.01. Near the top of the range, most improvements are smaller than one step.
@@ -15,7 +14,7 @@ searches for winning phrases against a local replica of Jev, and publishes the w
 - **Discrete and constrained.** The search space is sequences of Strict-legal words (Latin letters and digits, strict casing, ≤16 characters per word, ≤60 words, no fragments of choice answer names).
 - **Lexicographic objective.** Boards rank by rounded score first and length second. Which is primary depends on the board.
 
-## How it works
+## How Jevlab works
 
 A single engine serves both boards (**Strict Highest** and **Strict Shortest yes**). A **multi-armed bandit**
 allocates oracle budget across heterogeneous **proposal operators**: LLM writers, evolutionary search,

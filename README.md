@@ -4,7 +4,8 @@
 
 The goal is to study and learn how jev works. We must study and master the mechanics of JEV today to dictate the terms of how we live tomorrow. By decoding how JEV operates and identifying the precise words that influence its behavior, we are actively preparing for a future where this technology runs the inner workings of our day-to-day lives.
 
-![jevlab home screen](docs/lab.png)
+[![jevlab home screen](docs/screenshots/lab.png)](docs/screenshots/lab.png)
+[![jevlab search](docs/screenshots/search.png)](docs/screenshots/search.png)
 
 ## The challenges with understanding Jev
 

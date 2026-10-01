@@ -69,7 +69,7 @@ def save(slug: str, mode: str, phrase: str, *, p_mean: float, p_lcb: float, spre
          target: str = "", estimated_from: str = "", jev_p: float | None = None) -> dict:
     """`extra` carries board-specific fields, e.g. Shortest yes gambles: gamble, p_reach (best roll), hits.
     `target` files the line under one answer of a choice question (its p values are P(target)).
-    `estimated_from` names the edition whose scores stand in for this one's (a Kev line copied from Jev, n=0).
+    `estimated_from` names the edition whose scores stand in for this one's (a mirror line copied from Jev, n=0).
     An estimate never overwrites a measured line; a measured save turns an estimate into a measured line."""
     data = load(slug, mode, board, target)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -130,7 +130,7 @@ def set_status(slug: str, mode: str, phrase: str, status: str, board: str = HIGH
 
 def all_entries(board: str | None = None, root: Path | None = None) -> list[dict]:
     """Every entry, tagged with slug, mode, and board; only one board's when `board` is given.
-    `root` reads another edition's vault (config.JEV_VAULT from Kev)."""
+    `root` reads another edition's vault (config.JEV_VAULT from a mirror edition)."""
     out = []
     root = root or VAULT
     if not root.exists():
@@ -148,3 +148,86 @@ def all_entries(board: str | None = None, root: Path | None = None) -> list[dict
 
 def queued(board: str | None = None) -> list[dict]:
     return [e for e in all_entries(board) if e.get("status") == "queued"]
+
+
+def drop_phrases(slug: str, phrases: set[str]) -> list[dict]:
+    """Remove these phrases from every vault file for one question. Returns the removed entries."""
+    removed = []
+    folder = VAULT / slug
+    if not phrases or not folder.exists():
+        return removed
+    for path in sorted(folder.glob("*.json")):
+        mode, file_board = _split(path)
+        if file_board not in BOARDS:
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        kept = []
+        changed = False
+        for entry in data.get("entries") or []:
+            if entry.get("phrase") in phrases:
+                removed.append(
+                    entry
+                    | {
+                        "slug": data.get("slug") or slug,
+                        "mode": data.get("mode") or mode,
+                        "board": file_board,
+                        "target": data.get("target") or "",
+                    }
+                )
+                changed = True
+            else:
+                kept.append(entry)
+        if changed:
+            data["entries"] = kept
+            data.setdefault("slug", slug)
+            data.setdefault("mode", mode)
+            data.setdefault("board", file_board)
+            _write(data)
+    return removed
+
+
+def drop_banned() -> list[dict]:
+    """Remove every entry whose phrase contains a span the server has named.
+
+    One banned span can sit inside lines on other questions, modes, and boards. Those lines keep a
+    high score, so the next search or queue picks them again. Returns the removed entries.
+    """
+    from .rules.banned import hit
+
+    removed = []
+    if not VAULT.exists():
+        return removed
+    for path in sorted(VAULT.glob("*/*.json")):
+        mode, file_board = _split(path)
+        if file_board not in BOARDS:
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        kept = []
+        changed = False
+        for entry in data.get("entries") or []:
+            if hit(entry.get("phrase") or ""):
+                removed.append(
+                    entry
+                    | {
+                        "slug": data.get("slug") or path.parent.name,
+                        "mode": data.get("mode") or mode,
+                        "board": file_board,
+                        "target": data.get("target") or "",
+                    }
+                )
+                changed = True
+            else:
+                kept.append(entry)
+        if changed:
+            data["entries"] = kept
+            data.setdefault("slug", path.parent.name)
+            data.setdefault("mode", mode)
+            data.setdefault("board", file_board)
+            _write(data)
+    return removed

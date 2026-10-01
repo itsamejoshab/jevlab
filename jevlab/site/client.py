@@ -1,6 +1,6 @@
 """Trick Jev site client: TanStack Start server functions over the TSS framed protocol.
 
-Every call takes `edition` ("jev" or "kev"), the attempt comes from mode-run,
+Every call takes `edition` ("jev", "kev", or "laya"), the attempt comes from mode-run,
 the player from viewer, and `$TSR/Error` responses raise instead of passing through.
 """
 
@@ -17,10 +17,7 @@ import httpx
 from .. import netlog
 from ..config import EDITION, ROOT, SITE_BASE
 
-UA = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-)
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 SESSION_PATH = ROOT / "session.json"
 
 FN = {
@@ -178,7 +175,7 @@ class SiteClient:
             "accept": "application/x-tss-framed, application/x-ndjson, application/json",
             "x-tsr-serverFn": "true",
             "origin": SITE_BASE,
-            "referer": SITE_BASE + ("/kev/" if self.edition == "kev" else "/"),
+            "referer": SITE_BASE + ("/" if self.edition == "jev" else f"/{self.edition}/"),
         }
         if self.cookies:
             headers["cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
@@ -191,8 +188,9 @@ class SiteClient:
             if not error.where:
                 error.where = f"{netlog.host_of(SITE_BASE)} {name}"
                 error.args = (f"site {error.where}: {error.message}",)
-            netlog.record("site", SITE_BASE, f" {name}", error.status or "app error",
-                          f"{error.code} {error.message}".strip())
+            netlog.record(
+                "site", SITE_BASE, f" {name}", error.status or "app error", f"{error.code} {error.message}".strip()
+            )
             raise
 
     def _call(self, name: str, data: dict, method: str = "GET"):
@@ -214,16 +212,19 @@ class SiteClient:
         try:
             decoded = _decode(response.json(), {})
         except json.JSONDecodeError as error:
-            raise SiteError(f"HTTP {response.status_code}: {response.text[:200]!r}",
-                            status=response.status_code) from error
+            raise SiteError(
+                f"HTTP {response.status_code}: {response.text[:200]!r}", status=response.status_code
+            ) from error
         if not isinstance(decoded, dict):
             raise SiteError(f"unexpected response HTTP {response.status_code}", status=response.status_code)
         error = decoded.get("error")
         if isinstance(error, dict):
             value = error.get("value") or {}
             message = value.get("message") if isinstance(value, dict) else value
-            raise SiteError(f"{error.get('plugin') or 'error'}: {message}",
-                            status=response.status_code if response.status_code >= 400 else "")
+            raise SiteError(
+                f"{error.get('plugin') or 'error'}: {message}",
+                status=response.status_code if response.status_code >= 400 else "",
+            )
         result = decoded.get("result")
         if isinstance(result, dict) and result.get("ok") is False:
             err = result.get("error") or {}
@@ -253,6 +254,10 @@ class SiteClient:
 
     def jevers(self) -> dict:
         return self.call("jevers", {"edition": self.edition})
+
+    def round_state(self, which: str = "live") -> dict:
+        """Current or past live round. `which` is \"live\" or a round UUID."""
+        return self.call("round", {"edition": self.edition, "round": which}) or {}
 
     # Writes (paced).
 

@@ -15,9 +15,9 @@ from textual.widgets.selection_list import Selection
 
 from .. import activity, vault
 from ..boards import Standing, standings
-from ..config import EDITION, EDITIONS, KEV
+from ..config import EDITION, EDITIONS, MIRROR
 from ..db import DB
-from ..modes import PUBLISH_MODES, GameMode, from_name
+from ..modes import HOME_MODES, GameMode, from_name
 from ..search.engine import LEVELS
 from .lab import LabScreen
 
@@ -38,7 +38,9 @@ BANNER_GLYPHS = {
     "L": ["██╗     ", "██║     ", "██║     ", "██║     ", "███████╗", "╚══════╝"],
     "A": [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
     "B": ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██████╔╝", "╚═════╝ "],
+    "Y": ["██╗   ██╗", "╚██╗ ██╔╝", " ╚████╔╝ ", "  ╚██╔╝  ", "   ██║   ", "   ╚═╝   "],
 }
+BANNER = {"kev": "KEVLAB", "laya": "LAYALAB"}.get(EDITION, "JEVLAB")
 BANNER_FACE = ["#ffffff", "#e4eef8", "#c6d9ec", "#a8c4e0", "#8aafd4", "#6c9ac8"]
 BANNER_SHADOW = "#3a4f66"
 BANNER_ACCENT = "#8aafd4"
@@ -49,7 +51,7 @@ CLASSIFICATION = "TOP SECRET // JEV-ORCON // NOFORN // EYES ONLY"
 def banner() -> Text:
     text = Text(justify="center", no_wrap=True)
     for row, face in enumerate(BANNER_FACE):
-        line = "   ".join(BANNER_GLYPHS[letter][row] for letter in ("KEVLAB" if KEV else "JEVLAB"))
+        line = "   ".join(BANNER_GLYPHS[letter][row] for letter in BANNER)
         for ch in line:
             text.append(ch, style=f"bold {face}" if ch == "█" else BANNER_SHADOW)
         text.append("\n")
@@ -62,9 +64,11 @@ def banner() -> Text:
 
 def dossier() -> Text:
     text = Text(justify="center")
-    text.append("Directorate of Offline Adversarial Lexicography & Stochastic Oracle Interrogation\n",
-                style="bold italic")
-    text.append("Trick Jev Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B",
+    text.append(
+        "Directorate of Offline Adversarial Lexicography & Stochastic Oracle Interrogation\n", style="bold italic"
+    )
+    theatre = {"kev": "Kev", "laya": "Laya"}.get(EDITION, "Jev")
+    text.append(f"Trick {theatre} Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B",
                 style="dim")
     return text
 
@@ -114,10 +118,13 @@ class HomeScreen(Screen):
             yield Rule(id="home-rule", line_style="heavy")
             with Horizontal(id="home-mode"):
                 yield Label("GAME MODE")
-                yield Select([(m.label, m.name) for m in PUBLISH_MODES], value=self.app.game_mode.name,
-                             allow_blank=False, id="game-mode")
-                yield Select([(e.capitalize(), e) for e in EDITIONS], value=EDITION, allow_blank=False,
-                             id="edition")
+                yield Select(
+                    [(m.label, m.name) for m in HOME_MODES],
+                    value=self.app.game_mode.name,
+                    allow_blank=False,
+                    id="game-mode",
+                )
+                yield Select([(e.capitalize(), e) for e in EDITIONS], value=EDITION, allow_blank=False, id="edition")
             with Horizontal(id="home-cards"):
                 yield Static(id="card-lead", classes="card")
                 yield Static(id="card-ready", classes="card")
@@ -162,6 +169,23 @@ class HomeScreen(Screen):
         lead_card = self.query_one("#card-lead", Static)
         ready_card = self.query_one("#card-ready", Static)
         vault_card = self.query_one("#card-vault", Static)
+        if not mode.publishable:
+            self.query_one("#card-lead").border_title = "RACE"
+            self.query_one("#card-ready").border_title = "AUTO"
+            self.query_one("#card-vault").border_title = "HOLD"
+            lead_card.update(card("race", "site live round"))
+            ready_card.update(card("auto", "fast first word"))
+            vault_card.update(card("hold", "slow if dethroned"))
+            text.append(
+                "Search watches /play?round=live. Fast fires a word the moment a round appears, then "
+                "reposts on every score gain. Slow posts only when we are not in 1st and does not spam.",
+                style="bold",
+            )
+            self.query_one("#home-stats", Static).update(text)
+            return
+        self.query_one("#card-lead").border_title = "BOARDS HELD"
+        self.query_one("#card-ready").border_title = "STRIKE READY"
+        self.query_one("#card-vault").border_title = "VAULT"
         if not snap:
             for widget in (lead_card, ready_card, vault_card):
                 widget.update(card("—", "awaiting intel"))
@@ -179,8 +203,9 @@ class HomeScreen(Screen):
         lead_value.append(f"{leading}", style="bold green")
         lead_value.append(f" / {len(searchable)}", style="bold")
         lead_card.update(card(lead_value, f"{mode.label}: we lead"))
-        ready_card.update(card(Text(f"{ready}", style="bold yellow" if ready else "bold"),
-                               "vault lines beat the leader"))
+        ready_card.update(
+            card(Text(f"{ready}", style="bold yellow" if ready else "bold"), "vault lines beat the leader")
+        )
         vault_value = Text()
         vault_value.append(f"{len(entries)}", style="bold cyan")
         vault_value.append("  ·  ", style="dim")
@@ -190,22 +215,35 @@ class HomeScreen(Screen):
         text.append("SNAPSHOT ", style="bold")
         text.append(f"{snap['taken_at']}  ·  {len(rows)} questions, {len(searchable)} searchable", style="dim")
         if not mode.searchable:
-            text.append("\nPublish only: fill this vault with `jevlab crosspost` from the Strict vault.",
-                        style="yellow")
+            text.append(
+                "\nPublish only: fill this vault with `jevlab crosspost` from the Strict vault.", style="yellow"
+            )
         self.query_one("#home-stats", Static).update(text)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        {"search": self.action_search, "publish": self.action_publish, "refresh": self.action_refresh,
-         "quit": self.app.exit}[event.button.id]()
+        {
+            "search": self.action_search,
+            "publish": self.action_publish,
+            "refresh": self.action_refresh,
+            "quit": self.app.exit,
+        }[event.button.id]()
 
     def action_search(self) -> None:
+        if not self.app.game_mode.publishable:
+            self.app.push_screen(LiveSetupScreen())
+            return
         if not self.app.game_mode.searchable:
-            self.notify(f"{self.app.game_mode.label} is publish only; run `jevlab crosspost` to fill its vault",
-                        severity="warning")
+            self.notify(
+                f"{self.app.game_mode.label} is publish only; run `jevlab crosspost` to fill its vault",
+                severity="warning",
+            )
             return
         self.app.push_screen(SearchSetupScreen(self.app.game_mode))
 
     def action_publish(self) -> None:
+        if not self.app.game_mode.publishable:
+            self.notify("Live Mode posts from Search while the round is live", severity="warning")
+            return
         self.app.push_screen(PublishScreen(self.app.game_mode))
 
     def action_refresh(self) -> None:
@@ -229,6 +267,176 @@ class HomeScreen(Screen):
         except Exception as error:
             write(f"snapshot failed: {error!r}")
         self.app.call_from_thread(self.update_stats)
+
+
+class LiveSetupScreen(Screen):
+    CSS = """
+    #live-help { height: auto; padding: 0 1; }
+    #live-question { height: auto; border: round $accent; padding: 0 1;
+                     border-title-color: $accent; border-title-style: bold; }
+    #live-now { height: auto; }
+    #live-panel { height: auto; border: round $accent; padding: 0 1;
+                  border-title-color: $accent; border-title-style: bold; }
+    #params { height: auto; }
+    .field { width: auto; height: auto; margin-right: 3; }
+    .field Label { color: $text-muted; text-style: bold; }
+    #pace { width: 32; }
+    #chain { width: 34; }
+    #max-level { width: 24; }
+    .field Switch { margin-left: 1; }
+    #actions { height: 3; margin-top: 1; }
+    #actions Button { margin-right: 1; min-width: 12; }
+    #actions-spacer { width: 1fr; }
+    #go { min-width: 26; margin-right: 0; }
+    """
+
+    BINDINGS = [
+        Binding("g", "go", "GO"),
+        Binding("escape", "back", "back"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="live-help")
+        with Vertical(id="live-question"):
+            yield Static(id="live-now")
+        with Vertical(id="live-panel"):
+            with Horizontal(id="params"):
+                with Vertical(classes="field"):
+                    yield Label("PACE")
+                    yield Select(
+                        [
+                            ("FAST  first word, every gain", "fast"),
+                            ("SLOW  only when not 1st", "slow"),
+                        ],
+                        value="fast",
+                        allow_blank=False,
+                        id="pace",
+                    )
+                with Vertical(classes="field"):
+                    yield Label("CHAIN")
+                    yield Select(
+                        [
+                            ("CASUAL  phrase as one word", "casual"),
+                            ("STRICT  one word at a time", "strict"),
+                        ],
+                        value="casual",
+                        allow_blank=False,
+                        id="chain",
+                    )
+                with Vertical(classes="field"):
+                    yield Label("LLM IDEAS")
+                    yield Switch(True, id="llm")
+                with Vertical(classes="field"):
+                    yield Label("POST")
+                    yield Switch(True, id="post")
+                with Vertical(classes="field"):
+                    yield Label("ESCALATE")
+                    yield Switch(True, id="escalate")
+                with Vertical(classes="field"):
+                    yield Label("UP TO LEVEL")
+                    yield Select(
+                        [(f"L{i}  {name}", i) for i, (name, *_) in enumerate(LEVELS)],
+                        value=len(LEVELS) - 1,
+                        allow_blank=False,
+                        id="max-level",
+                    )
+            with Horizontal(id="actions"):
+                yield Static(id="actions-spacer")
+                yield Button("GO", id="go", variant="success")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#live-question").border_title = "LIVE ROUND"
+        self.query_one("#live-panel").border_title = "RUN PARAMETERS"
+        self.update_help()
+        self.refresh_round()
+
+    def update_help(self) -> None:
+        pace = self.query_one("#pace", Select).value
+        text = Text()
+        text.append("Live Mode  ", style="bold")
+        if pace == "fast":
+            text.append(
+                "FAST: reads the next question immediately, posts the best saved line when this question "
+                "was already scanned, otherwise fires one word, then reposts on every score gain. "
+            )
+        else:
+            text.append("SLOW: posts a saved line or a new leader only when we are not in 1st, then holds. ")
+        if self.query_one("#chain", Select).value == "strict":
+            text.append("STRICT: one word at a time. A whole phrase cannot be sent. ")
+        else:
+            text.append("CASUAL: a whole phrase goes up as one hyphenated word. ")
+        if not self.query_one("#post", Switch).value:
+            text.append("POST is off: the search runs and nothing is sent. p toggles it during the run.")
+        self.query_one("#live-help", Static).update(text)
+
+    def refresh_round(self) -> None:
+        from ..live import LiveSession
+        from ..site.client import SiteClient, SiteError
+
+        now = Text()
+        try:
+            state = SiteClient().round_state("live")
+        except SiteError as error:
+            now.append(f"Could not read the live round: {error}", style="bold red")
+            self.query_one("#live-now", Static).update(now)
+            return
+        session = LiveSession()
+        session.observe(state, me="")
+        if session.status != "live" or not session.question:
+            now.append(
+                f"No live round right now ({session.status or 'idle'}). GO still waits for the next one.",
+                style="yellow",
+            )
+        else:
+            now.append(session.question["title"], style="bold")
+            site_mode = "strict" if state.get("playMode") == "strict_chain" else "casual"
+            now.append(f"\nround is {site_mode}  ·  finish at {session.threshold:.0%}  ·  ", style="dim")
+            lead = session.leader
+            now.append(
+                f"leader {lead.probability:.2f}/{lead.units}w {lead.name}" if lead else "nobody racing yet",
+                style="bold yellow" if lead else "dim",
+            )
+        self.query_one("#live-now", Static).update(now)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id in ("pace", "chain"):
+            self.update_help()
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id == "post":
+            self.update_help()
+        elif event.switch.id == "escalate":
+            self.query_one("#max-level", Select).disabled = not event.value
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "go":
+            self.action_go()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def action_go(self) -> None:
+        max_level = self.query_one("#max-level", Select).value
+        use_llm = self.query_one("#llm", Switch).value
+        escalate = self.query_one("#escalate", Switch).value
+        post = self.query_one("#post", Switch).value
+        pace = self.query_one("#pace", Select).value
+        chain = self.query_one("#chain", Select).value
+        self.app.switch_screen(
+            LabScreen(
+                [],
+                budget=10**9,
+                use_llm=use_llm,
+                max_stall=0,
+                escalate=escalate,
+                max_level=max_level,
+                live_play=True,
+                live_pace=pace if pace in ("fast", "slow") else "fast",
+                live_chain="strict" if chain == "strict" else "casual",
+                live_post=bool(post),
+            )
+        )
 
 
 class SearchSetupScreen(Screen):
@@ -265,7 +473,9 @@ class SearchSetupScreen(Screen):
     def __init__(self, game_mode: GameMode):
         super().__init__()
         self.game_mode = game_mode
-        self.rows = sorted(standings(DB(), board=game_mode.board, targets=True), key=lambda s: (not s.searchable, s.search_order))
+        self.rows = sorted(
+            standings(DB(), board=game_mode.board, targets=True), key=lambda s: (not s.searchable, s.search_order)
+        )
 
     def compose(self) -> ComposeResult:
         yield Static(id="setup-help")
@@ -286,8 +496,12 @@ class SearchSetupScreen(Screen):
                     yield Switch(True, id="escalate")
                 with Vertical(classes="field"):
                     yield Label("UP TO LEVEL")
-                    yield Select([(f"L{i}  {name}", i) for i, (name, *_) in enumerate(LEVELS)],
-                                 value=len(LEVELS) - 1, allow_blank=False, id="max-level")
+                    yield Select(
+                        [(f"L{i}  {name}", i) for i, (name, *_) in enumerate(LEVELS)],
+                        value=len(LEVELS) - 1,
+                        allow_blank=False,
+                        id="max-level",
+                    )
                 with Vertical(classes="field"):
                     yield Label("WIN MODE")
                     yield Switch(False, id="win-mode")
@@ -324,8 +538,10 @@ class SearchSetupScreen(Screen):
             prompt.append(f"ours {fmt_ours(s)}  ", style="green" if s.we_lead else "")
             prompt.append("LEAD " if s.we_lead else "     ", style="bold green")
             if s.best_entry:
-                prompt.append(f"vault {s.best_entry['p_mean']:.2f}/{s.best_entry['units']:>2}w ",
-                              style="bold yellow" if s.entry_beats else "dim")
+                prompt.append(
+                    f"vault {s.best_entry['p_mean']:.2f}/{s.best_entry['units']:>2}w ",
+                    style="bold yellow" if s.entry_beats else "dim",
+                )
             else:
                 prompt.append(" " * 17)
             mem = s.memory
@@ -340,8 +556,10 @@ class SearchSetupScreen(Screen):
                 prompt.append("  (unwinnable: leader has 1.00 in 1 word, we could only tie)", style="dim")
             elif mem and mem.runs and not mem.wins:
                 stalled = f"; stalled at L{mem.level} {LEVELS[mem.level][0]}" if 0 < mem.level < len(LEVELS) else ""
-                prompt.append(f"  (best so far {mem.best_p:.2f}/{mem.best_units}w{stalled}; next run starts fresh)",
-                              style="dim cyan")
+                prompt.append(
+                    f"  (best so far {mem.best_p:.2f}/{mem.best_units}w{stalled}; next run starts fresh)",
+                    style="dim cyan",
+                )
             out.append(Selection(prompt, s.key, s.should_search, disabled=not s.searchable))
         return out
 
@@ -351,7 +569,8 @@ class SearchSetupScreen(Screen):
         self.query_one("#run-panel").border_title = "RUN PARAMETERS"
         self.query_one("#run-panel").border_subtitle = (
             "patience = flat rounds before escalating (or moving on)   "
-            "win mode = once we take the lead, stop after that many more calls")
+            "win mode = once we take the lead, stop after that many more calls"
+        )
         self.update_help()
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
@@ -369,17 +588,23 @@ class SearchSetupScreen(Screen):
         text.append(f"Search {self.game_mode.label}  ", style="bold")
         unwinnable = sum(1 for s in self.rows if s.searchable and s.unwinnable)
         order = "longest leader" if self.game_mode.shortest else "weakest leader"
-        text.append(f"{picked} selected. Preselected: every searchable board we are not leading "
-                    f"({unwinnable} unwinnable boards left out). Space toggles, "
-                    f"GO runs them one at a time starting with the {order}.")
+        text.append(
+            f"{picked} selected. Preselected: every searchable board we are not leading "
+            f"({unwinnable} unwinnable boards left out). Space toggles, "
+            f"GO runs them one at a time starting with the {order}."
+        )
         self.query_one("#setup-help", Static).update(text)
 
     def on_selection_list_selected_changed(self, _event) -> None:
         self.update_help()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        {"all": self.action_select_all, "none": self.action_select_none,
-         "not-leading": self.action_select_not_leading, "go": self.action_go}[event.button.id]()
+        {
+            "all": self.action_select_all,
+            "none": self.action_select_none,
+            "not-leading": self.action_select_not_leading,
+            "go": self.action_go,
+        }[event.button.id]()
 
     def action_select_all(self) -> None:
         picker = self.query_one("#picker", SelectionList)
@@ -408,8 +633,9 @@ class SearchSetupScreen(Screen):
         chosen = [s for s in self.rows if self.targetable(s) and s.leader.name == event.value]
         for s in chosen:
             picker.select(s.key)
-        self.notify(f"{len(chosen)} board{'' if len(chosen) == 1 else 's'} where {event.value} leads "
-                    f"{self.game_mode.label}")
+        self.notify(
+            f"{len(chosen)} board{'' if len(chosen) == 1 else 's'} where {event.value} leads {self.game_mode.label}"
+        )
 
     def action_back(self) -> None:
         self.app.pop_screen()
@@ -432,9 +658,18 @@ class SearchSetupScreen(Screen):
         max_level = self.query_one("#max-level", Select).value
         use_llm = self.query_one("#llm", Switch).value
         escalate = self.query_one("#escalate", Switch).value
-        self.app.switch_screen(LabScreen(order, budget=budget, use_llm=use_llm, max_stall=stall,
-                                         escalate=escalate, max_level=max_level, board=self.game_mode.board,
-                                         win_extra=win_extra))
+        self.app.switch_screen(
+            LabScreen(
+                order,
+                budget=budget,
+                use_llm=use_llm,
+                max_stall=stall,
+                escalate=escalate,
+                max_level=max_level,
+                board=self.game_mode.board,
+                win_extra=win_extra,
+            )
+        )
 
     def read_int(self, selector: str, name: str, minimum: int) -> int | None:
         field = self.query_one(selector, Input)
@@ -482,10 +717,10 @@ class PublishScreen(Screen):
             yield Switch(False, id="dry")
             yield Label("near-misses")
             yield Switch(False, id="long")
-            yield Label("re-rolls if short")
+            yield Label("re-rolls")
             yield Input("3", id="rerolls", type="integer")
             yield Button("Refresh", id="refresh")
-            if KEV:
+            if MIRROR:
                 yield Button("Import from Jev", id="import-jev")
             yield Button("Publish selected", id="publish", variant="success")
             yield Button("Back", id="back")
@@ -493,16 +728,18 @@ class PublishScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#pub-picker").border_title = (
-            f"{self.game_mode.label}: vault lines estimated to beat the current leader")
+        self.query_one(
+            "#pub-picker"
+        ).border_title = f"{self.game_mode.label}: vault lines estimated to beat the current leader"
         self.query_one("#pub-log").border_title = "publisher"
         self.reload()
 
     def reload(self) -> None:
         with_long = self.query_one("#long", Switch).value
         u = self.game_mode.unit_abbr
-        every = standings(DB(), mode=self.game_mode.play_mode, long_shots=with_long, board=self.game_mode.board,
-                          targets=True)
+        every = standings(
+            DB(), mode=self.game_mode.play_mode, long_shots=with_long, board=self.game_mode.board, targets=True
+        )
         self.rows = sorted((s for s in every if s.entry_beats), key=lambda s: s.search_order)
         self.long_rows = sorted((s for s in every if s.long_shot), key=lambda s: s.search_order)
         picker = self.query_one("#pub-picker", SelectionList)
@@ -524,8 +761,9 @@ class PublishScreen(Screen):
             e = s.long_shot
             prompt = Text()
             prompt.append("[long shot] ", style="bold magenta")
-            prompt.append(f"est {e['p_mean']:.3f} (lcb {e['p_lcb']:.3f}) {e['units']:>2}w n={e['n']}  ",
-                          style="magenta")
+            prompt.append(
+                f"est {e['p_mean']:.3f} (lcb {e['p_lcb']:.3f}) {e['units']:>2}w n={e['n']}  ", style="magenta"
+            )
             prompt.append(f"vs lead {fmt_leader(s)}  ", style="yellow")
             prompt.append(f"{s.label[:48]:<48} ", style="bold")
             prompt.append(e["phrase"][:90])
@@ -533,17 +771,24 @@ class PublishScreen(Screen):
         help_text = Text()
         help_text.append(f"Publish {self.game_mode.label}  ", style="bold")
         if self.rows:
-            help_text.append(f"{len(self.rows)} boards where our best vault line should take the top spot. All are "
-                             "preselected; unselect any you want to hold back. Each one is re-checked against the "
-                             "live board and the oracle before any turn is sent.")
+            help_text.append(
+                f"{len(self.rows)} boards where our best vault line should take the top spot. All are "
+                "preselected; unselect any you want to hold back. Each one is re-checked against the "
+                "live board and the oracle before any turn is sent."
+            )
         else:
             first = "Search" if self.game_mode.searchable else "`jevlab crosspost`"
-            help_text.append(f"Nothing ready: no vault line beats its current leader. Run {first} first.",
-                             style="yellow")
+            help_text.append(
+                f"Nothing ready: no vault line beats its current leader. Run {first} first.", style="yellow"
+            )
         if with_long:
-            help_text.append(f"\n{len(self.long_rows)} long shots: lines whose average, but not lower bound, beats "
-                             f"the leader. Unselected; each gets up to {LONG_REROLLS} re-rolls and no oracle re-check. "
-                             "A miss costs only turns, since the board keeps our best.", style="magenta")
+            help_text.append(
+                f"\n{len(self.long_rows)} long shots: lines whose average, but not lower bound, beats "
+                f"the leader. Unselected; each skips the oracle re-check and is re-rolled "
+                f"the requested number of times, up to {LONG_REROLLS} while still short. "
+                "A miss costs only turns, since the board keeps our best.",
+                style="magenta",
+            )
         self.query_one("#pub-help", Static).update(help_text)
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
@@ -590,10 +835,25 @@ class PublishScreen(Screen):
         for s in self.long_rows:
             if f"long:{s.key}" in chosen:
                 e = s.long_shot
-                vault.save(s.slug, e["mode"], e["phrase"], p_mean=e["p_mean"], p_lcb=e["p_lcb"],
-                           spread=e["spread"], n=e["n"], units=e["units"], leader=s.leader, beats=False,
-                           title=s.title, origin="long shot", status="queued", note="long shot", board=board,
-                           estimated_from=e.get("estimated_from") or "", jev_p=e.get("jev_p"))
+                vault.save(
+                    s.slug,
+                    e["mode"],
+                    e["phrase"],
+                    p_mean=e["p_mean"],
+                    p_lcb=e["p_lcb"],
+                    spread=e["spread"],
+                    n=e["n"],
+                    units=e["units"],
+                    leader=s.leader,
+                    beats=False,
+                    title=s.title,
+                    origin="long shot",
+                    status="queued",
+                    note="long shot",
+                    board=board,
+                    estimated_from=e.get("estimated_from") or "",
+                    jev_p=e.get("jev_p"),
+                )
                 vault.set_status(s.slug, e["mode"], e["phrase"], "queued", board, target=s.target)
                 entries.append(e | {"status": "queued", "board": board, "target": s.target})
         if not entries:
@@ -606,7 +866,8 @@ class PublishScreen(Screen):
         dry = self.query_one("#dry", Switch).value
         self.busy = True
         self.query_one("#pub-log", RichLog).write(
-            f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
+            f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}"
+        )
         self.publish_worker(entries, dry, rerolls)
 
     @work(thread=True, exclusive=True)
@@ -626,16 +887,23 @@ class PublishScreen(Screen):
             results.append((entry, result))
 
         try:
-            publish(dry_run=dry, rerolls=rerolls, entries=entries, log=write, on_result=on_result,
-                    long_rerolls=LONG_REROLLS)
+            publish(
+                dry_run=dry, rerolls=rerolls, entries=entries, log=write, on_result=on_result, long_rerolls=LONG_REROLLS
+            )
         except Exception as error:
             write(f"publisher crashed: {error!r}")
         won = sum(1 for _, r in results if r.startswith("won") or r == "already")
         write(f"\nfinished: {won}/{len(results)} on top" + (" (dry run, nothing sent)" if dry else ""))
         if dry:
             for s_entry in entries:
-                vault.set_status(s_entry["slug"], s_entry["mode"], s_entry["phrase"], "candidate",
-                                 s_entry["board"], target=s_entry.get("target") or "")
+                vault.set_status(
+                    s_entry["slug"],
+                    s_entry["mode"],
+                    s_entry["phrase"],
+                    "candidate",
+                    s_entry["board"],
+                    target=s_entry.get("target") or "",
+                )
 
         def done() -> None:
             self.busy = False

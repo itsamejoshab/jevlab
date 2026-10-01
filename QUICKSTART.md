@@ -87,14 +87,16 @@ uv run jevlab publish                             # send the queued lines
 
 Please be a good guest. This is someone's hobby game. Keep the default delays, and don't flood the boards.
 
-## 7. Trick Kev
+## 7. Trick Kev and Trick Laya
 
-The site has a mirror game, Trick Kev, with its own model and boards. Add `--edition kev` to any command, or set
-`JEV_EDITION=kev` in `.env`. Kev keeps its data in `data/kev/` and reads (never writes) Jev's data to borrow estimates.
+The site has two mirror games, Trick Kev and Trick Laya, each with its own model and boards. Add `--edition kev`
+or `--edition laya` to any command, or set `JEV_EDITION` in `.env`. Each mirror keeps its data in `data/kev/` or
+`data/laya/` and reads (never writes) Jev's data to borrow estimates.
 
 ```bash
-uv run jevlab --edition kev snapshot
-uv run jevlab --edition kev search --q is-cereal-a-soup
+uv run jevlab --edition laya snapshot
+uv run jevlab --edition laya vault import-jev --queue   # copy Jev lines in as estimates
+uv run jevlab --edition laya search --q is-cereal-a-soup
 ```
 
 ## 8. Tests
@@ -114,6 +116,7 @@ uv run ruff check
 | `data/snapshots/` | Raw JSON from each `jevlab snapshot` |
 | `data/models/` | Trained cross-question predictor (`jevlab train-global`) |
 | `data/kev/` | The same layout for the Kev edition |
+| `data/laya/` | The same layout for the Laya edition |
 
 `data/`, `.env`, and `session.json` are gitignored. Move the data elsewhere with `JEVLAB_DATA=/path`.
 

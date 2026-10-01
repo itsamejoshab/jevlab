@@ -49,6 +49,7 @@ def take_snapshot(
     snapshot_id = cursor.lastrowid
 
     questions = [q for q in menu.get("questions") or [] if not slugs or q["slug"] in slugs]
+    previous_goals = {row["slug"]: row["goal"] or "yes" for row in db.all("SELECT slug, goal FROM questions")}
     db.executemany(
         """INSERT OR REPLACE INTO questions
         (slug, snapshot_id, revision_id, title, instructions, kind, goal, baseline,
@@ -64,6 +65,9 @@ def take_snapshot(
         ],
     )
     log(f"snapshot {snapshot_id}: {len(questions)} questions x {len(modes)} modes (me={me or 'anonymous'})")
+    from ..publish import realign_vault_goals
+
+    realign_vault_goals(db, previous_goals, {q["slug"] for q in questions}, log)
 
     jobs = [(q, mode) for q in questions for mode in modes]
 
@@ -82,10 +86,10 @@ def take_snapshot(
                     break
                 except SiteError as error:
                     out[key + "_error"] = str(error)
-                    time.sleep(1 + tries)
+                    time.sleep(0.2)
                 except Exception as error:  # network hiccups
                     out[key + "_error"] = repr(error)
-                    time.sleep(1 + tries)
+                    time.sleep(0.2)
         return out
 
     results = []

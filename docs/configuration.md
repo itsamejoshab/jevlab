@@ -13,7 +13,7 @@ rest are tools the search uses to find phrases that score well on it.
 
 | Role | Variable | Default | What it does |
 | --- | --- | --- | --- |
-| Oracle | `JEV_MODEL` | `jev-latest` (Kev: `jaredpalmer/kev-4b`) | The classifier the game scores with. Every candidate phrase is scored here. |
+| Oracle | `JEV_MODEL` | `jev-latest` (Kev: `jaredpalmer/kev-4b`, Laya: `convaiinnovations/laya`) | The classifier the game scores with. Every candidate phrase is scored here. |
 | Generators | `JEV_GEN_MODELS` | tiered table in `config.py` | Write candidate phrases. Each tier is one bandit arm. |
 | Rewrite model | `JEV_GEN_MODEL` | first table entry | Single-model jobs: rewrites and synonyms. |
 | Beam model | `JEV_GEN_MODEL_ALT` | `deepseek/deepseek-v4-flash` | High-volume next-word proposals. Should be fast and cheap. |
@@ -30,7 +30,7 @@ The oracle sends the site's own request body (each question's `jevRequest`, with
 - `openrouter` uses `OPENROUTER_API_KEY`.
 - `typesafe` uses `TYPESAFE_API_KEY` (Typesafe serves the same Jev model).
 
-`JEV_ORACLE_BACKENDS` chooses which to use (default `typesafe,openrouter` on Jev, `openrouter` on Kev). Backends
+`JEV_ORACLE_BACKENDS` chooses which to use (default `typesafe,openrouter` on Jev, `openrouter` on Kev and Laya). Backends
 without a key are skipped, so OpenRouter alone is enough. Calls go to the healthy backend with the most free slots,
 and a backend that fails three times in a row rests for a while.
 
@@ -93,21 +93,23 @@ Rough numbers from the author's runs, at OpenRouter prices on 2026-09-26:
 
 For a cheap first run, use `--budget 2000`, or `--no-llm` for a purely mechanical search with no generator calls.
 
-## Editions: Jev and Kev
+## Editions: Jev, Kev, and Laya
 
-`JEV_EDITION=kev` (or `--edition kev`) switches to Trick Kev, the mirror game. It changes these defaults:
+`JEV_EDITION=kev` or `JEV_EDITION=laya` (or `--edition kev` / `--edition laya`) switches to a mirror game. Both
+mirrors change these defaults the same way; only the model and data directory differ.
 
-| Setting | Jev | Kev |
-| --- | --- | --- |
-| Data directory | `data/` | `data/kev/` |
-| `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` |
-| `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` |
-| `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 |
-| `JEV_ORACLE_TIMEOUT` | 20 s | 60 s |
-| `JEV_TRIAGE_K` | 0 | 40 |
+| Setting | Jev | Kev | Laya |
+| --- | --- | --- | --- |
+| Data directory | `data/` | `data/kev/` | `data/laya/` |
+| `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `convaiinnovations/laya` |
+| `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `openrouter` |
+| `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 4 / 8 |
+| `JEV_ORACLE_TIMEOUT` | 20 s | 60 s | 60 s |
+| `JEV_TRIAGE_K` | 0 | 40 | 40 |
 
-Kev reads Jev's database and vault read-only (`JEV_SOURCE_MODEL` names the model Jev's samples were recorded under),
-so it can start from lines that already work on Jev.
+A mirror reads Jev's database and vault read-only (`JEV_SOURCE_MODEL` names the model Jev's samples were recorded
+under), so it can start from lines that already work on Jev. `jevlab --edition laya vault import-jev` copies those
+lines in as estimates.
 
 ## Other settings
 
@@ -117,7 +119,7 @@ so it can start from lines that already work on Jev.
 | `JEV_COOKIE` | empty | Session cookie header for signed-in calls (or use `session.json`) |
 | `JEVLAB_DATA` | `./data` | Database, vault, snapshots, models |
 | `JEV_LLM_TIMEOUT` | 60 | Seconds per generator or planner call |
-| `JEV_TRIAGE_K` | 0 (Kev 40) | Existing lines to score before generating |
+| `JEV_TRIAGE_K` | 0 (Kev and Laya 40) | Existing lines to score before generating |
 | `JEV_LONG_TARGET` | 0 | Word target for the experimental long-chain regime (0 is off) |
 | `JEV_PLATEAU_LEADER_WORDS` | 40 | Leader length that triggers plateau mode |
 | `JEV_LONG_PLAN_CALLS` | 2 | Planner calls per question in the long-chain regime |

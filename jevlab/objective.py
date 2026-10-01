@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from .modes import HIGH_SCORES, SHORTEST_YES
 from .oracle import Score
 
-# The site counts P(goal) > 0.5 as yes; our own lines must clear this so noise cannot drop them under.
+# Fallback when a question does not name a yes line. Most boards publish 0.5; we sit just over it.
 SHORTEST_THRESHOLD = 0.51
 SHORTEST_MAX_UNITS = 60
 # Shortest yes keeps our best-ever roll, so a line shorter than the leader that clears the threshold on at
@@ -23,6 +23,34 @@ GAMBLE_MIN_N = 5
 # The site returns yes/no probabilities between 0.01 and 0.99; engines raise this if they ever see higher.
 CEILING = 0.99
 CEILING_MIN_N = 5
+
+
+def board_threshold(question: dict | None) -> float:
+    """The yes line this board publishes. A missing or unusable value stays at 0.51."""
+    if not question:
+        return SHORTEST_THRESHOLD
+    raw = question.get("yes_threshold")
+    if raw is None:
+        raw = question.get("yesThreshold")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return SHORTEST_THRESHOLD
+    if not math.isfinite(value) or value <= 0 or value > 1:
+        return SHORTEST_THRESHOLD
+    return value
+
+
+def objective_for(question: dict | None, *, unit: str = "word", board: str = HIGH_SCORES) -> Objective:
+    """Objective for a question. Shortest yes qualifies at that question's yes line."""
+    question = question or {}
+    return Objective(
+        question.get("goal") or "yes",
+        question.get("kind") or "noul",
+        unit=unit,
+        board=board,
+        threshold=board_threshold(question) if board == SHORTEST_YES else SHORTEST_THRESHOLD,
+    )
 
 
 def goal_p(value: float, goal: str | None, kind: str = "noul") -> float:

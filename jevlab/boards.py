@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from . import vault
 from .db import DB
 from .modes import HIGH_SCORES, SHORTEST_YES, STRICT, is_searchable
-from .objective import Leader, Objective, board_leader, site_round, target_rows
+from .objective import Leader, Objective, board_leader, objective_for, site_round, target_rows
 from .oracle import Score, question_key
 from .rules import RuleError, check_phrase, option_names, rejected
+from .rules.banned import contains as phrase_banned
 from .search.memory import RunMemory, by_slug, by_target
 
 TARGET_SEP = "::"
@@ -108,6 +109,8 @@ def long_shot(db: DB, slug: str, mode: str, objective: Objective, leader: Leader
             check_phrase(state, choices)
         except RuleError:
             continue
+        if phrase_banned(state):
+            continue
         return {"slug": slug, "mode": mode, "board": objective.board, "phrase": state, "p_mean": round(p, 4),
                 "p_lcb": round(lcb, 4), "spread": round(score.spread, 4), "n": score.n, "units": units,
                 "status": "long shot", "long_shot": True}
@@ -124,14 +127,18 @@ def standings(db: DB, mode: str = STRICT, long_shots: bool = False,
         if entry["mode"] != mode:
             continue
         key = (entry["slug"], entry.get("target") or "")
-        if entry.get("status") in ("candidate", "queued", "failed") and not has_rejected_word(entry["phrase"]):
+        if (
+            entry.get("status") in ("candidate", "queued", "failed")
+            and not has_rejected_word(entry["phrase"])
+            and not phrase_banned(entry["phrase"])
+        ):
             entries.setdefault(key, []).append(entry)
         if entry.get("status") in ("published", "failed", "rejected", "dropped"):
             spent.setdefault(entry["slug"], set()).add(entry["phrase"])
     memories = by_slug(db, board) if mode == STRICT else {}
     target_memories = by_target(db, board) if mode == STRICT and targets else {}
     out = []
-    for row in db.all("SELECT slug, title, kind, goal, json_extract(raw, '$.ranked') AS ranked, "
+    for row in db.all("SELECT slug, title, kind, goal, yes_threshold, json_extract(raw, '$.ranked') AS ranked, "
                       "json_extract(raw, '$.choices') AS choices FROM questions ORDER BY slug"):
         boards = {b: db.board(row["slug"], mode, b) for b in (board, "champions")}
         ranked = bool(row["ranked"])
@@ -150,7 +157,7 @@ def standing(db: DB, row, rows: list[dict], pool: list[dict], spent: dict[str, s
              mode: str, board: str, ranked: bool, long_shots: bool, target: str) -> Standing:
     leader = board_leader(rows, me, board=board)
     ours = board_leader([r for r in rows if me and r.get("userId") == me], me, include_ours=True, board=board)
-    objective = Objective(row["goal"] or "yes", row["kind"] or "noul", board=board)
+    objective = objective_for(dict(row), board=board)
     we_lead = bool(ours) and (leader is None or objective.leader_key(ours) > objective.leader_key(leader))
     # Winning lines come first, so a saved long shot never hides a safe winner. On Shortest yes a gamble
     # (fewer words, some rolls over the threshold) is judged on its best roll, so it outranks longer lines.

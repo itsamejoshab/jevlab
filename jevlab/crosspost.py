@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from . import vault
 from .db import DB
 from .modes import GOLF, GOLF_HIGHEST, GOLF_SHORTEST, STRICT, GameMode
-from .objective import Leader, Objective, board_leader, target_rows
+from .objective import Leader, board_leader, objective_for, target_rows
 
 
 @dataclass
@@ -61,8 +61,7 @@ def picks(db: DB, modes: tuple[GameMode, ...] = (GOLF_HIGHEST, GOLF_SHORTEST),
             leader = board_leader(rows, me, board=mode.board)
             ours = board_leader([r for r in rows if me and r.get("userId") == me], me, include_ours=True,
                                 board=mode.board)
-            objective = Objective(question.get("goal") or "yes", question.get("kind") or "noul", unit="char",
-                                  board=mode.board)
+            objective = objective_for(question, unit="char", board=mode.board)
             ranked = []
             for entry in entries:
                 units = objective.units(entry["phrase"])

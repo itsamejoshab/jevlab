@@ -127,7 +127,7 @@ class DB:
     """Thread-safe enough for our use: one connection, one lock."""
 
     def __init__(self, path: Path = DB_PATH, readonly: bool = False):
-        """`readonly` opens another edition's database (Kev reading Jev's) without schema work or writes."""
+        """`readonly` opens another edition's database (a mirror reading Jev's) without schema work or writes."""
         self.path = path
         if readonly:
             self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False,

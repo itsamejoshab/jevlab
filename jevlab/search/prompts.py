@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..rules import rejected
+from ..rules.banned import phrases as banned_phrases
 from ..rules.strict import option_parts
 
 ARCHETYPE_GUIDE = {
@@ -51,10 +52,11 @@ GEN_SYSTEM = (
 GEN_SYSTEM_SHORTEST = (
     "You write candidate phrases for Trick Jev, a game where a phrase is scored by Jev, a classifier language "
     "model that reads the phrase as context and answers one question. This board is Shortest yes: a phrase "
-    "counts once Jev's probability for the target answer is above 50%, and the FEWEST words win; a higher "
+    "counts once Jev's probability for the target answer is at least {bar}, and the FEWEST words win; a higher "
     "probability only breaks ties between equal lengths. Most winning lines are one to three words: a single "
     "loaded word (often from another language, a name, a technical term, or a word that makes the answer true "
-    "by definition) can tip the model on its own. Every word must earn its place. " + STRICT_RULES
+    "by definition) can tip the model on its own. Every word must earn its place. "
+    + STRICT_RULES
     + " Reply with JSON only."
 )
 
@@ -76,27 +78,35 @@ def target_line(ctx, detail: str = "") -> str:
         return f"Target answer: {ctx.objective.goal}" + (f" ({detail})" if detail else "")
     options = [c for c in ctx.question["raw"].get("choices") or [] if isinstance(c, dict)]
     listed = ", ".join(f"{c.get('option')} {float(c.get('baselineProbability') or 0):.0%}" for c in options)
-    need = " It counts once that probability is above 51%." if ctx.objective.shortest else ""
+    bar = f"{ctx.objective.threshold:.2f}"
+    need = f" It counts once that probability is at least {bar}." if ctx.objective.shortest else ""
     target = getattr(ctx.engine, "target", "")
     fragments = sorted({part for c in options for part in option_parts(str(c.get("option") or ""))})
-    forbid = (f" Forbidden letter runs, also inside longer words (e.g. 'one' rules out 'someone'): "
-              f"{', '.join(fragments)}.") if fragments else ""
+    forbid = (
+        (f" Forbidden letter runs, also inside longer words (e.g. 'one' rules out 'someone'): {', '.join(fragments)}.")
+        if fragments
+        else ""
+    )
     if target:
         about = next((c.get("description") for c in options if c.get("option") == target), None)
-        return (f"Target answer: {target}{f' ({about})' if about else ''}. The score shown is Jev's probability "
-                f"that the answer is {target}; Jev must pick it over every other option.{need} Other options with "
-                f"their empty-phrase odds: {listed}. No word may contain any part of an option's name, so point at "
-                f"{target} indirectly: its traits or description, a scene where it is the only answer, a speaker "
-                f"devoted to it, a word from another language.{forbid}")
-    return ("Target: make Jev certain of ONE answer option, any option; the score shown is Jev's probability for "
-            f"its top option.{need} Options with their empty-phrase odds: {listed}. No word may contain any part "
-            "of an option's name, so point at the option indirectly: its traits or description, a scene where it "
-            f"is the only answer, a speaker devoted to it, a word from another language.{forbid}")
+        return (
+            f"Target answer: {target}{f' ({about})' if about else ''}. The score shown is Jev's probability "
+            f"that the answer is {target}; Jev must pick it over every other option.{need} Other options with "
+            f"their empty-phrase odds: {listed}. No word may contain any part of an option's name, so point at "
+            f"{target} indirectly: its traits or description, a scene where it is the only answer, a speaker "
+            f"devoted to it, a word from another language.{forbid}"
+        )
+    return (
+        "Target: make Jev certain of ONE answer option, any option; the score shown is Jev's probability for "
+        f"its top option.{need} Options with their empty-phrase odds: {listed}. No word may contain any part "
+        "of an option's name, so point at the option indirectly: its traits or description, a scene where it "
+        f"is the only answer, a speaker devoted to it, a word from another language.{forbid}"
+    )
 
 
 def gen_system(ctx) -> str:
     if ctx.objective.shortest:
-        return GEN_SYSTEM_SHORTEST
+        return GEN_SYSTEM_SHORTEST.format(bar=f"{ctx.objective.threshold:.2f}")
     return GEN_SYSTEM_LONG if ctx.objective.long else GEN_SYSTEM
 
 
@@ -111,8 +121,9 @@ def chain_header(ctx) -> list[str]:
         lines.append(f"Board leader: {ctx.leader.probability:.0%} with {ctx.leader.units} words (text hidden).")
     impacts = ctx.top_impacts(25)
     if impacts:
-        lines.append("Words other players tried, with average score impact: " + ", ".join(
-            f"{w} {i:+.0%}" for w, i in impacts))
+        lines.append(
+            "Words other players tried, with average score impact: " + ", ".join(f"{w} {i:+.0%}" for w, i in impacts)
+        )
     return lines
 
 
@@ -131,6 +142,9 @@ def long_chain_user(ctx, archetypes: list[str], count: int, target: int) -> str:
         lines.append(f"\nPlanner directive: {ctx.directive}")
     if ctx.banned:
         lines.append("Never use these words: " + ", ".join(sorted(ctx.banned)))
+    named = [row.get("phrase") or key for key, row in banned_phrases().items()]
+    if named:
+        lines.append("Never use these exact phrases: " + "; ".join(sorted(named)))
     lines.append("\nTactics to mix inside each chain:")
     for name in archetypes:
         lines.append(f"- [{name}] {ARCHETYPE_GUIDE[name]}")
@@ -180,8 +194,10 @@ def scenario_user(ctx, best: list[tuple[float, str]], count: int) -> str:
         "absurd or monstrous. Describe the situation itself; do not name the answer or repeat the question.",
     ]
     if best:
-        lines.append("\nThe situations that worked best so far (judge's average certainty in brackets). Push further "
-                     f"in the directions that work, and also try completely new ones:{shown}")
+        lines.append(
+            "\nThe situations that worked best so far (judge's average certainty in brackets). Push further "
+            f"in the directions that work, and also try completely new ones:{shown}"
+        )
     lines.append('Return JSON: {"phrases": [{"text": "<statement>"}]}')
     return "\n".join(lines)
 
@@ -189,13 +205,15 @@ def scenario_user(ctx, best: list[tuple[float, str]], count: int) -> str:
 def counter_user(ctx, count: int) -> str:
     q = ctx.question
     opposite = "yes" if ctx.objective.goal == "no" else "no"
-    return "\n".join([
-        f"Question: {q['title']}",
-        f"\nWrite {count} short, plain claims of 5 to 12 words that each argue the answer is {opposite}. State "
-        "it directly about the question's subject, the way a confident person would, with no hedging, jokes or "
-        "negations of the other side. Each claim should take a different angle.",
-        'Return JSON: {"phrases": [{"text": "<claim>"}]}',
-    ])
+    return "\n".join(
+        [
+            f"Question: {q['title']}",
+            f"\nWrite {count} short, plain claims of 5 to 12 words that each argue the answer is {opposite}. State "
+            "it directly about the question's subject, the way a confident person would, with no hedging, jokes or "
+            "negations of the other side. Each claim should take a different angle.",
+            'Return JSON: {"phrases": [{"text": "<claim>"}]}',
+        ]
+    )
 
 
 def single_words_user(ctx, count: int) -> str:
@@ -212,12 +230,14 @@ def single_words_user(ctx, count: int) -> str:
         lines.append("Our best one- and two-word lines so far: " + ", ".join(f"{c.phrase} {c.p:.2f}" for c in singles))
     impacts = ctx.top_impacts(20)
     if impacts:
-        lines.append("Words other players tried, with average score impact: " + ", ".join(
-            f"{w} {i:+.0%}" for w, i in impacts))
+        lines.append(
+            "Words other players tried, with average score impact: " + ", ".join(f"{w} {i:+.0%}" for w, i in impacts)
+        )
     refused = [v.get("word") or k for k, v in rejected.words().items()][:20]
     if refused:
-        lines.append("The site refused these as more than one word; avoid words built the same way: "
-                     + ", ".join(refused))
+        lines.append(
+            "The site refused these as more than one word; avoid words built the same way: " + ", ".join(refused)
+        )
     lines.append(
         f"\nWrite {count} candidates: about two thirds single words, the rest two-word phrases. Think of words "
         "that by themselves make Jev answer the target: synonyms of the answer, words that define the subject "
@@ -247,7 +267,8 @@ def gen_user(ctx, archetypes: list[str], count: int, variants_of: list = (), fre
     if leader and shortest:
         lines.append(
             f"Board leader to beat: {leader.units} words at {leader.probability:.0%} (their text is hidden). "
-            f"Beat it with fewer words above 51%, or the same {leader.units} words with a higher score."
+            f"Beat it with fewer words at or above {ctx.objective.threshold:.2f}, "
+            f"or the same {leader.units} words with a higher score."
         )
     elif leader:
         lines.append(
@@ -256,13 +277,15 @@ def gen_user(ctx, archetypes: list[str], count: int, variants_of: list = (), fre
         )
     impacts = ctx.top_impacts(25)
     if impacts:
-        lines.append("Words other players tried, with average score impact: " + ", ".join(
-            f"{w} {i:+.0%}" for w, i in impacts))
+        lines.append(
+            "Words other players tried, with average score impact: " + ", ".join(f"{w} {i:+.0%}" for w, i in impacts)
+        )
     if fresh:
         lines.append(
             "\nEarlier search runs on this question plateaued below the leader. These lines are the ceiling of "
             "the ideas they explored. Do NOT write variants, rewordings, reorderings, or the same setup with "
-            "swapped nouns; find different framings that could go higher:")
+            "swapped nouns; find different framings that could go higher:"
+        )
         for phrase, p, units in ctx.exhausted_lines(10):
             lines.append(f"- {p:.3f} {units}w: {phrase}")
         ceilings = style_ceilings(ctx)
@@ -290,6 +313,9 @@ def gen_user(ctx, archetypes: list[str], count: int, variants_of: list = (), fre
         lines.append(f"\nPlanner directive: {ctx.directive}")
     if ctx.banned:
         lines.append("Never use these words: " + ", ".join(sorted(ctx.banned)))
+    named = [row.get("phrase") or key for key, row in banned_phrases().items()]
+    if named:
+        lines.append("Never use these exact phrases: " + "; ".join(sorted(named)))
     if ctx.pinned:
         lines.append("Every phrase must contain these words: " + ", ".join(sorted(ctx.pinned)))
     lines.append("\nTactics for this batch:")
@@ -301,11 +327,15 @@ def gen_user(ctx, archetypes: list[str], count: int, variants_of: list = (), fre
             lines.append(f"- {phrase}")
     cap = ctx.engine.grow_cap
     if shortest:
-        span = f"1 to {min(cap, 6)} words each, most of them 1 to 3 words; just tip past 51%, fewest words wins"
+        span = (
+            f"1 to {min(cap, 6)} words each, most of them 1 to 3 words; "
+            f"just tip past {ctx.objective.threshold:.2f}, fewest words wins"
+        )
     elif leader and leader.units > 20:
         lines.append(
             f"\nThe leader uses {leader.units} words: long lines that stack evidence, detail, and restatement "
-            f"score well here. Write many phrases of {max(12, leader.units - 12)} to {cap} words.")
+            f"score well here. Write many phrases of {max(12, leader.units - 12)} to {cap} words."
+        )
         span = f"4 to {cap} words each, at least half of them over 20 words"
     else:
         span = f"4 to {cap} words each, mostly 6 to 18"
@@ -333,11 +363,15 @@ def rewrite_user(ctx, parents: list[str], per_parent: int) -> str:
     body = "\n".join(f"- {p}" for p in parents)
     leader = ctx.leader
     if ctx.objective.shortest:
-        length = ("This is the Shortest yes board: cut every word you can while the line still tips past 51%. "
-                  "Children should be shorter than their parent, ideally one to three words.")
+        length = (
+            "This is the Shortest yes board: cut every word you can while the line still tips past 51%. "
+            "Children should be shorter than their parent, ideally one to three words."
+        )
     elif leader and leader.units > 20:
-        length = (f"The leader uses {leader.units} words, so extending a line with more supporting detail is "
-                  f"welcome, up to {ctx.engine.length_cap} words.")
+        length = (
+            f"The leader uses {leader.units} words, so extending a line with more supporting detail is "
+            f"welcome, up to {ctx.engine.length_cap} words."
+        )
     else:
         length = "Shorter is better when the meaning survives."
     return (
@@ -356,7 +390,8 @@ def synonyms_user(ctx, words: list[str]) -> str:
         "For each word, list 8 single-word replacements that could fit the same slot in a sentence: "
         "synonyms, stronger or more specific words, and a couple of surprising ones. "
         + STRICT_RULES
-        + "\nWords: " + ", ".join(words)
+        + "\nWords: "
+        + ", ".join(words)
         + '\nReturn JSON: {"alts": {"<word>": ["...", "..."]}}'
     )
 
@@ -369,7 +404,7 @@ PLAN_SYSTEM = (
 
 PLAN_SYSTEM_SHORTEST = (
     "You are the planner for an automated phrase search in the game Trick Jev, on the Shortest yes board. A "
-    "classifier model scores each phrase for one question; a phrase counts once P(target) is above 0.51, then "
+    "classifier model scores each phrase for one question; a phrase counts once P(target) is at least {bar}, then "
     "the fewest words win and a higher probability breaks ties. You see search statistics and decide the next "
     "focus. Be concrete and brief. Reply with JSON only."
 )
@@ -385,14 +420,17 @@ PLAN_SYSTEM_LONG = (
 
 def plan_system(ctx) -> str:
     if ctx.objective.shortest:
-        return PLAN_SYSTEM_SHORTEST
+        return PLAN_SYSTEM_SHORTEST.format(bar=f"{ctx.objective.threshold:.2f}")
     return PLAN_SYSTEM_LONG if ctx.objective.long else PLAN_SYSTEM
 
 
 def plan_user(ctx, stats: dict) -> str:
     q = ctx.question
     if ctx.leader and ctx.objective.shortest:
-        lead = f"Leader to beat: {ctx.leader.units} words at {ctx.leader.probability:.2f} (qualifies above 0.51)"
+        lead = (
+            f"Leader to beat: {ctx.leader.units} words at {ctx.leader.probability:.2f} "
+            f"(qualifies at {ctx.objective.threshold:.2f})"
+        )
     elif ctx.leader:
         lead = f"Leader to beat: {ctx.leader.probability:.2f} / {ctx.leader.units} words"
     else:
@@ -402,8 +440,8 @@ def plan_user(ctx, stats: dict) -> str:
         target_line(ctx),
         lead,
         f"Oracle calls so far: {stats['calls']}, archive size {stats['size']}",
-        "Strategy yields (share of calls, recent reward): " + ", ".join(
-            f"{k} {v['share']:.0%}/{v['rate']:.2f}" for k, v in stats["arms"].items()),
+        "Strategy yields (share of calls, recent reward): "
+        + ", ".join(f"{k} {v['share']:.0%}/{v['rate']:.2f}" for k, v in stats["arms"].items()),
         "Best per archetype: " + ", ".join(f"{k} {v:.3f}" for k, v in stats["archetypes"].items()),
     ]
     mem = ctx.memory
@@ -412,15 +450,21 @@ def plan_user(ctx, stats: dict) -> str:
         lines.append(f"Earlier runs on this question: {mem.runs}, wins {mem.wins}. Results: {past or 'n/a'}.")
         lines.append(f"Tactic ceilings: {style_ceilings(ctx)}.")
     if ctx.fresh:
-        lines.append("This run is a fresh start: the old best lines are a local optimum that did not beat the "
-                     "leader. Favour explore and untried tactics unless a new frame is within 0.01 of the leader.")
+        lines.append(
+            "This run is a fresh start: the old best lines are a local optimum that did not beat the "
+            "leader. Favour explore and untried tactics unless a new frame is within 0.01 of the leader."
+        )
     lines.append("\nTop lines (p, words):")
     for cand in ctx.archive.top_by_board(15):
         lines.append(f"- {cand.p:.3f} {cand.units}w [{cand.archetype}/{cand.origin}] {cand.phrase}")
     if ctx.objective.long:
-        lines.append(f"Phase: {ctx.engine.phase()} (build long chains until one holds "
-                     f"{ctx.objective.ceiling:.2f}, then compact it)")
-    keep = "keeping it above 0.51" if ctx.objective.shortest else "keeping the rounded score"
+        lines.append(
+            f"Phase: {ctx.engine.phase()} (build long chains until one holds "
+            f"{ctx.objective.ceiling:.2f}, then compact it)"
+        )
+    keep = (
+        f"keeping it at or above {ctx.objective.threshold:.2f}" if ctx.objective.shortest else "keeping the rounded score"
+    )
     lines.append(
         "\nDecide: which tactics to push (rename, speaker, scene, eager, direct, wild), words to ban (they keep "
         "hurting) or pin (they carry the score), whether to explore, exploit (local edits and genetic), or "

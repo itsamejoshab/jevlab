@@ -36,7 +36,7 @@ uv run jevlab lab --q is-cereal-a-soup
 ```
 
 See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough: installation, the first search, the vault, publishing,
-and the Kev edition.
+and the Kev and Laya editions.
 
 ## Documentation
 
@@ -44,7 +44,7 @@ and the Kev edition.
 | --- | --- |
 | [QUICKSTART.md](QUICKSTART.md) | Install, configure, and run everything |
 | [docs/commands.md](docs/commands.md) | Every command and flag |
-| [docs/configuration.md](docs/configuration.md) | Model roles, swapping models, costs, Jev vs Kev |
+| [docs/configuration.md](docs/configuration.md) | Model roles, swapping models, costs, Jev vs Kev vs Laya |
 | [docs/architecture.md](docs/architecture.md) | How the search engine works, plus a source map |
 | [scripts/README.md](scripts/README.md) | Research scripts and benchmarks |
 

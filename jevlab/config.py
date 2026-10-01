@@ -23,18 +23,19 @@ def load_dotenv(path: Path = ROOT / ".env") -> None:
 load_dotenv()
 
 SITE_BASE = os.environ.get("JEV_SITE", "https://i-wanna-date-jev.begin-363.workers.dev")
-EDITIONS = ("jev", "kev")
-# Trick Kev is a mirror of the game with its own question revisions, boards, and model. Each edition keeps its
-# own database, vault, and snapshots; Kev reads Jev's (never writes them) to borrow estimates.
+EDITIONS = ("jev", "kev", "laya")
+# Trick Kev and Trick Laya are mirrors of the game, each with its own question revisions, boards, and model.
+# Each edition keeps its own database, vault, and snapshots. A mirror reads Jev's (never writes them) to borrow
+# estimates.
 EDITION = os.environ.get("JEV_EDITION", "jev").strip().casefold() or "jev"
 if EDITION not in EDITIONS:
     raise SystemExit(f"JEV_EDITION must be one of {', '.join(EDITIONS)}, not {EDITION!r}")
-KEV = EDITION == "kev"
+MIRROR = EDITION != "jev"
 
 JEV_DATA = Path(os.environ.get("JEVLAB_DATA", ROOT / "data"))
 JEV_DB_PATH = JEV_DATA / "jev.db"
 JEV_VAULT = JEV_DATA / "vault"
-DATA = JEV_DATA / "kev" if KEV else JEV_DATA
+DATA = JEV_DATA / EDITION if MIRROR else JEV_DATA
 DB_PATH = DATA / "jev.db"
 SNAPSHOTS = DATA / "snapshots"
 VAULT = DATA / "vault"
@@ -44,20 +45,28 @@ OPENROUTER_BASE = os.environ.get("OPENROUTER_BASE", "https://openrouter.ai/api/v
 TYPESAFE_KEY = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("TYPESAFE_KEY") or "").strip()
 TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1")
 # `typesafe/jev-latest` is rejected; the bare id is what the site sends too, and Typesafe's own API takes it.
-# Kev's site request names `jaredpalmer/kev-4b`; it is served on OpenRouter only, and much slower than Jev.
-JEV_MODEL = os.environ.get("JEV_MODEL", "jaredpalmer/kev-4b" if KEV else "jev-latest")
-# The model Jev's own samples were requested with, so Kev can look them up in Jev's database.
+# Each id is the `model` in that edition's site `jevRequest`. Kev and Laya are OpenRouter /systemone models;
+# Typesafe does not serve them. Kev's host is much slower than Typesafe's Jev.
+EDITION_MODELS = {
+    "jev": "jev-latest",
+    "kev": "jaredpalmer/kev-4b",
+    "laya": "convaiinnovations/laya",
+}
+JEV_MODEL = os.environ.get("JEV_MODEL", EDITION_MODELS[EDITION])
+# The model Jev's own samples were requested with, so a mirror edition can look them up in Jev's database.
 JEV_SOURCE_MODEL = os.environ.get("JEV_SOURCE_MODEL", "jev-latest")
 # Where the oracle sends /systemone, pooled: both serve the same Jev with the same request body.
+# Mirrors start on OpenRouter only, with a smaller pool and a longer timeout (Kev's host). Raise the
+# JEV_ORACLE_* vars if a host turns out faster.
 ORACLE_BACKENDS = [b.strip() for b in os.environ.get("JEV_ORACLE_BACKENDS",
-                                                     "openrouter" if KEV else "typesafe,openrouter").split(",")
+                                                     "openrouter" if MIRROR else "typesafe,openrouter").split(",")
                    if b.strip()]
-ORACLE_CONCURRENCY = int(os.environ.get("JEV_ORACLE_CONCURRENCY", "4" if KEV else "24"))
-ORACLE_MAX_CONCURRENCY = int(os.environ.get("JEV_ORACLE_MAX_CONCURRENCY", "8" if KEV else "48"))
-# Kev searches first score this many lines Jev already rates well (search/triage.py) before generating any.
-TRIAGE_K = int(os.environ.get("JEV_TRIAGE_K", "40" if KEV else "0"))
+ORACLE_CONCURRENCY = int(os.environ.get("JEV_ORACLE_CONCURRENCY", "4" if MIRROR else "24"))
+ORACLE_MAX_CONCURRENCY = int(os.environ.get("JEV_ORACLE_MAX_CONCURRENCY", "8" if MIRROR else "48"))
+# Mirror searches first score this many lines Jev already rates well (search/triage.py) before generating any.
+TRIAGE_K = int(os.environ.get("JEV_TRIAGE_K", "40" if MIRROR else "0"))
 # Under load Jev's p99 is ~7s and p99.9 ~10s (2026-09-28), with a tail past 20s; slower calls give up and retry.
-ORACLE_TIMEOUT = float(os.environ.get("JEV_ORACLE_TIMEOUT", "60" if KEV else "20"))
+ORACLE_TIMEOUT = float(os.environ.get("JEV_ORACLE_TIMEOUT", "60" if MIRROR else "20"))
 
 @dataclass(frozen=True)
 class GenModel:

@@ -1,6 +1,6 @@
 # Command reference
 
-Generated from `jevlab <command> --help`. Every command also accepts `--edition jev|kev` anywhere on the line.
+Generated from `jevlab <command> --help`. Every command also accepts `--edition jev|kev|laya` anywhere on the line.
 Run through uv as `uv run jevlab ...`, or plain `jevlab ...` inside the activated venv.
 
 Running `jevlab` with no command opens the TUI home screen.
@@ -8,7 +8,7 @@ Running `jevlab` with no command opens the TUI home screen.
 ## Global
 
 ```text
-usage: jevlab [-h] [--edition {jev,kev}]
+usage: jevlab [-h] [--edition {jev,kev,laya}]
               {tui,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global} ...
 
 Offline Jev search lab
@@ -24,8 +24,8 @@ positional arguments:
     triage              score the most promising existing lines (Jev's vault and history, estimated vault
                         lines) with this edition's oracle, without searching
     score               score phrases with the oracle
-    vault               list saved winners, queue them for publishing, or drop them; under --edition kev,
-                        import-jev copies Jev's lines in as estimates
+    vault               list saved winners, queue them for publishing, or drop them; under --edition kev or
+                        laya, import-jev copies Jev's lines in as estimates
     publish             submit queued vault entries to the live site (separate batch loop)
     crosspost           queue Strict vault lines that beat a Golf leader into the golf vault
     errors              failed network calls by service and host (OpenRouter vs the Jev site)
@@ -36,7 +36,9 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --edition {jev,kev}   game edition: jev (data/) or kev (data/kev/); read before anything else loads
+  --edition {jev,kev,laya}
+                        game edition: jev (data/), kev (data/kev/), or laya (data/laya/); read before anything
+                        else loads
 ```
 
 ## Data: snapshot and calibration
@@ -120,7 +122,7 @@ options:
   --all-targets         choice questions: run once per answer, one after another
   --win-after N         win mode: once a line beats the leader, stop after N more oracle calls
   --transfer-k K        score K existing lines (Jev's best, estimated vault lines) before generating;
-                        default JEV_TRIAGE_K (40 on Kev, 0 on Jev)
+                        default JEV_TRIAGE_K (40 on Kev and Laya, 0 on Jev)
   --force FORCE         run only this strategy
   --plateau PLATEAU     flat rounds per level (0 = run to budget)
 ```
@@ -174,8 +176,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --queue               import-jev: queue the best estimated line on each board where Jev beats the Kev
-                        leader
+  --queue               import-jev: queue the best estimated line on each board where Jev beats the leader
   --q Q                 question slug or play URL
   --phrase PHRASE       exact phrase to queue/drop (default: the best candidate)
   --all                 queue every winning candidate for the question
@@ -197,7 +198,7 @@ options:
   -h, --help            show this help message and exit
   --q [Q ...]           only these slugs
   --dry-run             verify boards and oracle, but send no turns
-  --rerolls REROLLS     re-score the final word up to N times if short
+  --rerolls REROLLS     re-score the final word N times even after a win; the board keeps the best
   --no-verify           skip the oracle re-check
   --delay DELAY         seconds between site turns
   --board {highest,shortest}

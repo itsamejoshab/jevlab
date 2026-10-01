@@ -185,6 +185,7 @@ def cmd_vault(args) -> int:
     from . import vault
     from .boards import has_rejected_word
     from .modes import from_board
+    from .rules.banned import contains as phrase_banned
 
     board = board_of(args)
     if args.action == "import-jev":
@@ -240,7 +241,13 @@ def cmd_vault(args) -> int:
     elif args.all:
         targets = [e for e in entries if e["beats"] and e["status"] == "candidate"]
     else:
-        pool = [e for e in entries if e["status"] in ("candidate", "failed") and not has_rejected_word(e["phrase"])]
+        pool = [
+            e
+            for e in entries
+            if e["status"] in ("candidate", "failed")
+            and not has_rejected_word(e["phrase"])
+            and not phrase_banned(e["phrase"])
+        ]
         if from_board(board).shortest:
             pool.sort(key=lambda e: (e["units"], -round(e["p_mean"], 2), -e["p_lcb"]))
         else:
@@ -392,7 +399,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="jevlab", description="Offline Jev search lab")
     parser.add_argument("--edition", choices=EDITIONS, default=EDITION,
-                        help="game edition: jev (data/) or kev (data/kev/); read before anything else loads")
+                        help="game edition: jev (data/), kev (data/kev/), or laya (data/laya/); "
+                             "read before anything else loads")
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("tui", help="home screen: choose Search or Publish (default when no command is given)")
@@ -433,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "search":
             p.add_argument("--transfer-k", type=int, default=None, metavar="K",
                            help="score K existing lines (Jev's best, estimated vault lines) before generating; "
-                                "default JEV_TRIAGE_K (40 on Kev, 0 on Jev)")
+                                "default JEV_TRIAGE_K (40 on Kev and Laya, 0 on Jev)")
             p.add_argument("--force", help="run only this strategy")
             p.add_argument("--plateau", type=int, default=0, help="flat rounds per level (0 = run to budget)")
         p.set_defaults(func=func)
@@ -457,10 +465,10 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_score)
 
     p = sub.add_parser("vault", help="list saved winners, queue them for publishing, or drop them; under "
-                                     "--edition kev, import-jev copies Jev's lines in as estimates")
+                                     "--edition kev or laya, import-jev copies Jev's lines in as estimates")
     p.add_argument("action", nargs="?", default="list", choices=["list", "queue", "unqueue", "drop", "import-jev"])
     p.add_argument("--queue", action="store_true",
-                   help="import-jev: queue the best estimated line on each board where Jev beats the Kev leader")
+                   help="import-jev: queue the best estimated line on each board where Jev beats the leader")
     p.add_argument("--q", help="question slug or play URL")
     p.add_argument("--phrase", help="exact phrase to queue/drop (default: the best candidate)")
     p.add_argument("--all", action="store_true", help="queue every winning candidate for the question")
@@ -476,7 +484,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("publish", help="submit queued vault entries to the live site (separate batch loop)")
     p.add_argument("--q", nargs="*", help="only these slugs")
     p.add_argument("--dry-run", action="store_true", help="verify boards and oracle, but send no turns")
-    p.add_argument("--rerolls", type=int, default=3, help="re-score the final word up to N times if short")
+    p.add_argument("--rerolls", type=int, default=3,
+                   help="re-score the final word N times even after a win; the board keeps the best")
     p.add_argument("--no-verify", action="store_true", help="skip the oracle re-check")
     p.add_argument("--delay", type=float, default=0.01, help="seconds between site turns")
     p.add_argument("--board", choices=board_names, help="only this game mode board (default every board)")

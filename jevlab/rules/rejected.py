@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from ..config import JEV_DATA
 
-# The word check is the site's, shared by both editions.
+# The word check is the site's, shared by every edition.
 PATH = JEV_DATA / "rejected_words.json"
 _RECHECK = 2.0
 

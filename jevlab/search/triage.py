@@ -1,8 +1,8 @@
-"""Triage: which lines we already have should Kev score next, before any new ones are generated.
+"""Triage: which lines we already have should a mirror edition score next, before any new ones are generated.
 
-Kev's oracle is slow, so its first calls on a question go to lines Jev already rates well: estimated lines in the
-Kev vault, Jev's vault, and the top of Jev's oracle history. They are ranked by Jev's score for this board, lines
-already vaulted first on ties, near-duplicates dropped, and anything Kev has already measured skipped.
+Kev and Laya start from lines Jev already rates well: estimated lines in this edition's vault, Jev's vault, and
+the top of Jev's oracle history. They are ranked by Jev's score for this board, lines already vaulted first on
+ties, near-duplicates dropped, and anything this edition has already measured skipped.
 """
 
 from __future__ import annotations
@@ -10,12 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .. import vault
-from ..config import JEV_SOURCE_MODEL, JEV_VAULT
+from ..config import EDITION, JEV_SOURCE_MODEL, JEV_VAULT
 from ..db import DB
 from ..modes import STRICT
-from ..objective import Leader, Objective, goal_p
+from ..objective import Leader, Objective, goal_p, objective_for
 from ..oracle import Oracle, Score, history, question_key
 from ..rules import RuleError, check_phrase, normalize, option_names
+from ..rules.banned import contains as phrase_banned
 from ..rules.strict import MAX_WORDS
 
 JEV_HISTORY_TOP = 200
@@ -30,11 +31,11 @@ VAULT_BONUS = 0.02
 @dataclass
 class TriageItem:
     phrase: str
-    source: str  # kev-vault | jev-vault | jev-history
+    source: str  # {edition}-vault | jev-vault | jev-history
     jev_p: float
     units: int
-    vaulted: bool  # in the Kev or Jev vault
-    kev_entry: bool  # already an (estimated) Kev vault line
+    vaulted: bool  # in this edition's vault or Jev's
+    kev_entry: bool  # already an (estimated) line in this edition's vault
 
 
 def jev_history(jev: DB, slug: str, target: str = "", limit: int = JEV_HISTORY_TOP) -> dict[str, float]:
@@ -62,7 +63,7 @@ def jaccard(a: set[str], b: set[str]) -> float:
 def rank_candidates(db: DB, slug: str, objective: Objective, leader: Leader | None, k: int, target: str = "",
                     jev: DB | None = None, exclude: set[str] | None = None,
                     length_cap: int = MAX_WORDS) -> list[TriageItem]:
-    """The k lines Kev should score first on this board. `exclude` adds phrases already scored elsewhere."""
+    """The k lines this edition should score first on this board. `exclude` adds phrases already scored elsewhere."""
     question = db.question(slug)
     if not question or not question.get("jev_request"):
         return []
@@ -71,6 +72,8 @@ def rank_candidates(db: DB, slug: str, objective: Objective, leader: Leader | No
     pool: dict[str, TriageItem] = {}
 
     def offer(text: str, source: str, p: float, vaulted: bool, kev_entry: bool = False) -> None:
+        if phrase_banned(text):
+            return
         try:
             phrase = check_phrase(normalize(text), choices, length_cap)
         except RuleError:
@@ -87,7 +90,7 @@ def rank_candidates(db: DB, slug: str, objective: Objective, leader: Leader | No
 
     for e in vault.load(slug, STRICT, objective.board, target)["entries"]:
         if e.get("estimated_from") and e.get("status") not in ("rejected", "dropped"):
-            offer(e["phrase"], "kev-vault", float(e.get("jev_p") or e["p_mean"]), True, True)
+            offer(e["phrase"], f"{EDITION}-vault", float(e.get("jev_p") or e["p_mean"]), True, True)
     for e in vault.all_entries(root=JEV_VAULT):
         if e["slug"] == slug and e["mode"] == STRICT and (e.get("target") or "") == target \
                 and e.get("status") not in ("rejected", "dropped"):
@@ -116,7 +119,7 @@ def rank_candidates(db: DB, slug: str, objective: Objective, leader: Leader | No
 
 def record(slug: str, objective: Objective, leader: Leader | None, item: TriageItem, score: Score, title: str,
            target: str = "") -> dict | None:
-    """Write a Kev measurement to the vault: always for lines already there (the estimate becomes measured),
+    """Write a measurement to this edition's vault: always for lines already there (the estimate becomes measured),
     otherwise only when it wins."""
     wins = objective.wins(score, item.units, leader)
     if not item.kev_entry and not wins:
@@ -141,7 +144,7 @@ async def run_triage(db: DB, slug: str, board: str, k: int = 20, n: int = 1, con
     if not question or not question.get("jev_request"):
         log(f"{slug}: not in the snapshot")
         return []
-    objective = Objective(question.get("goal") or "yes", question.get("kind") or "noul", board=board)
+    objective = objective_for(question, board=board)
     leader = kev_leader(db, slug, STRICT, board, target)
     jev = jev_db()
     try:

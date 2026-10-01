@@ -9,14 +9,24 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .. import vault
-from ..config import (GEMINI_CALLS, GEN_MODEL, GEN_MODEL_ALT, GEN_TIERS, LONG_PLAN_CALLS, LONG_TARGET, PLAN_MODEL,
-                      PLATEAU_LEADER_WORDS, TRIAGE_K)
+from ..config import (
+    GEMINI_CALLS,
+    GEN_MODEL,
+    GEN_MODEL_ALT,
+    GEN_TIERS,
+    LONG_PLAN_CALLS,
+    LONG_TARGET,
+    PLAN_MODEL,
+    PLATEAU_LEADER_WORDS,
+    TRIAGE_K,
+)
 from ..db import DB
 from ..llm import LLM, LLMError
 from ..modes import BOARDS, HIGH_SCORES, from_board, is_searchable
-from ..objective import CEILING_MIN_N, Leader, Objective, board_leader, goal_p, logit, site_round, target_rows
+from ..objective import CEILING_MIN_N, Leader, Objective, board_leader, goal_p, logit, objective_for, site_round, target_rows
 from ..oracle import Oracle, Score, history
 from ..rules import CopyGuard, RuleError, check_phrase, check_word, normalize, option_names
+from ..rules.banned import contains as phrase_banned
 from ..rules.strict import MAX_WORDS
 from . import global_model
 from .proxy import ProxyScreen
@@ -28,8 +38,7 @@ from .advanced import GCGSwap, Genetic, SurrogateBO
 from .archive import ARCHETYPES, Archive, Candidate
 from .boosters import Boosters
 from .chains import PROBE_TOP, RECIPES, ChainAblate, ChainCompact, ChainLibrary, LongChain, Probe, observed_ceiling
-from .mechanical import (BeamBuild, Drift, Extend, Grow, PrecisionClimb, ProbeClimb, ScenarioJoin, SingleWord,
-                         Sweep)
+from .mechanical import BeamBuild, Drift, Extend, Grow, PrecisionClimb, ProbeClimb, ScenarioJoin, SingleWord, Sweep
 from .scheduler import Scheduler
 from .strategies import FUNCTION_WORDS, WORD_STAGE, Compress, LLMGenerate, LocalEdit
 from .surrogate import Embedder, PhraseSurrogate, WordSurrogate
@@ -117,7 +126,7 @@ class LabContext:
             return self.archive.top_by_board(k)
         cap = self.engine.grow_cap
         pool = [c for c in self.archive.items.values() if c.units <= cap]
-        return sorted(pool, key=lambda c: -(c.p - noise_sd(c.p) / c.score.n ** 0.5))[:k]
+        return sorted(pool, key=lambda c: -(c.p - noise_sd(c.p) / c.score.n**0.5))[:k]
 
     def writer_model(self) -> str:
         """Model for rewrites, synonyms, and fragments; the long-chain regime keeps them on the cheap one."""
@@ -196,8 +205,9 @@ class LabContext:
         missing = [w for w in dict.fromkeys(words) if w not in self.synonyms and w.casefold() not in FUNCTION_WORDS]
         if missing and self.llm is not None:
             try:
-                data = await self.llm.json(self.writer_model(), prompts.GEN_SYSTEM, prompts.synonyms_user(self, missing[:30]),
-                                           temperature=0.9)
+                data = await self.llm.json(
+                    self.writer_model(), prompts.GEN_SYSTEM, prompts.synonyms_user(self, missing[:30]), temperature=0.9
+                )
                 alts = data.get("alts") if isinstance(data, dict) else {}
                 for word, values in (alts or {}).items():
                     clean = []
@@ -224,18 +234,36 @@ class LabContext:
 
 
 class Engine:
-    def __init__(self, db: DB, slug: str, mode: str = "strict_chain", budget: int = 20000,
-                 use_llm: bool = True, seed: int | None = None, plan_every: int = 10,
-                 on_event: Callable[[Event], None] | None = None, idle_when_done: bool = False,
-                 embedder: Embedder | None = None, max_stall: int = 0, min_rounds: int = 8,
-                 escalate: bool = True, max_level: int = 4, board: str = HIGH_SCORES, target: str = "",
-                 win_extra: int = 0, triage_k: int = TRIAGE_K):
+    def __init__(
+        self,
+        db: DB,
+        slug: str,
+        mode: str = "strict_chain",
+        budget: int = 20000,
+        use_llm: bool = True,
+        seed: int | None = None,
+        plan_every: int = 10,
+        on_event: Callable[[Event], None] | None = None,
+        idle_when_done: bool = False,
+        embedder: Embedder | None = None,
+        max_stall: int = 0,
+        min_rounds: int = 8,
+        escalate: bool = True,
+        max_level: int = 4,
+        board: str = HIGH_SCORES,
+        target: str = "",
+        win_extra: int = 0,
+        triage_k: int = TRIAGE_K,
+        question: dict | None = None,
+    ):
         """`target` aims a choice question's search at one answer: scores are P(target), the leader is the best
         row filed under that answer, and run memory and vault lines are kept per answer.
         `win_extra` > 0 is win mode: the first vaulted line that beats the leader caps the run at that many
         more oracle calls.
         `triage_k` > 0 scores that many existing lines (estimated Kev vault lines, Jev's vault and history) with
-        the seeds, before any are generated."""
+        the seeds, before any are generated.
+        `question` is an in-memory question (Live Mode); when set, the snapshot is not required. A typed
+        sandbox question is not filed. A site live round is filed under its slug."""
         if mode != "strict_chain":
             raise ValueError("v1 searches strict_chain only")
         if board not in BOARDS:
@@ -245,6 +273,7 @@ class Engine:
         self.mode = mode
         self.board = board
         self.budget = budget
+        self.budget_span = max(budget, 1)
         self.seed = seed if seed is not None else int(time.time())
         self.plan_every = plan_every
         self.on_event = on_event or (lambda event: None)
@@ -269,14 +298,17 @@ class Engine:
         self.level = 0
         self.peak_level = 0
 
-        question = db.question(slug)
+        if question is None:
+            question = db.question(slug)
         if question is None:
             raise ValueError(f"{slug!r} is not in the snapshot; run `jevlab snapshot` first")
+        question.setdefault("raw", {})
         if not question.get("jev_request"):
             raise ValueError(f"{slug!r} has no jevRequest")
         if not is_searchable(question["kind"], bool(question["raw"].get("ranked"))):
             raise ValueError(f"{slug!r} is a {question['kind']} question; search handles yes/no and unranked choice")
         self.question = question
+        self.live = bool(question["raw"].get("live"))
         self.choices = option_names(question["raw"].get("choices"))
         # Yes/no-only helpers: the proxy reads yes/no logprobs, the prior and boosters were learned on yes/no.
         self.yes_no = question["kind"] == "noul"
@@ -284,8 +316,7 @@ class Engine:
             raise ValueError(f"{target!r} is not an answer of {slug!r}; answers: {', '.join(self.choices) or 'none'}")
         self.target = target
         self.memory_board = f"{board}@{target}" if target else board
-        self.objective = Objective(goal=question.get("goal") or "yes", kind=question["kind"], unit="word",
-                                   board=board)
+        self.objective = objective_for(question, board=board)
         self.me = db.me()
         if target:
             rows = target_rows({b: db.board(slug, mode, b) for b in (board, "champions")}, board, target)
@@ -293,15 +324,21 @@ class Engine:
             rows = db.board(slug, mode, board)
         self.leader: Leader | None = board_leader(rows, self.me, board=board)
         self.our_best: Leader | None = board_leader(
-            [r for r in rows if self.me and r.get("userId") == self.me], self.me, include_ours=True, board=board)
+            [r for r in rows if self.me and r.get("userId") == self.me], self.me, include_ours=True, board=board
+        )
         self.long = not self.objective.shortest and self.objective.kind == "noul" and LONG_TARGET > 0
         self.long_target = LONG_TARGET
         # Plateau mode (decided once history is loaded): the leader holds the ceiling with a long line we cannot
         # match with the ordinary length cap, and earlier runs already exhausted the ordinary search.
         self.plateau = False
-        self.plateau_candidate = (not self.long and not self.objective.shortest and self.objective.kind == "noul"
-                                  and self.leader is not None and self.leader.units >= PLATEAU_LEADER_WORDS
-                                  and site_round(self.leader.probability) >= observed_ceiling(db) - 1e-9)
+        self.plateau_candidate = (
+            not self.long
+            and not self.objective.shortest
+            and self.objective.kind == "noul"
+            and self.leader is not None
+            and self.leader.units >= PLATEAU_LEADER_WORDS
+            and site_round(self.leader.probability) >= observed_ceiling(db) - 1e-9
+        )
         self.expensive_used = 0
         self.plans = 0
         self._roots: tuple[int, list[Candidate]] = (-1, [])
@@ -329,14 +366,48 @@ class Engine:
         self.proxy: ProxyScreen | None = None
         generators = [LLMGenerate(models, tier) for tier, models in GEN_TIERS.items() if models]
         chain_arms = [LongChain(r) for r in RECIPES] + [ChainAblate(), ChainCompact()] if self.long else []
-        self.strategies = {s.name: s for s in (
-            *generators, *chain_arms, LocalEdit(), Compress(), Genetic(), SurrogateBO(), GCGSwap(),
-            PrecisionClimb(), Sweep(), *([Boosters()] if self.yes_no else []), BeamBuild(), SingleWord(), Extend(),
-            Grow(), Drift(), ProbeClimb(), ScenarioJoin())}
+        self.strategies = {
+            s.name: s
+            for s in (
+                *generators,
+                *chain_arms,
+                LocalEdit(),
+                Compress(),
+                Genetic(),
+                SurrogateBO(),
+                GCGSwap(),
+                PrecisionClimb(),
+                Sweep(),
+                *([Boosters()] if self.yes_no else []),
+                BeamBuild(),
+                SingleWord(),
+                Extend(),
+                Grow(),
+                Drift(),
+                ProbeClimb(),
+                ScenarioJoin(),
+            )
+        }
         priors = {g.name: 1.1 for g in generators}
-        priors.update({"local_edit": 1.0, "compress": 0.8, "genetic": 1.0, "surrogate_bo": 0.9, "gcg": 0.8,
-                       "precision": 1.0, "sweep": 1.0, "boosters": 1.0, "beam": 1.0, "single_word": 1.0,
-                       "extend": 1.2, "grow": 1.3, "drift": 1.3, "probe_climb": 1.3, "scenario_join": 1.3})
+        priors.update(
+            {
+                "local_edit": 1.0,
+                "compress": 0.8,
+                "genetic": 1.0,
+                "surrogate_bo": 0.9,
+                "gcg": 0.8,
+                "precision": 1.0,
+                "sweep": 1.0,
+                "boosters": 1.0,
+                "beam": 1.0,
+                "single_word": 1.0,
+                "extend": 1.2,
+                "grow": 1.3,
+                "drift": 1.3,
+                "probe_climb": 1.3,
+                "scenario_join": 1.3,
+            }
+        )
         if self.objective.shortest:
             short_leader = self.leader is not None and self.leader.units <= 2
             priors.update({"compress": 1.6, "single_word": 2.5 if short_leader else 1.2, "boosters": 0.5})
@@ -378,7 +449,7 @@ class Engine:
                 continue
             if phrase not in self.archive.items:
                 words = {w.casefold() for w in phrase.split()}
-                if words & self.ctx.banned:
+                if words & self.ctx.banned or phrase_banned(phrase):
                     continue
                 if self.ctx.pinned and not {p.casefold() for p in self.ctx.pinned} <= words:
                     continue
@@ -418,10 +489,18 @@ class Engine:
         if dropped:
             self.emit("log", message=f"oracle failed on {dropped} phrase(s) after retries; skipped")
         if persist:
-            self.db.executemany("INSERT OR IGNORE INTO lab_candidates (qkey, state, origin, parent, created, archetype) "
-                                "VALUES (?, ?, ?, ?, ?, ?)", persist)
-        self.emit("scored", count=len(phrases), calls=self.oracle.calls, strategy=self.current_strategy,
-                  items=[(c.phrase, c.p, c.origin, c.score.n) for c in out])
+            self.db.executemany(
+                "INSERT OR IGNORE INTO lab_candidates (qkey, state, origin, parent, created, archetype) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                persist,
+            )
+        self.emit(
+            "scored",
+            count=len(phrases),
+            calls=self.oracle.calls,
+            strategy=self.current_strategy,
+            items=[(c.phrase, c.p, c.origin, c.score.n) for c in out],
+        )
         return out
 
     # Setup.
@@ -455,10 +534,14 @@ class Engine:
             if self.plateau:
                 self.scheduler.boost = {"extend": 1.4, "sweep": 1.3, "drift": 1.3}
             peak = self.archive.top_by_board(1)[0]
-            self.emit("log", message=(
-                f"fresh start: run {self.memory.runs + 1}, earlier work peaked at {peak.p:.3f}/{peak.units}w "
-                f"without a win; steering away from {len(self.ctx.exhausted_lines())} exhausted lines "
-                "and toward the least-tried tactics"))
+            self.emit(
+                "log",
+                message=(
+                    f"fresh start: run {self.memory.runs + 1}, earlier work peaked at {peak.p:.3f}/{peak.units}w "
+                    f"without a win; steering away from {len(self.ctx.exhausted_lines())} exhausted lines "
+                    "and toward the least-tried tactics"
+                ),
+            )
             start = min(self.memory.level, self.max_level) if self.escalate and not self.long else 0
             if self.plateau and self.escalate:
                 start = max(1, start)
@@ -486,6 +569,24 @@ class Engine:
     def remaining(self) -> int:
         return max(0, self.budget - (self.oracle.calls if self.oracle else 0))
 
+    def keeps_searching(self) -> bool:
+        """A live round keeps going after the call budget. The stall ladder still has to be able to climb."""
+        return self.live and self.idle_when_done
+
+    def refill_search(self) -> bool:
+        """Give a live search another budget window. False when this run is supposed to stop."""
+        if not self.keeps_searching() or not self.oracle or self.oracle.calls < self.budget:
+            return False
+        self.budget += self.budget_span
+        self.emit(
+            "log",
+            message=(
+                f"call budget spent; continuing with {self.budget_span:,} more "
+                f"(stall {self.stall}/{self.patience()}, L{self.level})"
+            ),
+        )
+        return True
+
     def patience(self) -> int:
         """Flat rounds before escalating. Mechanical levels do far more per round, so they get less."""
         base = self.max_stall or 12
@@ -508,13 +609,19 @@ class Engine:
             self.fresh = True
         self.emit("level", level=level, name=name, reason=reason)
         self.emit("log", message=f"[ladder] L{level} {name}: {reason}")
-        joined = [s for s in self.strategies.values()
-                  if isinstance(s, LLMGenerate) and s.unlocked(self.ctx) and s.pending is None]
+        joined = [
+            s
+            for s in self.strategies.values()
+            if isinstance(s, LLMGenerate) and s.unlocked(self.ctx) and s.pending is None
+        ]
         if joined and self.llm is not None:
             for strategy in joined:
                 strategy.prefetch(self.ctx)
-            self.emit("log", message="[ladder] models join: " + "; ".join(
-                f"{s.name} ({', '.join(m.split('/')[-1] for m in s.models)})" for s in joined))
+            self.emit(
+                "log",
+                message="[ladder] models join: "
+                + "; ".join(f"{s.name} ({', '.join(m.split('/')[-1] for m in s.models)})" for s in joined),
+            )
 
     def winning(self) -> bool:
         if not len(self.archive):
@@ -537,9 +644,15 @@ class Engine:
         calls = self.oracle.calls if self.oracle else 0
         if self._roots[0] != calls:
             obj = self.objective
-            self._roots = (calls, [c for c in self.archive.items.values()
-                                   if obj.holds_ceiling(c.score)
-                                   or (c.score.n >= CEILING_MIN_N and obj.wins(c.score, c.units, self.leader))])
+            self._roots = (
+                calls,
+                [
+                    c
+                    for c in self.archive.items.values()
+                    if obj.holds_ceiling(c.score)
+                    or (c.score.n >= CEILING_MIN_N and obj.wins(c.score, c.units, self.leader))
+                ],
+            )
         return self._roots[1]
 
     def phase(self) -> str:
@@ -621,13 +734,13 @@ class Engine:
         await probe.measure(self.ctx, [p for p in todo if probe.value(p) is None])
 
         def leaders() -> list[str]:
-            return sorted((c.phrase for c in top if probe.value(c.phrase) is not None),
-                          key=lambda p: -probe.value(p))[:PROBE_TOP]
+            return sorted((c.phrase for c in top if probe.value(c.phrase) is not None), key=lambda p: -probe.value(p))[
+                :PROBE_TOP
+            ]
 
         await probe.measure(self.ctx, [p for p in leaders() if probe.samples.get(p, 0) < PROBE_TOP], n=PROBE_TOP)
         if probe.saturated(leaders()):
-            ranked = sorted((c.phrase for c in top if probe.value(c.phrase) is not None),
-                            key=lambda p: -probe.value(p))
+            ranked = sorted((c.phrase for c in top if probe.value(c.phrase) is not None), key=lambda p: -probe.value(p))
             if await probe.strengthen(self.ctx, leaders(), ranked[:60]):
                 await probe.measure(self.ctx, leaders(), n=PROBE_TOP)
         # The probe's favourites get real samples too: one roll cannot say how often a chain reaches the ceiling.
@@ -637,8 +750,11 @@ class Engine:
         best = max(leaders(), key=lambda p: probe.value(p), default=None)
         if best is not None:
             cand = self.archive.items[best]
-            self.emit("log", message=f"[probe] level {level:.2f}: best {probe.value(best):.3f} "
-                                     f"({cand.units}w, {len(probe.values)} measured)")
+            self.emit(
+                "log",
+                message=f"[probe] level {level:.2f}: best {probe.value(best):.3f} "
+                f"({cand.units}w, {len(probe.values)} measured)",
+            )
 
     def remember(self) -> None:
         """Fold this run into the question's memory."""
@@ -668,35 +784,59 @@ class Engine:
                 if cand.phrase not in seen:
                     mem.exhausted.append([cand.phrase, round(cand.p, 3), cand.units])
             mem.exhausted = sorted(mem.exhausted, key=lambda r: -r[1])[:30]
-        mem.history.append({"at": time.time(), "calls": self.oracle.calls, "rounds": self.rounds,
-                            "best_p": round(best.p, 3) if best else 0.0, "units": best.units if best else 0,
-                            "win": won, "fresh": self.fresh, "reason": self.end_reason})
+        mem.history.append(
+            {
+                "at": time.time(),
+                "calls": self.oracle.calls,
+                "rounds": self.rounds,
+                "best_p": round(best.p, 3) if best else 0.0,
+                "units": best.units if best else 0,
+                "win": won,
+                "fresh": self.fresh,
+                "reason": self.end_reason,
+            }
+        )
         mem.history = mem.history[-20:]
         lab_memory.save(self.db, self.oracle.qkey, self.slug, mem, self.memory_board)
+
     def enter_plateau(self, reason: str) -> None:
         lead = self.leader
         self.plateau = True
         self.length_cap = self.grow_cap = min(max(self.length_cap, lead.units - 1), max(MAX_WORDS, 300))
         self.scheduler.boost = {"extend": 1.4, "sweep": 1.3, "drift": 1.3}
-        self.emit("log", message=(
-            f"[plateau] {reason}: the leader holds {lead.probability:.2f} with {lead.units} words. Lines that tie "
-            f"on the rounded score are ranked by a probe (an opposing claim appended) and climbed on it, and "
-            f"lines may grow to {self.length_cap} words."))
+        self.emit(
+            "log",
+            message=(
+                f"[plateau] {reason}: the leader holds {lead.probability:.2f} with {lead.units} words. Lines that tie "
+                f"on the rounded score are ranked by a probe (an opposing claim appended) and climbed on it, and "
+                f"lines may grow to {self.length_cap} words."
+            ),
+        )
 
     async def seed_archive(self) -> None:
         past = history(self.db, self.question["jev_request"], self.target)
         if self.plateau_candidate and (self.memory.runs > 0 or len(past) >= 500):
             self.enter_plateau(f"{len(past)} lines and {self.memory.runs} earlier runs on this board")
-        origins = {r["state"]: dict(r) for r in self.db.all(
-            "SELECT state, origin, parent, archetype FROM lab_candidates WHERE qkey = ?", (self.oracle.qkey,))}
+        origins = {
+            r["state"]: dict(r)
+            for r in self.db.all(
+                "SELECT state, origin, parent, archetype FROM lab_candidates WHERE qkey = ?", (self.oracle.qkey,)
+            )
+        }
         for state, samples in past.items():
             try:
                 phrase = check_phrase(state, self.choices, self.length_cap)
             except RuleError:
                 continue
             meta = origins.get(state) or {}
-            self.archive.add(phrase, Score(phrase, samples), meta.get("origin") or "history", meta.get("parent") or "",
-                             meta.get("archetype") or "", session=False)
+            self.archive.add(
+                phrase,
+                Score(phrase, samples),
+                meta.get("origin") or "history",
+                meta.get("parent") or "",
+                meta.get("archetype") or "",
+                session=False,
+            )
         self.restored = len(self.archive)
         site = self.db.all("SELECT DISTINCT state FROM site_scores WHERE slug = ?", (self.slug,))
         seeds = [(r["state"], "site", "", "other") for r in site]
@@ -705,31 +845,46 @@ class Engine:
         if self.yes_no:
             seeds.append((self.objective.goal, "seed", "", "direct"))
         else:
-            seeds += [(c.get("description") or "", "seed", "", "direct")
-                      for c in self.question["raw"].get("choices") or []
-                      if isinstance(c, dict) and (not self.target or c.get("option") == self.target)]
+            seeds += [
+                (c.get("description") or "", "seed", "", "direct")
+                for c in self.question["raw"].get("choices") or []
+                if isinstance(c, dict) and (not self.target or c.get("option") == self.target)
+            ]
         if self.objective.shortest:
             seeds += self.prefix_seeds()
         triaged = self.triage_items()
         seeds += [(i.phrase, f"triage:{i.source}", "", "other") for i in triaged]
-        self.emit("log", message=f"archive restored {len(self.archive)} phrases; scoring {len(seeds)} site/seed lines"
-                                 + (f" ({len(triaged)} existing lines by triage)" if triaged else ""))
+        self.emit(
+            "log",
+            message=f"archive restored {len(self.archive)} phrases; scoring {len(seeds)} site/seed lines"
+            + (f" ({len(triaged)} existing lines by triage)" if triaged else ""),
+        )
         await self.evaluate(seeds)
         for item in triaged:
             cand = self.archive.items.get(item.phrase)
             if cand is not None and item.kev_entry:
-                triage.record(self.slug, self.objective, self.leader, item, cand.score, self.question["title"],
-                              self.target)
+                triage.record(
+                    self.slug, self.objective, self.leader, item, cand.score, self.question["title"], self.target
+                )
         self.emit("status", status="seeded")
 
     def triage_items(self) -> list["triage.TriageItem"]:
-        """Existing lines worth scoring before any are generated (Kev: Jev's best, estimated vault lines)."""
+        """Existing lines worth scoring before any are generated (mirror editions: Jev's best and estimates)."""
         if self.triage_k <= 0:
             return []
         jev = triage_jev_db()
         try:
-            return triage.rank_candidates(self.db, self.slug, self.objective, self.leader, self.triage_k,
-                                          self.target, jev, set(self.archive.items), self.length_cap)
+            return triage.rank_candidates(
+                self.db,
+                self.slug,
+                self.objective,
+                self.leader,
+                self.triage_k,
+                self.target,
+                jev,
+                set(self.archive.items),
+                self.length_cap,
+            )
         except Exception as error:
             self.emit("log", message=f"triage failed: {error!r}")
             return []
@@ -764,7 +919,9 @@ class Engine:
     def maybe_train(self, force: bool = False) -> None:
         """Retrain in the background once the archive has grown enough; strategies keep using the old model."""
         size = len(self.archive)
-        if self.training or (not force and size < max(60, int(self.last_trained * 1.25)) and size - self.last_trained < 300):
+        if self.training or (
+            not force and size < max(60, int(self.last_trained * 1.25)) and size - self.last_trained < 300
+        ):
             return
         self.training = True
         self.train_task = asyncio.ensure_future(self._train(size))
@@ -775,7 +932,8 @@ class Engine:
                 self.embedder = await asyncio.to_thread(Embedder)
             if self.ctx.phrase_surrogate is None:
                 self.ctx.phrase_surrogate = PhraseSurrogate(
-                    self.embedder, None, (self.question["title"], self.objective.goal))
+                    self.embedder, None, (self.question["title"], self.objective.goal)
+                )
                 self.ctx.word_surrogate = WordSurrogate(self.embedder)
                 if self.long:
                     self.ctx.phrase_surrogate.length_scale = float(self.long_target)
@@ -795,15 +953,15 @@ class Engine:
     async def _attach_prior(self) -> None:
         """Load (retraining on new phrases if due) the cross-question prior without holding up the search."""
         try:
-            prior = await asyncio.to_thread(global_model.ensure, self.embedder,
-                                            lambda m: self.emit("log", message=m))
+            prior = await asyncio.to_thread(global_model.ensure, self.embedder, lambda m: self.emit("log", message=m))
         except Exception as error:
             self.emit("log", message=f"cross-question prior unavailable: {error!r}")
             return
         if prior is not None and self.ctx.phrase_surrogate is not None:
             self.ctx.phrase_surrogate.prior = prior
-            self.emit("log", message=f"cross-question prior ready (held-out rho {prior.rho:.2f}, "
-                                     f"{prior.trained_on} phrases)")
+            self.emit(
+                "log", message=f"cross-question prior ready (held-out rho {prior.rho:.2f}, {prior.trained_on} phrases)"
+            )
 
     # Planner.
 
@@ -814,12 +972,19 @@ class Engine:
         stats = {
             "calls": self.oracle.calls,
             "size": len(self.archive),
-            "arms": {k: {"share": v, "rate": self.scheduler.arms[k].rate()} for k, v in self.scheduler.shares().items()},
+            "arms": {
+                k: {"share": v, "rate": self.scheduler.arms[k].rate()} for k, v in self.scheduler.shares().items()
+            },
             "archetypes": self.ctx.archetype_bests(),
         }
         try:
-            data = await self.llm.json(PLAN_MODEL, prompts.plan_system(self.ctx), prompts.plan_user(self.ctx, stats),
-                                       temperature=0.6, max_tokens=3000)
+            data = await self.llm.json(
+                PLAN_MODEL,
+                prompts.plan_system(self.ctx),
+                prompts.plan_user(self.ctx, stats),
+                temperature=0.6,
+                max_tokens=3000,
+            )
         except (LLMError, Exception) as error:
             self.emit("log", message=f"[planner] {error}")
             return
@@ -842,8 +1007,14 @@ class Engine:
             "exploit": {"local_edit": 1.6, "genetic": 1.6, "gcg": 1.4},
             "compress": {"compress": 3.0},
         }.get(mode, {})
-        self.emit("plan", directive=self.ctx.directive, focus=self.ctx.focus, mode=mode,
-                  ban=list(data.get("ban") or []), pin=list(data.get("pin") or []))
+        self.emit(
+            "plan",
+            directive=self.ctx.directive,
+            focus=self.ctx.focus,
+            mode=mode,
+            ban=list(data.get("ban") or []),
+            pin=list(data.get("pin") or []),
+        )
         seeds = [(str(p), "planner", "", "other") for p in data.get("seed_phrases") or []]
         if seeds:
             await self.evaluate(seeds)
@@ -859,15 +1030,32 @@ class Engine:
         need = list({c.phrase: c for c in need}.values())
         if need:
             await self.evaluate([(c.phrase, "resample", c.parent, c.archetype) for c in need], n=5)
-        unsure = [c for c in self.archive.top_by_board(5) if c.score.n < 8
-                  and self.objective.at_ceiling(c.p) and not self.objective.wins(c.score, c.units, self.leader)]
+        unsure = [
+            c
+            for c in self.archive.top_by_board(5)
+            if c.score.n < 8
+            and self.objective.at_ceiling(c.p)
+            and not self.objective.wins(c.score, c.units, self.leader)
+        ]
         if unsure:
             await self.evaluate([(c.phrase, "resample", c.parent, c.archetype) for c in unsure], n=8)
         for cand in self.archive.top_by_board(5):
-            if cand.score.n < 5 or cand.phrase in self.vaulted:
-                continue
-            if self.objective.wins(cand.score, cand.units, self.leader):
+            if self.worth_vaulting(cand):
                 self.save(cand, auto=True)
+
+    def worth_vaulting(self, cand: Candidate) -> bool:
+        """A confirmed line that beats the leader, or a live line that clears the finish line for next time."""
+        if cand.score.n < 5 or cand.phrase in self.vaulted or phrase_banned(cand.phrase):
+            return False
+        if self.objective.wins(cand.score, cand.units, self.leader):
+            return True
+        floor = self.question.get("yes_threshold")
+        if not (self.live and self.question.get("revision_id") and floor is not None):
+            return False
+        try:
+            return self.objective.p_lcb(cand.score) >= float(floor) - 1e-9
+        except (TypeError, ValueError):
+            return False
 
     def save(self, cand: Candidate, auto: bool = False) -> None:
         objective = self.objective
@@ -876,22 +1064,51 @@ class Engine:
         extra = {}
         gamble = objective.gamble(cand.score, cand.units, self.leader)
         if gamble:
-            extra = {"gamble": True, "p_reach": round(max(objective.goal_samples(cand.score)), 4),
-                     "hits": f"{objective.hits(cand.score)}/{cand.score.n}"}
-        vault.save(self.slug, self.mode, cand.phrase, p_mean=cand.p, p_lcb=lcb, spread=cand.score.spread,
-                   n=cand.score.n, units=cand.units, leader=self.leader, beats=beats,
-                   title=self.question["title"], origin=cand.origin, note="auto" if auto else "manual",
-                   board=self.board, extra=extra, target=self.target)
+            extra = {
+                "gamble": True,
+                "p_reach": round(max(objective.goal_samples(cand.score)), 4),
+                "hits": f"{objective.hits(cand.score)}/{cand.score.n}",
+            }
+        if not self.live or self.question.get("revision_id"):
+            vault.save(
+                self.slug,
+                self.mode,
+                cand.phrase,
+                p_mean=cand.p,
+                p_lcb=lcb,
+                spread=cand.score.spread,
+                n=cand.score.n,
+                units=cand.units,
+                leader=self.leader,
+                beats=beats,
+                title=self.question["title"],
+                origin=cand.origin,
+                note="auto" if auto else "manual",
+                board=self.board,
+                extra=extra,
+                target=self.target,
+            )
         self.vaulted.add(cand.phrase)
-        self.emit("vault", phrase=cand.phrase, p=cand.p, lcb=lcb, units=cand.units, beats=beats, auto=auto,
-                  gamble=extra.get("hits", ""))
+        self.emit(
+            "vault",
+            phrase=cand.phrase,
+            p=cand.p,
+            lcb=lcb,
+            units=cand.units,
+            beats=beats,
+            auto=auto,
+            gamble=extra.get("hits", ""),
+        )
         if beats and self.win_extra and self.won_at is None:
             self.won_at = self.oracle.calls
             cap = self.oracle.calls + self.win_extra
             if cap < self.budget:
                 self.budget = cap
-                self.emit("log", message=f"[win mode] took the lead at {self.won_at:,} calls; "
-                                         f"{self.win_extra:,} more to improve it, stopping at {cap:,}")
+                self.emit(
+                    "log",
+                    message=f"[win mode] took the lead at {self.won_at:,} calls; "
+                    f"{self.win_extra:,} more to improve it, stopping at {cap:,}",
+                )
 
     # Commands from the TUI (run between rounds).
 
@@ -969,8 +1186,11 @@ class Engine:
             while not self.stopping:
                 await self.run_commands()
                 if solved is None and (solved := self.unbeatable()) is not None:
-                    self.emit("log", message=f"[done] '{solved.phrase}' holds 1.00 on all {solved.score.n} rolls "
-                                             "with one word; nothing can beat it")
+                    self.emit(
+                        "log",
+                        message=f"[done] '{solved.phrase}' holds 1.00 on all {solved.score.n} rolls "
+                        "with one word; nothing can beat it",
+                    )
                     if solved.phrase not in self.vaulted and self.objective.wins(solved.score, 1, self.leader):
                         self.save(solved, auto=True)
                 if solved is not None:
@@ -983,23 +1203,27 @@ class Engine:
                     await asyncio.sleep(0.5)
                     continue
                 if self.oracle.calls >= self.budget:
-                    if not self.idle_when_done:
+                    if self.refill_search():
+                        idle_noted = False
+                    elif not self.idle_when_done:
                         self.end_reason = self.budget_reason()
                         break
-                    if not idle_noted:
-                        self.emit("status", status="budget spent")
-                        self.emit("log", message="budget spent; commands still work, `budget <n>` to keep searching")
-                        idle_noted = True
-                    await asyncio.sleep(0.5)
-                    continue
+                    else:
+                        if not idle_noted:
+                            self.emit("status", status="budget spent")
+                            self.emit("log", message="budget spent; commands still work, `budget <n>` to keep searching")
+                            idle_noted = True
+                        await asyncio.sleep(0.5)
+                        continue
                 if idle_noted:
                     idle_noted = False
                     self.emit("status", status="running")
                 await self.paused.wait()
                 if self.stopping:
                     break
-                available = {name for name, s in self.strategies.items()
-                             if self.allowed(name) and s.available(self.ctx)}
+                available = {
+                    name for name, s in self.strategies.items() if self.allowed(name) and s.available(self.ctx)
+                }
                 if not available:
                     self.emit("log", message="no strategy available; add a phrase or enable the LLM")
                     await asyncio.sleep(2)
@@ -1042,8 +1266,11 @@ class Engine:
                     mark_after = self.long_mark()
                     gain = self.long_gain(mark_before, mark_after)
                     if mark_after[0] > mark_before[0]:
-                        self.emit("log", message=f"[chains] a line holds {self.objective.ceiling:.2f}; "
-                                                 "compacting it while every roll stays there")
+                        self.emit(
+                            "log",
+                            message=f"[chains] a line holds {self.objective.ceiling:.2f}; "
+                            "compacting it while every roll stays there",
+                        )
                 new_elites = sum(1 for cell, p in self.archive.elites.items() if elites_before.get(cell) != p)
                 novel = self.count_novel(top_before)
                 if novel:
@@ -1060,8 +1287,12 @@ class Engine:
                 if self.scheduler.forced == "compress":
                     self.scheduler.forced = None
                 self.maybe_train()
-                if self.stall >= self.patience() and self.rounds >= self.min_rounds \
-                        and self.long and not self.word_stage():
+                if (
+                    self.stall >= self.patience()
+                    and self.rounds >= self.min_rounds
+                    and self.long
+                    and not self.word_stage()
+                ):
                     flat = f"{self.stall} rounds without a better chain"
                     if self.max_stall:
                         self.end_reason = f"plateau in {self.phase()} ({flat})"
@@ -1072,10 +1303,13 @@ class Engine:
                     self.emit("log", message=f"[chains] {flat}; favouring new chains and writers")
                 elif self.stall >= self.patience() and self.rounds >= self.min_rounds:
                     flat = f"{self.stall} rounds without a better line"
-                    if self.escalate and self.remaining() > 0 and self.level < self.max_level:
+                    room = self.remaining() > 0 or self.keeps_searching()
+                    if self.escalate and room and self.level < self.max_level:
+                        self.refill_search()
                         self.set_level(self.level + 1, f"plateau at L{self.level} ({flat})")
                         continue
-                    if self.escalate and self.remaining() > 0 and not self.max_stall and self.max_level:
+                    if self.escalate and room and not self.max_stall and self.max_level:
+                        self.refill_search()
                         self.set_level(1, f"ladder exhausted ({flat}); cycling from L1 until the budget ends")
                         continue
                     if self.max_stall:
@@ -1153,14 +1387,18 @@ class Engine:
         lines = []
         lead = f"{self.leader.probability:.2f}/{self.leader.units}w ({self.leader.name})" if self.leader else "none"
         goal = f"answer={self.target}" if self.target else f"goal={self.objective.goal}"
-        lines.append(f"{self.question['title']} [{from_board(self.board).label}] {goal} leader={lead} "
-                     f"calls={self.oracle.calls if self.oracle else 0} archive={len(self.archive)}")
+        lines.append(
+            f"{self.question['title']} [{from_board(self.board).label}] {goal} leader={lead} "
+            f"calls={self.oracle.calls if self.oracle else 0} archive={len(self.archive)}"
+        )
         for cand in self.archive.top_by_board(k):
             win = "    "
             if self.objective.wins(cand.score, cand.units, self.leader):
                 win = "BET " if self.objective.gamble(cand.score, cand.units, self.leader) else "WIN "
-            lines.append(f"{win}{cand.p:.3f}±{cand.score.spread:.3f} n={cand.score.n} {cand.units:2}w "
-                         f"[{cand.origin}] {cand.phrase}")
+            lines.append(
+                f"{win}{cand.p:.3f}±{cand.score.spread:.3f} n={cand.score.n} {cand.units:2}w "
+                f"[{cand.origin}] {cand.phrase}"
+            )
         return lines
 
 

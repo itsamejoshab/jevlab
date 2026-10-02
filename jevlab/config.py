@@ -45,27 +45,32 @@ OPENROUTER_BASE = os.environ.get("OPENROUTER_BASE", "https://openrouter.ai/api/v
 TYPESAFE_KEY = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("TYPESAFE_KEY") or "").strip()
 TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1")
 # `typesafe/jev-latest` is rejected; the bare id is what the site sends too, and Typesafe's own API takes it.
-# Each id is the `model` in that edition's site `jevRequest`. Kev and Laya are OpenRouter /systemone models;
-# Typesafe does not serve them. Kev's host is much slower than Typesafe's Jev.
+# Each id is the `model` in that edition's site `jevRequest`. Kev is an OpenRouter /systemone model.
+# Laya is not hosted there: the same id is a Hugging Face repo, scored in-process.
 EDITION_MODELS = {
     "jev": "jev-latest",
     "kev": "jaredpalmer/kev-4b",
     "laya": "convaiinnovations/laya",
 }
 JEV_MODEL = os.environ.get("JEV_MODEL", EDITION_MODELS[EDITION])
+# Hugging Face repo for `jevlab install-laya`. Independent of the current edition's oracle model.
+LAYA_REPO = os.environ.get("JEV_LAYA_REPO", EDITION_MODELS["laya"])
 # The model Jev's own samples were requested with, so a mirror edition can look them up in Jev's database.
 JEV_SOURCE_MODEL = os.environ.get("JEV_SOURCE_MODEL", "jev-latest")
-# Where the oracle sends /systemone, pooled: both serve the same Jev with the same request body.
-# Mirrors start on OpenRouter only, with a smaller pool and a longer timeout (Kev's host). Raise the
-# JEV_ORACLE_* vars if a host turns out faster.
-ORACLE_BACKENDS = [b.strip() for b in os.environ.get("JEV_ORACLE_BACKENDS",
-                                                     "openrouter" if MIRROR else "typesafe,openrouter").split(",")
-                   if b.strip()]
-ORACLE_CONCURRENCY = int(os.environ.get("JEV_ORACLE_CONCURRENCY", "4" if MIRROR else "24"))
-ORACLE_MAX_CONCURRENCY = int(os.environ.get("JEV_ORACLE_MAX_CONCURRENCY", "8" if MIRROR else "48"))
+# Weights for the local Laya oracle. This stays outside the repo; `jevlab install-laya` downloads them here.
+LAYA_CACHE = Path(os.environ.get("JEV_LAYA_CACHE", Path.home() / ".cache" / "jevlab" / "huggingface")).expanduser()
+LAYA_DEVICE = os.environ.get("JEV_LAYA_DEVICE", "").strip()
+# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev is OpenRouter only.
+# Laya loads the Hugging Face checkpoint locally (`huggingface`), one forward at a time.
+_LAYA = EDITION == "laya"
+_DEFAULT_BACKENDS = "huggingface" if _LAYA else ("openrouter" if MIRROR else "typesafe,openrouter")
+ORACLE_BACKENDS = [b.strip() for b in os.environ.get("JEV_ORACLE_BACKENDS", _DEFAULT_BACKENDS).split(",") if b.strip()]
+ORACLE_CONCURRENCY = int(os.environ.get("JEV_ORACLE_CONCURRENCY", "1" if _LAYA else ("4" if MIRROR else "24")))
+ORACLE_MAX_CONCURRENCY = int(os.environ.get("JEV_ORACLE_MAX_CONCURRENCY", "1" if _LAYA else ("8" if MIRROR else "48")))
 # Mirror searches first score this many lines Jev already rates well (search/triage.py) before generating any.
 TRIAGE_K = int(os.environ.get("JEV_TRIAGE_K", "40" if MIRROR else "0"))
 # Under load Jev's p99 is ~7s and p99.9 ~10s (2026-09-28), with a tail past 20s; slower calls give up and retry.
+# Kev's host is slower. Laya's local forward has no HTTP timeout; the value only applies if a remote backend is added.
 ORACLE_TIMEOUT = float(os.environ.get("JEV_ORACLE_TIMEOUT", "60" if MIRROR else "20"))
 
 @dataclass(frozen=True)

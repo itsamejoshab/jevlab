@@ -1,5 +1,7 @@
 # jevlab architecture: search against a quantized, stochastic classifier
 
+A plain-language account of Strict Highest is in the [README](../README.md). The short technical summary is in [how-it-works.md](how-it-works.md).
+
 `jevlab` is an offline optimization lab for [Trick Jev](https://i-wanna-date-jev.begin-363.workers.dev). Players build phrases, and Jev, a classifier language model, reads each phrase as context and answers a question. The goal is to push Jev's probability for a target answer as high as it will go, using as few words as possible.
 
 From an optimization point of view the game is unusually hostile:

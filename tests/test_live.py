@@ -1,5 +1,6 @@
 from jevlab import vault
 from jevlab.live import (
+    SENTENCE_WORDS,
     LiveSession,
     best_saved,
     carried_question,
@@ -8,6 +9,7 @@ from jevlab.live import (
     post_phrase,
     question_from_round,
     search_question,
+    sentence_words,
 )
 from jevlab.objective import Leader
 from jevlab.modes import from_name
@@ -37,6 +39,20 @@ ROUND = {
     "leaders": [],
     "milestones": [{"id": "finish", "at": 0.15}],
 }
+
+
+def test_round_state_unwraps_the_live_envelope():
+    """The site wraps the round as {state, servedAt}. Live mode reads status on the round itself."""
+    from jevlab.site.client import SiteClient
+
+    client = SiteClient()
+    client.call = lambda name, data, method="GET": {"state": dict(ROUND), "servedAt": 1}
+    state = client.round_state("live")
+    assert state["status"] == "live"
+    assert state["id"] == "r1"
+    session = LiveSession()
+    assert session.observe(state)
+    assert session.question["title"].startswith("Is it stealing")
 
 
 def test_typed_live_question_never_enters_the_vault(tmp_path, monkeypatch):
@@ -438,3 +454,55 @@ def test_live_posts_a_phrase_as_one_word_and_prefers_a_saved_line():
     assert recycled["p"] == 0.99
 
     assert best_saved({**question, "slug": "missing", "title": "Nope"}, entries) is None
+
+
+def test_sentence_round_submits_the_phrase_in_one_turn():
+    assert sentence_words("  Hello,   world! ") == ["Hello", "world"]
+    assert sentence_words("yes+") == ["yes+"]
+
+    state = {**ROUND, "playMode": "strict_chain", "sentences": True}
+    session = LiveSession(pace="fast", chain="casual")
+    session.observe(state, me="me")
+    assert session.sentences
+    assert session.play_mode == "strict_chain"
+    question = session.question
+    assert question["raw"]["sentences"]
+    assert question["raw"]["playMode"] == "strict_chain"
+
+    class Client:
+        def __init__(self):
+            self.ops = []
+
+        def attempt(self, revision_id, mode):
+            return {
+                "id": "a",
+                "revisionId": revision_id,
+                "playMode": mode,
+                "nextTurn": 1,
+                "tokens": [],
+                "turns": [],
+            }
+
+        def start(self, revision_id, mode):
+            return self.attempt(revision_id, mode)
+
+        def turn(self, attempt, operation):
+            self.ops.append(operation)
+            tokens = [t for t in attempt.get("tokens") or [] if t.get("active", True)]
+            if operation.get("kind") == "append":
+                tokens.extend(
+                    {"id": str(len(tokens) + i), "text": word, "active": True}
+                    for i, word in enumerate(operation["text"].split())
+                )
+            turn = {"probability": 0.22, "id": "t"}
+            return {**attempt, "tokens": tokens, "turns": [turn], "nextTurn": 2}, turn
+
+    client = Client()
+    scored = post_phrase(client, question, session.play_mode, "pitch black sky", lambda _message: None)
+    assert scored == 0.22
+    assert client.ops == [{"kind": "append", "text": "pitch black sky"}]
+
+    long = " ".join(f"w{i}" for i in range(SENTENCE_WORDS + 3))
+    longer = Client()
+    post_phrase(longer, question, session.play_mode, long, lambda _message: None)
+    assert [op["text"] for op in longer.ops] == [" ".join(f"w{i}" for i in range(SENTENCE_WORDS))]

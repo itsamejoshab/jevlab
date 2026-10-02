@@ -35,14 +35,19 @@ def test_laya_edition_defaults(tmp_path):
     env["JEV_EDITION"] = "laya"
     env["JEVLAB_DATA"] = str(tmp_path)
     for key in ("JEV_MODEL", "JEV_ORACLE_BACKENDS", "JEV_ORACLE_CONCURRENCY", "JEV_ORACLE_MAX_CONCURRENCY",
-                "JEV_ORACLE_TIMEOUT", "JEV_TRIAGE_K"):
+                "JEV_ORACLE_TIMEOUT", "JEV_TRIAGE_K", "JEV_LAYA_CACHE"):
         env.pop(key, None)
     script = (
-        "from jevlab.config import DATA, EDITION, JEV_MODEL, MIRROR, ORACLE_BACKENDS, TRIAGE_K\n"
+        "from pathlib import Path\n"
+        "from jevlab.config import (DATA, EDITION, JEV_MODEL, LAYA_CACHE, MIRROR, ORACLE_BACKENDS,\n"
+        "                           ORACLE_CONCURRENCY, ORACLE_MAX_CONCURRENCY, ROOT, TRIAGE_K)\n"
         "assert EDITION == 'laya' and MIRROR\n"
         "assert DATA.name == 'laya'\n"
         "assert JEV_MODEL == 'convaiinnovations/laya'\n"
-        "assert ORACLE_BACKENDS == ['openrouter']\n"
+        "assert ORACLE_BACKENDS == ['huggingface']\n"
+        "assert ORACLE_CONCURRENCY == 1 and ORACLE_MAX_CONCURRENCY == 1\n"
+        "assert LAYA_CACHE == Path.home() / '.cache' / 'jevlab' / 'huggingface'\n"
+        "assert ROOT not in LAYA_CACHE.parents\n"
         "assert TRIAGE_K == 40\n"
     )
     subprocess.check_call([sys.executable, "-c", script], env=env)

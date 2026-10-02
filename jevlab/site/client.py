@@ -256,8 +256,15 @@ class SiteClient:
         return self.call("jevers", {"edition": self.edition})
 
     def round_state(self, which: str = "live") -> dict:
-        """Current or past live round. `which` is \"live\" or a round UUID."""
-        return self.call("round", {"edition": self.edition, "round": which}) or {}
+        """Current or past live round. `which` is \"live\" or a round UUID.
+
+        The site returns ``{state, servedAt}``. Callers read the round itself (status, question, leaders).
+        """
+        payload = self.call("round", {"edition": self.edition, "round": which}) or {}
+        inner = payload.get("state") if isinstance(payload, dict) else None
+        if isinstance(inner, dict) and ("status" in inner or "question" in inner):
+            return inner
+        return payload
 
     # Writes (paced).
 

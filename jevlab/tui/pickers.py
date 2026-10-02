@@ -177,7 +177,7 @@ class HomeScreen(Screen):
             ready_card.update(card("auto", "fast first word"))
             vault_card.update(card("hold", "slow if dethroned"))
             text.append(
-                "Search watches /play?round=live. Fast fires a word the moment a round appears, then "
+                "Search watches /round. Fast fires a word the moment a round appears, then "
                 "reposts on every score gain. Slow posts only when we are not in 1st and does not spam.",
                 style="bold",
             )
@@ -363,9 +363,10 @@ class LiveSetupScreen(Screen):
         else:
             text.append("SLOW: posts a saved line or a new leader only when we are not in 1st, then holds. ")
         if self.query_one("#chain", Select).value == "strict":
-            text.append("STRICT: one word at a time. A whole phrase cannot be sent. ")
+            text.append("STRICT: one word at a time on a word-chain round. ")
         else:
-            text.append("CASUAL: a whole phrase goes up as one hyphenated word. ")
+            text.append("CASUAL: a whole phrase goes up as one hyphenated word on a word-chain round. ")
+        text.append("A sentence round submits the phrase in one turn, on the mode the round names. ")
         if not self.query_one("#post", Switch).value:
             text.append("POST is off: the search runs and nothing is sent. p toggles it during the run.")
         self.query_one("#live-help", Static).update(text)
@@ -391,7 +392,8 @@ class LiveSetupScreen(Screen):
         else:
             now.append(session.question["title"], style="bold")
             site_mode = "strict" if state.get("playMode") == "strict_chain" else "casual"
-            now.append(f"\nround is {site_mode}  ·  finish at {session.threshold:.0%}  ·  ", style="dim")
+            how = f"submit a phrase ({site_mode})" if state.get("sentences") else f"round is {site_mode}"
+            now.append(f"\n{how}  ·  finish at {session.threshold:.0%}  ·  ", style="dim")
             lead = session.leader
             now.append(
                 f"leader {lead.probability:.2f}/{lead.units}w {lead.name}" if lead else "nobody racing yet",

@@ -33,6 +33,19 @@ def board_of(args) -> str | None:
     return from_name(value).board if value else None
 
 
+def cmd_install_laya(_args) -> int:
+    from .laya_local import LayaError, cache_dir, install
+
+    try:
+        path = install()
+    except LayaError as error:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"Laya weights ready at {path}")
+    print(f"cache {cache_dir()}")
+    return 0
+
+
 def cmd_snapshot(args) -> int:
     from .db import DB
     from .site.snapshot import take_snapshot
@@ -405,6 +418,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("tui", help="home screen: choose Search or Publish (default when no command is given)")
     p.set_defaults(func=cmd_tui)
+
+    p = sub.add_parser(
+        "install-laya",
+        help="download Laya weights from Hugging Face into ~/.cache/jevlab (outside the repo)",
+    )
+    p.set_defaults(func=cmd_install_laya)
 
     p = sub.add_parser("snapshot", help="pull questions, boards, word impacts, and our attempts into data/jev.db")
     p.add_argument("--q", nargs="*", help="limit to these slugs or play URLs")

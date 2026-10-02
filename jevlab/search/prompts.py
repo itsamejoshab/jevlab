@@ -74,6 +74,19 @@ GEN_SYSTEM_LONG = (
 def target_line(ctx, detail: str = "") -> str:
     """What Jev should answer. A choice question has no fixed answer: the score is Jev's probability for its
     top option, whichever option that is."""
+    if ctx.objective.kind == "score":
+        levels = [str(level) for level in (ctx.question.get("raw") or {}).get("levels") or [] if str(level)]
+        ends = f" The scale runs from {levels[0]} (low) to {levels[-1]} (high)." if len(levels) >= 2 else ""
+        bar = (
+            f" It counts once the score is at least {ctx.objective.threshold:.2f}."
+            if ctx.objective.shortest
+            else ""
+        )
+        extra = f" ({detail})" if detail else ""
+        return (
+            "This is a scale. Push Jev toward the high end; the score shown is how far up the scale Jev landed."
+            f"{ends}{bar}{extra}"
+        )
     if ctx.objective.kind != "choice":
         return f"Target answer: {ctx.objective.goal}" + (f" ({detail})" if detail else "")
     options = [c for c in ctx.question["raw"].get("choices") or [] if isinstance(c, dict)]

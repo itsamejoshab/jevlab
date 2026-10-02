@@ -126,11 +126,26 @@ def _round_closed(error: SiteError) -> bool:
     return any(part in text for part in ("finished", "ended", "closed", "complete", "claimed", "round over"))
 
 
-def build_chain(client: SiteClient, attempt: dict, words: list[str], log, stop_at: float | None = None) -> tuple[dict, float | None]:
+def _chain_matches(current: list[str], words: list[str]) -> bool:
+    """True when the attempt already shows `words`, one token per word or one phrase per append."""
+    return " ".join(current) == " ".join(words)
+
+
+def build_chain(
+    client: SiteClient,
+    attempt: dict,
+    words: list[str],
+    log,
+    stop_at: float | None = None,
+    group: int = 1,
+) -> tuple[dict, float | None]:
     """Make the attempt's active words equal `words` with as few turns as possible.
 
     `stop_at` is the live round's finish line. Crossing it holds the chain: the words already
     accepted stay, and the rest are not sent.
+
+    `group` is how many words go in one append. Word-by-word play uses 1. A sentence round
+    sends the phrase as one append.
     """
     current = active_words(attempt)
     last_p: float | None = None
@@ -139,7 +154,7 @@ def build_chain(client: SiteClient, attempt: dict, words: list[str], log, stop_a
         last_p = float(turns[-1].get("probability") or 0)
         log(f"    chain already crossed the finish line at {last_p:.2f}; holding")
         return attempt, last_p
-    if current == words:
+    if _chain_matches(current, words):
         turns = attempt.get("turns") or []
         return attempt, float(turns[-1]["probability"]) if turns else None
     keep = 0
@@ -161,23 +176,28 @@ def build_chain(client: SiteClient, attempt: dict, words: list[str], log, stop_a
         log("    cleared chain")
     if current:
         log(f"    keeping {len(current)} words already on the chain")
-    for word in words[len(current) :]:
+    rest = words[len(current) :]
+    step = max(1, group)
+    for start in range(0, len(rest), step):
+        chunk = rest[start : start + step]
+        text = chunk[0] if step == 1 else " ".join(chunk)
         try:
-            attempt, turn = turn_with_retry(client, attempt, {"kind": "append", "text": word}, log)
+            attempt, turn = turn_with_retry(client, attempt, {"kind": "append", "text": text}, log)
         except SiteError as error:
             if rejected.is_word_rejection(str(error)):
-                raise WordRejected(word, str(error)) from error
+                raise WordRejected(text, str(error)) from error
             if stop_at is not None and _round_closed(error):
                 log(f"    round closed the chain ({error.message}); holding")
                 return attempt, last_p
             raise
         last_p = float(turn["probability"])
-        log(f"    + {word:<16} {last_p:.2f}")
+        shown = text if step == 1 else f"{text} ({len(chunk)}w)"
+        log(f"    + {shown:<16} {last_p:.2f}")
         if crossed_finish(turn, stop_at):
             placed = len(active_words(attempt))
             log(f"    finish line crossed at {last_p:.2f} after {placed} word{'s' if placed != 1 else ''}; holding")
             return attempt, last_p
-    if active_words(attempt) != words:
+    if not _chain_matches(active_words(attempt), words):
         raise PublishError(f"chain mismatch: {' '.join(active_words(attempt))!r}")
     return attempt, last_p
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from .config import JEV_MODEL
 from .modes import HIGH_SCORES
@@ -101,7 +102,13 @@ def question_from_round(state: dict) -> dict:
         "yes_threshold": q.get("yesThreshold"),
         "model_version": q.get("modelVersion") or "",
         "jev_request": request,
-        "raw": {**q, "live": True, "playMode": state.get("playMode") or "word_chain", "roundId": state.get("id")},
+        "raw": {
+            **q,
+            "live": True,
+            "playMode": state.get("playMode") or "word_chain",
+            "roundId": state.get("id"),
+            "sentences": bool(state.get("sentences")),
+        },
     }
 
 
@@ -126,7 +133,10 @@ def opening_word(question: dict | None = None) -> str:
 
 
 class LiveSession:
-    """Play `/play?round=live`. Fast: first word immediately, then every score gain. Slow: only when not 1st."""
+    """Play `/round`. Fast: first word immediately, then every score gain. Slow: only when not 1st.
+
+    A round with `sentences` is one phrase of up to 25 words, sent in a single append.
+    """
 
     def __init__(self, pace: str = "slow", chain: str = "casual", post: bool = True):
         self.pace = "fast" if pace == "fast" else "slow"
@@ -139,6 +149,7 @@ class LiveSession:
         self.we_lead = False
         self.threshold = 0.5
         self.play_mode = "strict_chain" if self.chain == "strict" else "word_chain"
+        self.sentences = False
         self.round_id = ""
         self.status = ""
         self.posted = ""
@@ -155,7 +166,12 @@ class LiveSession:
         self.state = state
         self.me = me
         self.status = state.get("status") or ""
-        self.play_mode = "strict_chain" if self.chain == "strict" else "word_chain"
+        self.sentences = bool(state.get("sentences"))
+        site_mode = state.get("playMode") or ""
+        if self.sentences and site_mode in ("strict_chain", "word_chain", "golf", "emoji"):
+            self.play_mode = site_mode
+        else:
+            self.play_mode = "strict_chain" if self.chain == "strict" else "word_chain"
         self.threshold = finish_threshold(state)
         incoming = state.get("question") or {}
         if incoming:
@@ -199,6 +215,29 @@ class LiveSession:
         self.posted = phrase
         self.posted_p = p
         self.posted_units = units
+
+
+SENTENCE_WORDS = 25
+
+
+def _word_char(ch: str) -> bool:
+    return unicodedata.category(ch)[:1] in "LMN"
+
+
+def sentence_words(phrase: str) -> list[str]:
+    """Words a sentence round will keep: NFC, edge punctuation stripped, blanks dropped."""
+    text = unicodedata.normalize("NFC", phrase)
+    words: list[str] = []
+    for raw in text.split():
+        chars = list(raw)
+        while chars and not _word_char(chars[0]):
+            chars.pop(0)
+        while chars and not (_word_char(chars[-1]) or chars[-1] in "+#"):
+            chars.pop()
+        word = "".join(chars)
+        if word:
+            words.append(word)
+    return words
 
 
 def chain_token(play_mode: str, phrase: str) -> str | None:
@@ -246,24 +285,35 @@ def saved_line(question: dict) -> dict | None:
 def post_phrase(client, question: dict, play_mode: str, phrase: str, log, stop_at: float | None = None) -> float:
     """Build the phrase on the live round's play mode and return the site probability.
 
-    `stop_at` is the round's finish line. The first word that crosses it is kept, and the rest
-    of the phrase is not sent.
+    `stop_at` is the round's finish line. Word-by-word play keeps the first word that crosses
+    it and does not send the rest. A sentence round sends the whole phrase in one append, up
+    to 25 words, and holds once that turn crosses.
     """
     from .modes import GOLF
     from .publish import build_chain, golf_try
     from .rules import check_phrase
     from .rules.banned import BannedPhrase, hit as hit_ban
+    from .rules import RuleError
 
     live = {"revisionId": question["revision_id"], "slug": question["slug"]}
     if span := hit_ban(phrase):
         raise BannedPhrase(phrase, span)
     if play_mode == GOLF:
         return golf_try(client, live, phrase, log)
-    token = chain_token(play_mode, phrase)
-    if token:
-        words = [token]
+    choices = list((question.get("raw") or {}).get("choices") or [])
+    sentences = bool((question.get("raw") or {}).get("sentences"))
+    if sentences:
+        words = sentence_words(phrase)
+        words = words[:SENTENCE_WORDS]
+        if play_mode == "strict_chain":
+            words = check_phrase(" ".join(words), choices, max_words=SENTENCE_WORDS).split()
+        elif not words:
+            raise RuleError("empty phrase")
+        group = SENTENCE_WORDS
     else:
-        words = check_phrase(phrase, list((question.get("raw") or {}).get("choices") or []), max_words=400).split()
+        token = chain_token(play_mode, phrase)
+        words = [token] if token else check_phrase(phrase, choices, max_words=400).split()
+        group = 1
     attempt = client.attempt(question["revision_id"], play_mode) or client.start(question["revision_id"], play_mode)
-    attempt, scored = build_chain(client, attempt, words, log, stop_at=stop_at)
+    attempt, scored = build_chain(client, attempt, words, log, stop_at=stop_at, group=group)
     return float(scored or 0.0)

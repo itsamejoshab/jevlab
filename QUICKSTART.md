@@ -16,6 +16,8 @@ cd jevlab
 uv sync                     # creates .venv and installs jevlab plus its dependencies
 # optional: local CPU embeddings instead of OpenRouter ones
 # uv sync --extra embed
+# optional: local Laya classifier (weights are a separate download; see section 7)
+# uv sync --extra laya
 ```
 
 With pip instead: `python -m venv .venv && . .venv/bin/activate && pip install -e .`
@@ -93,6 +95,26 @@ The site has two mirror games, Trick Kev and Trick Laya, each with its own model
 or `--edition laya` to any command, or set `JEV_EDITION` in `.env`. Each mirror keeps its data in `data/kev/` or
 `data/laya/` and reads (never writes) Jev's data to borrow estimates.
 
+Kev's classifier is `jaredpalmer/kev-4b` on OpenRouter, so the same API key scores it:
+
+```bash
+uv run jevlab --edition kev snapshot
+uv run jevlab --edition kev vault import-jev --queue
+uv run jevlab --edition kev search --q is-cereal-a-soup
+```
+
+Laya (`convaiinnovations/laya`) is not on OpenRouter. The classifier runs locally from a Hugging Face checkpoint.
+The weights go to `~/.cache/jevlab/huggingface`, outside the git repo. Install the runtime, then download them once:
+
+```bash
+uv sync --extra laya
+uv run jevlab install-laya
+```
+
+`JEV_LAYA_CACHE` moves that directory. `JEV_LAYA_DEVICE` is `cpu`, `cuda`, or `mps` (empty lets PyTorch pick).
+Search still uses OpenRouter for the phrase generators, the planner, and embeddings, so the API key stays
+required. Only the classifier is local, and it does not download on its own if the weights are missing.
+
 ```bash
 uv run jevlab --edition laya snapshot
 uv run jevlab --edition laya vault import-jev --queue   # copy Jev lines in as estimates
@@ -117,11 +139,14 @@ uv run ruff check
 | `data/models/` | Trained cross-question predictor (`jevlab train-global`) |
 | `data/kev/` | The same layout for the Kev edition |
 | `data/laya/` | The same layout for the Laya edition |
+| `~/.cache/jevlab/huggingface` | Laya weights from `jevlab install-laya` (outside the repo; `JEV_LAYA_CACHE`) |
 
-`data/`, `.env`, and `session.json` are gitignored. Move the data elsewhere with `JEVLAB_DATA=/path`.
+`data/`, `.env`, and `session.json` are gitignored. Move the data elsewhere with `JEVLAB_DATA=/path`. The Laya
+weights never land in the repo; they stay in the cache above.
 
 ## Next
 
 - [docs/commands.md](docs/commands.md): every command and flag
-- [docs/architecture.md](docs/architecture.md): how the search engine works
+- [docs/how-it-works.md](docs/how-it-works.md): short technical summary of the search
+- [docs/architecture.md](docs/architecture.md): full engine write-up, with the math
 - [docs/configuration.md](docs/configuration.md): models, costs, and tuning

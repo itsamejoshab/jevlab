@@ -165,13 +165,16 @@ class Backend:
     def __init__(self, name: str, base: str, key: str, concurrency: int):
         self.name = name
         self.base = base
+        self.local = name == "huggingface"
         self.limiter = AdaptiveLimiter(concurrency, ORACLE_MAX_CONCURRENCY)
-        self.http = httpx.AsyncClient(
-            base_url=base,
-            timeout=ORACLE_TIMEOUT,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            limits=httpx.Limits(max_connections=ORACLE_MAX_CONCURRENCY + 8),
-        )
+        self.http = None
+        if not self.local:
+            self.http = httpx.AsyncClient(
+                base_url=base,
+                timeout=ORACLE_TIMEOUT,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                limits=httpx.Limits(max_connections=ORACLE_MAX_CONCURRENCY + 8),
+            )
         self.calls = 0
         self.errors = 0
         self.streak = 0  # consecutive failures
@@ -210,8 +213,15 @@ class Backend:
 
 
 def backend_specs() -> list[tuple[str, str, str]]:
+    """(name, base, key). ``huggingface`` is the local Laya checkpoint and needs no key."""
     known = {"typesafe": (TYPESAFE_BASE, TYPESAFE_KEY), "openrouter": (OPENROUTER_BASE, OPENROUTER_KEY)}
-    return [(name, *known[name]) for name in ORACLE_BACKENDS if name in known and known[name][1]]
+    specs = []
+    for name in ORACLE_BACKENDS:
+        if name == "huggingface":
+            specs.append(("huggingface", "huggingface", ""))
+        elif name in known and known[name][1]:
+            specs.append((name, *known[name]))
+    return specs
 
 
 class BackendPool:
@@ -221,7 +231,10 @@ class BackendPool:
     def __init__(self, concurrency: int):
         specs = backend_specs()
         if not specs:
-            raise OracleError("no Jev backend key: set TYPESAFE_API_KEY and/or OPENROUTER_API_KEY in .env")
+            raise OracleError(
+                "no Jev backend key: set TYPESAFE_API_KEY and/or OPENROUTER_API_KEY in .env. "
+                "Laya uses the local Hugging Face backend: `uv sync --extra laya` then `jevlab install-laya`."
+            )
         self.backends = [Backend(name, base, key, concurrency) for name, base, key in specs]
         self.cond = asyncio.Condition()
         self.turn = 0
@@ -281,13 +294,14 @@ class BackendPool:
 
     async def close(self) -> None:
         for b in self.backends:
-            await b.http.aclose()
+            if b.http is not None:
+                await b.http.aclose()
 
 
 class Oracle:
     """Scores phrases. With `target` (a choice question's answer option) every value is P(target) instead of
-    Jev's top-option probability; samples are stored the same way either way. Calls are pooled over Typesafe's
-    own API and OpenRouter; the request body (and so the sample cache key) is the same for both."""
+    Jev's top-option probability; samples are stored the same way either way. Remote calls are pooled over
+    Typesafe and OpenRouter. Laya uses the local Hugging Face checkpoint instead, one forward per phrase."""
 
     def __init__(self, db: DB, question_request: dict, concurrency: int = ORACLE_CONCURRENCY, target: str = ""):
         self.db = db
@@ -349,6 +363,11 @@ class Oracle:
         started = time.monotonic()
         while attempt < RETRIES:
             backend = await self.limiter.acquire(avoid=last)
+            if backend.local:
+                await self.limiter.release(backend, False)
+                raise OracleError(
+                    "the huggingface backend is local; it does not share a pool with remote /systemone calls"
+                )
             ok = False
             throttled = False
             t0 = time.monotonic()
@@ -428,9 +447,91 @@ class Oracle:
             self._noticed[kind] = (at, quiet + 1)
         return self.last_error
 
+    def _answer_of(self, body: dict) -> dict:
+        answer = (body.get("answers") or {}).get("q") or next(iter((body.get("answers") or {}).values()), None)
+        if not isinstance(answer, dict):
+            raise OracleError(f"no answer in {str(body)[:200]}")
+        return answer
+
+    def _store(self, key: str, state: str, stored: float, answer: dict, model: str, qkey: str | None,
+               latency: float, copies: int, shown: float) -> None:
+        """Write `copies` identical samples. The in-memory cache keeps `shown` (P(target) when aiming)."""
+        now = time.time()
+        qk = qkey or self.qkey
+        payload = json.dumps(answer)
+        ms = int(latency * 1000)
+        self.db.executemany(
+            "INSERT INTO oracle_samples (request_hash, model, state, noul, answer, latency_ms, cost, at, qkey)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(key, model, state, stored, payload, ms, 0.0, now, qk)] * copies,
+        )
+        self._cached(key).extend([shown] * copies)
+
+    def _shown(self, answer: dict, stored: float) -> float:
+        if self.target:
+            return float((answer.get("probabilities") or {}).get(self.target) or 0.0)
+        return stored
+
+    async def _score_local(self, states: list[str], n: int, qkey: str | None) -> dict[str, Score]:
+        """Laya is deterministic, so one forward fills every sample a caller asked for."""
+        from .laya_local import LayaError, predict_many
+
+        unique = list(dict.fromkeys(states))
+        keys = {state: request_hash(build_request(self.question_request, state)) for state in unique}
+        pending = []
+        for state in unique:
+            have = self._cached(keys[state])
+            if len(have) >= n:
+                continue
+            if have:
+                self._duplicate(keys[state], n - len(have))
+            else:
+                pending.append(state)
+        if pending:
+            questions = build_request(self.question_request, "").get("questions") or {}
+            started = time.monotonic()
+            try:
+                bodies = await asyncio.to_thread(predict_many, pending, questions)
+            except LayaError as error:
+                raise OracleError(str(error)) from error
+            if len(bodies) != len(pending):
+                raise OracleError(f"Laya returned {len(bodies)} answers for {len(pending)} phrases")
+            latency = time.monotonic() - started
+            for state, body in zip(pending, bodies):
+                answer = self._answer_of(body)
+                stored = self.answer_value(answer)
+                self._store(
+                    keys[state], state, stored, answer, str(body.get("model") or ""), qkey, latency, n,
+                    self._shown(answer, stored),
+                )
+                self.calls += 1
+                self.latencies.append(latency)
+        return {state: Score(state, list(self._cached(keys[state]))) for state in unique}
+
+    def _duplicate(self, key: str, copies: int) -> None:
+        """Repeat a stored local reading so a later run sees the same sample count, without another forward."""
+        row = self.db.one(
+            "SELECT model, state, noul, answer, latency_ms, qkey FROM oracle_samples "
+            "WHERE request_hash = ? ORDER BY rowid DESC LIMIT 1",
+            (key,),
+        )
+        if row is None or copies <= 0:
+            return
+        now = time.time()
+        self.db.executemany(
+            "INSERT INTO oracle_samples (request_hash, model, state, noul, answer, latency_ms, cost, at, qkey)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(key, row["model"], row["state"], row["noul"], row["answer"], row["latency_ms"], 0.0, now, row["qkey"])]
+            * copies,
+        )
+        shown = self._cached(key)[-1]
+        self._cached(key).extend([shown] * copies)
+
     async def score(self, states: list[str], n: int = 1, qkey: str | None = None) -> dict[str, Score]:
         """Top every state up to n samples. Duplicate states are scored once. `qkey` files the samples under
         another key, so measurement lines stay out of the question's history."""
+        if self.limiter.backends and all(backend.local for backend in self.limiter.backends):
+            return await self._score_local(states, n, qkey)
         unique = list(dict.fromkeys(states))
         keys = {s: request_hash(build_request(self.question_request, s)) for s in unique}
         tasks = []

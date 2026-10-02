@@ -25,14 +25,20 @@ rest are tools the search uses to find phrases that score well on it.
 ### Oracle backends
 
 The oracle sends the site's own request body (each question's `jevRequest`, with the phrase as `state`) to Jev's
-`/systemone` endpoint. It can pool two backends:
+`/systemone` endpoint. It can pool two remote backends:
 
 - `openrouter` uses `OPENROUTER_API_KEY`.
 - `typesafe` uses `TYPESAFE_API_KEY` (Typesafe serves the same Jev model).
 
-`JEV_ORACLE_BACKENDS` chooses which to use (default `typesafe,openrouter` on Jev, `openrouter` on Kev and Laya). Backends
-without a key are skipped, so OpenRouter alone is enough. Calls go to the healthy backend with the most free slots,
-and a backend that fails three times in a row rests for a while.
+`huggingface` is the local Laya checkpoint. It needs no API key. Install it with `uv sync --extra laya` and
+`jevlab install-laya` (see [QUICKSTART.md](../QUICKSTART.md)). Weights go to `JEV_LAYA_CACHE` (default
+`~/.cache/jevlab/huggingface`), outside the repo. `JEV_LAYA_DEVICE` is `cpu`, `cuda`, or `mps`.
+
+`JEV_ORACLE_BACKENDS` chooses which to use (default `typesafe,openrouter` on Jev, `openrouter` on Kev,
+`huggingface` on Laya). Remote backends without a key are skipped, so OpenRouter alone is enough for Jev and Kev.
+Calls go to the healthy backend with the most free slots, and a backend that fails three times in a row rests for
+a while. Laya scores one phrase at a time in-process; a missing checkpoint fails with the install command rather
+than downloading during a search.
 
 `JEV_ORACLE_CONCURRENCY` is the starting number of parallel calls, and AIMD adjusts it up to
 `JEV_ORACLE_MAX_CONCURRENCY`. Lower both if you hit rate limits.
@@ -95,17 +101,18 @@ For a cheap first run, use `--budget 2000`, or `--no-llm` for a purely mechanica
 
 ## Editions: Jev, Kev, and Laya
 
-`JEV_EDITION=kev` or `JEV_EDITION=laya` (or `--edition kev` / `--edition laya`) switches to a mirror game. Both
-mirrors change these defaults the same way; only the model and data directory differ.
+`JEV_EDITION=kev` or `JEV_EDITION=laya` (or `--edition kev` / `--edition laya`) switches to a mirror game. Kev
+keeps the remote oracle and lowers concurrency. Laya scores with the local Hugging Face model.
 
 | Setting | Jev | Kev | Laya |
 | --- | --- | --- | --- |
 | Data directory | `data/` | `data/kev/` | `data/laya/` |
 | `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `convaiinnovations/laya` |
-| `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `openrouter` |
-| `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 4 / 8 |
-| `JEV_ORACLE_TIMEOUT` | 20 s | 60 s | 60 s |
+| `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `huggingface` |
+| `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 1 / 1 |
+| `JEV_ORACLE_TIMEOUT` | 20 s | 60 s | unused (local) |
 | `JEV_TRIAGE_K` | 0 | 40 | 40 |
+| Weights | — | — | `~/.cache/jevlab/huggingface` |
 
 A mirror reads Jev's database and vault read-only (`JEV_SOURCE_MODEL` names the model Jev's samples were recorded
 under), so it can start from lines that already work on Jev. `jevlab --edition laya vault import-jev` copies those

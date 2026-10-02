@@ -9,13 +9,14 @@ Running `jevlab` with no command opens the TUI home screen.
 
 ```text
 usage: jevlab [-h] [--edition {jev,kev,laya}]
-              {tui,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global} ...
+              {tui,install-laya,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global} ...
 
 Offline Jev search lab
 
 positional arguments:
-  {tui,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global}
+  {tui,install-laya,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global}
     tui                 home screen: choose Search or Publish (default when no command is given)
+    install-laya        download Laya weights from Hugging Face into ~/.cache/jevlab (outside the repo)
     snapshot            pull questions, boards, word impacts, and our attempts into data/jev.db
     calibrate           replay site-scored phrases through the oracle and report parity
     lab                 interactive TUI search for one yes/no or choice question (strict highest or shortest
@@ -39,6 +40,20 @@ options:
   --edition {jev,kev,laya}
                         game edition: jev (data/), kev (data/kev/), or laya (data/laya/); read before anything
                         else loads
+```
+
+## Laya weights
+
+### `jevlab install-laya`
+
+Downloads `convaiinnovations/laya` into `~/.cache/jevlab/huggingface` (override with `JEV_LAYA_CACHE`). Needs
+`uv sync --extra laya` first. The download stays outside the git repo. Search does not fetch weights on its own.
+
+```text
+usage: jevlab install-laya [-h]
+
+options:
+  -h, --help  show this help message and exit
 ```
 
 ## Data: snapshot and calibration

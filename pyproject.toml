@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 embed = ["fastembed>=0.4"]
+laya = ["laya>=0.3.22"]
 
 [project.scripts]
 jevlab = "jevlab.cli:main"

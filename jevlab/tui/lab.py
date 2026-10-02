@@ -258,7 +258,7 @@ class LabScreen(Screen):
         if self.game_mode.shortest:
             table.border_title += "   BET k/n = shorter than leader, k rolls cleared the yes line (re-roll on publish)"
         if self.live_play:
-            self.query_one("#queue-box").border_title = "Live Mode: /play?round=live"
+            self.query_one("#queue-box").border_title = "Live Mode: /round"
             self.query_one("#queue-box").border_subtitle = "question · live leader · our best"
         else:
             self.query_one("#queue-box").border_title = f"{self.game_mode.label} queue (" + (
@@ -342,7 +342,7 @@ class LabScreen(Screen):
         from ..site.client import SiteClient
 
         self.log_line(
-            f"Live Mode ({self.live_pace}, {self.live_chain}): watching /play?round=live. "
+            f"Live Mode ({self.live_pace}, {self.live_chain}): watching /round. "
             + (
                 "Posting is off; the search still runs. p toggles it."
                 if not self.live_post
@@ -411,8 +411,9 @@ class LabScreen(Screen):
                 item.state = "running"
                 self.index = 0
                 where = "live" if live_now else "between rounds"
+                how = f"{session.play_mode} sentence" if session.sentences else session.play_mode
                 self.log_line(
-                    f"== {where} [{session.play_mode}] {question['title']}  "
+                    f"== {where} [{how}] {question['title']}  "
                     f"finish {session.threshold:.2f}  leader {item.leader}"
                 )
                 try:

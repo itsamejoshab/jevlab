@@ -12,12 +12,12 @@ SHORTEST_YES = "shortestYes"
 BOARDS = (HIGH_SCORES, SHORTEST_YES)
 STRICT = "strict_chain"
 GOLF = "golf"
-SEARCHABLE_KINDS = ("noul", "choice")
+SEARCHABLE_KINDS = ("noul", "choice", "score")
 
 
 def is_searchable(kind: str | None, ranked: bool = False) -> bool:
-    """Yes/no questions and unranked choice questions (scored on Jev's top option). Ranked choice questions
-    judge the answer's position rather than one option, so they stay out."""
+    """Yes/no questions, scale questions, and unranked choice questions (scored on Jev's top option).
+    Ranked choice questions judge the answer's position rather than one option, so they stay out."""
     return kind in SEARCHABLE_KINDS and not (kind == "choice" and ranked)
 
 

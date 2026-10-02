@@ -306,7 +306,9 @@ class Engine:
         if not question.get("jev_request"):
             raise ValueError(f"{slug!r} has no jevRequest")
         if not is_searchable(question["kind"], bool(question["raw"].get("ranked"))):
-            raise ValueError(f"{slug!r} is a {question['kind']} question; search handles yes/no and unranked choice")
+            raise ValueError(
+                f"{slug!r} is a {question['kind']} question; search handles yes/no, scales, and unranked choice"
+            )
         self.question = question
         self.live = bool(question["raw"].get("live"))
         self.choices = option_names(question["raw"].get("choices"))

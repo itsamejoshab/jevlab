@@ -27,6 +27,7 @@ from ..config import TIER_LEVEL
 from ..search.engine import LEVELS, Engine, Event
 from ..search.strategies import LLMGenerate
 from ..search.surrogate import Embedder
+from .copyselect import SelectableDataTable, SelectableRichLog
 
 LEVEL_COLORS = ["green", "cyan", "blue", "magenta", "red"]  # ladder levels L0-L4: label, timeline, calls bar
 LEVEL_STYLES = [f"bold {c}" for c in LEVEL_COLORS]
@@ -243,12 +244,12 @@ class LabScreen(Screen):
             with VerticalScroll(id="queue-box"):
                 yield Static(id="queue")
             with Vertical(id="middle"):
-                yield DataTable(id="table", cursor_type="row", zebra_stripes=True)
-                yield RichLog(id="feed", wrap=False, markup=False, max_lines=600)
+                yield SelectableDataTable(id="table", cursor_type="row", zebra_stripes=True)
+                yield SelectableRichLog(id="feed", wrap=False, markup=False, max_lines=600)
             with Vertical(id="side"):
-                yield RichLog(id="timeline", wrap=True, markup=False, max_lines=400)
+                yield SelectableRichLog(id="timeline", wrap=True, markup=False, max_lines=400)
                 yield Static(id="insight")
-        yield RichLog(id="lab-log", wrap=True, markup=False, max_lines=1000)
+        yield SelectableRichLog(id="lab-log", wrap=True, markup=False, max_lines=1000)
         yield Footer()
 
     def on_mount(self) -> None:

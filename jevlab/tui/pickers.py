@@ -19,6 +19,7 @@ from ..config import EDITION, EDITIONS, MIRROR
 from ..db import DB
 from ..modes import HOME_MODES, GameMode, from_name
 from ..search.engine import LEVELS
+from .copyselect import SelectableRichLog
 from .lab import LabScreen
 
 
@@ -135,7 +136,7 @@ class HomeScreen(Screen):
                 yield Button("Publish", id="publish", variant="success")
                 yield Button("Refresh snapshot", id="refresh")
                 yield Button("Quit", id="quit", variant="error")
-            yield RichLog(id="home-log", wrap=True, markup=False)
+            yield SelectableRichLog(id="home-log", wrap=True, markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -726,7 +727,7 @@ class PublishScreen(Screen):
                 yield Button("Import from Jev", id="import-jev")
             yield Button("Publish selected", id="publish", variant="success")
             yield Button("Back", id="back")
-        yield RichLog(id="pub-log", wrap=True, markup=False)
+        yield SelectableRichLog(id="pub-log", wrap=True, markup=False)
         yield Footer()
 
     def on_mount(self) -> None:

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from textual.app import App
+from textual.events import TextSelected
 
 from ..config import EDITION
 from ..modes import HIGHEST, GameMode, from_board
+from .copyselect import copy_selection_to_clipboard
 from .lab import LabScreen
 from .pickers import HomeScreen
 
@@ -22,6 +24,9 @@ class JevlabApp(App):
         self.lab_args = {"budget": budget, "use_llm": use_llm, "seed": seed, "escalate": escalate,
                          "max_level": max_level}
         self.has_home = lab_slug is None
+
+    def on_text_selected(self, _event: TextSelected) -> None:
+        copy_selection_to_clipboard(self)
 
     def on_mount(self) -> None:
         if self.lab_slug:

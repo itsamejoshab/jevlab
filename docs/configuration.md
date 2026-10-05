@@ -13,7 +13,7 @@ rest are tools the search uses to find phrases that score well on it.
 
 | Role | Variable | Default | What it does |
 | --- | --- | --- | --- |
-| Oracle | `JEV_MODEL` | `jev-latest` (Kev: `jaredpalmer/kev-4b`, Laya: `convaiinnovations/laya`) | The classifier the game scores with. Every candidate phrase is scored here. |
+| Oracle | `JEV_MODEL` | `jev-latest` (Kev: `jaredpalmer/kev-4b`, Laya: `convaiinnovations/laya`, Clef: `clef-flash`) | The classifier the game scores with. Every candidate phrase is scored here. |
 | Generators | `JEV_GEN_MODELS` | tiered table in `config.py` | Write candidate phrases. Each tier is one bandit arm. |
 | Rewrite model | `JEV_GEN_MODEL` | first table entry | Single-model jobs: rewrites and synonyms. |
 | Beam model | `JEV_GEN_MODEL_ALT` | `deepseek/deepseek-v4-flash` | High-volume next-word proposals. Should be fast and cheap. |
@@ -30,15 +30,20 @@ The oracle sends the site's own request body (each question's `jevRequest`, with
 - `openrouter` uses `OPENROUTER_API_KEY`.
 - `typesafe` uses `TYPESAFE_API_KEY` (Typesafe serves the same Jev model).
 
-`huggingface` is the local Laya checkpoint. It needs no API key. Install it with `uv sync --extra laya` and
-`jevlab install-laya` (see [QUICKSTART.md](../QUICKSTART.md)). Weights go to `JEV_LAYA_CACHE` (default
-`~/.cache/jevlab/huggingface`), outside the repo. `JEV_LAYA_DEVICE` is `cpu`, `cuda`, or `mps`.
+`huggingface` is a local checkpoint. It needs no API key. Laya installs with `uv sync --extra laya` and
+`jevlab install-laya`. Clef installs with `uv sync --extra clef` and `jevlab install-clef` (see
+[QUICKSTART.md](../QUICKSTART.md)). Weights go to `JEV_LAYA_CACHE` or `JEV_CLEF_CACHE` (both default to
+`~/.cache/jevlab/huggingface`), outside the repo. `JEV_LAYA_DEVICE` and `JEV_CLEF_DEVICE` are `cpu`, `cuda`, or
+`mps`. The site scores Clef with the 27B model. Local estimates use Clef-flash (`Cloudflare/clef-flash`, 9B),
+the smallest published checkpoint. `JEV_CLEF_QUANT=auto` keeps it in bf16 on a GPU with about 28GB, uses 4-bit
+on a GPU with about 8GB, and otherwise splits the weights across GPU, RAM, and disk. `none` forces the whole
+checkpoint onto one device. Clef does not call the Cloudflare Workers AI API.
 
 `JEV_ORACLE_BACKENDS` chooses which to use (default `typesafe,openrouter` on Jev, `openrouter` on Kev,
-`huggingface` on Laya). Remote backends without a key are skipped, so OpenRouter alone is enough for Jev and Kev.
-Calls go to the healthy backend with the most free slots, and a backend that fails three times in a row rests for
-a while. Laya scores one phrase at a time in-process; a missing checkpoint fails with the install command rather
-than downloading during a search.
+`huggingface` on Laya and Clef). Remote backends without a key are skipped, so OpenRouter alone is enough for Jev
+and Kev. Calls go to the healthy backend with the most free slots, and a backend that fails three times in a row
+rests for a while. Laya and Clef score one phrase at a time in-process; a missing checkpoint fails with the
+install command rather than downloading during a search.
 
 `JEV_ORACLE_CONCURRENCY` is the starting number of parallel calls, and AIMD adjusts it up to
 `JEV_ORACLE_MAX_CONCURRENCY`. Lower both if you hit rate limits.
@@ -99,23 +104,23 @@ Rough numbers from the author's runs, at OpenRouter prices on 2026-09-26:
 
 For a cheap first run, use `--budget 2000`, or `--no-llm` for a purely mechanical search with no generator calls.
 
-## Editions: Jev, Kev, and Laya
+## Editions: Jev, Kev, Laya, and Clef
 
-`JEV_EDITION=kev` or `JEV_EDITION=laya` (or `--edition kev` / `--edition laya`) switches to a mirror game. Kev
-keeps the remote oracle and lowers concurrency. Laya scores with the local Hugging Face model.
+`JEV_EDITION=kev`, `laya`, or `clef` (or `--edition`) switches to a mirror game. Kev keeps the remote oracle and
+lowers concurrency. Laya and Clef score with a local Hugging Face model.
 
-| Setting | Jev | Kev | Laya |
-| --- | --- | --- | --- |
-| Data directory | `data/` | `data/kev/` | `data/laya/` |
-| `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `convaiinnovations/laya` |
-| `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `huggingface` |
-| `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 1 / 1 |
-| `JEV_ORACLE_TIMEOUT` | 20 s | 60 s | unused (local) |
-| `JEV_TRIAGE_K` | 0 | 40 | 40 |
-| Weights | — | — | `~/.cache/jevlab/huggingface` |
+| Setting | Jev | Kev | Laya | Clef |
+| --- | --- | --- | --- | --- |
+| Data directory | `data/` | `data/kev/` | `data/laya/` | `data/clef/` |
+| `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `convaiinnovations/laya` | `clef-flash` |
+| `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `huggingface` | `huggingface` |
+| `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 1 / 1 | 1 / 1 |
+| `JEV_ORACLE_TIMEOUT` | 20 s | 60 s | unused (local) | unused (local) |
+| `JEV_TRIAGE_K` | 0 | 40 | 40 | 40 |
+| Weights | — | — | `~/.cache/jevlab/huggingface` | `~/.cache/jevlab/huggingface` |
 
 A mirror reads Jev's database and vault read-only (`JEV_SOURCE_MODEL` names the model Jev's samples were recorded
-under), so it can start from lines that already work on Jev. `jevlab --edition laya vault import-jev` copies those
+under), so it can start from lines that already work on Jev. `jevlab --edition clef vault import-jev` copies those
 lines in as estimates.
 
 ## Other settings
@@ -126,7 +131,7 @@ lines in as estimates.
 | `JEV_COOKIE` | empty | Session cookie header for signed-in calls (or use `session.json`) |
 | `JEVLAB_DATA` | `./data` | Database, vault, snapshots, models |
 | `JEV_LLM_TIMEOUT` | 60 | Seconds per generator or planner call |
-| `JEV_TRIAGE_K` | 0 (Kev and Laya 40) | Existing lines to score before generating |
+| `JEV_TRIAGE_K` | 0 (Kev, Laya, and Clef 40) | Existing lines to score before generating |
 | `JEV_LONG_TARGET` | 0 | Word target for the experimental long-chain regime (0 is off) |
 | `JEV_PLATEAU_LEADER_WORDS` | 40 | Leader length that triggers plateau mode |
 | `JEV_LONG_PLAN_CALLS` | 2 | Planner calls per question in the long-chain regime |

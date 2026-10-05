@@ -46,6 +46,19 @@ def cmd_install_laya(_args) -> int:
     return 0
 
 
+def cmd_install_clef(_args) -> int:
+    from .clef_local import ClefError, cache_dir, install
+
+    try:
+        path = install()
+    except ClefError as error:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"Clef weights ready at {path}")
+    print(f"cache {cache_dir()}")
+    return 0
+
+
 def cmd_snapshot(args) -> int:
     from .db import DB
     from .site.snapshot import take_snapshot
@@ -412,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="jevlab", description="Offline Jev search lab")
     parser.add_argument("--edition", choices=EDITIONS, default=EDITION,
-                        help="game edition: jev (data/), kev (data/kev/), or laya (data/laya/); "
+                        help="game edition: jev (data/), kev (data/kev/), laya (data/laya/), or clef (data/clef/); "
                              "read before anything else loads")
     sub = parser.add_subparsers(dest="command")
 
@@ -424,6 +437,12 @@ def main(argv: list[str] | None = None) -> int:
         help="download Laya weights from Hugging Face into ~/.cache/jevlab (outside the repo)",
     )
     p.set_defaults(func=cmd_install_laya)
+
+    p = sub.add_parser(
+        "install-clef",
+        help="download Clef weights from Hugging Face into ~/.cache/jevlab (outside the repo)",
+    )
+    p.set_defaults(func=cmd_install_clef)
 
     p = sub.add_parser("snapshot", help="pull questions, boards, word impacts, and our attempts into data/jev.db")
     p.add_argument("--q", nargs="*", help="limit to these slugs or play URLs")
@@ -460,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "search":
             p.add_argument("--transfer-k", type=int, default=None, metavar="K",
                            help="score K existing lines (Jev's best, estimated vault lines) before generating; "
-                                "default JEV_TRIAGE_K (40 on Kev and Laya, 0 on Jev)")
+                                "default JEV_TRIAGE_K (40 on Kev, Laya, and Clef, 0 on Jev)")
             p.add_argument("--force", help="run only this strategy")
             p.add_argument("--plateau", type=int, default=0, help="flat rounds per level (0 = run to budget)")
         p.set_defaults(func=func)
@@ -484,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_score)
 
     p = sub.add_parser("vault", help="list saved winners, queue them for publishing, or drop them; under "
-                                     "--edition kev or laya, import-jev copies Jev's lines in as estimates")
+                                     "--edition kev, laya, or clef, import-jev copies Jev's lines in as estimates")
     p.add_argument("action", nargs="?", default="list", choices=["list", "queue", "unqueue", "drop", "import-jev"])
     p.add_argument("--queue", action="store_true",
                    help="import-jev: queue the best estimated line on each board where Jev beats the leader")

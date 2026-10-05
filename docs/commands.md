@@ -1,6 +1,6 @@
 # Command reference
 
-Generated from `jevlab <command> --help`. Every command also accepts `--edition jev|kev|laya` anywhere on the line.
+Generated from `jevlab <command> --help`. Every command also accepts `--edition jev|kev|laya|clef` anywhere on the line.
 Run through uv as `uv run jevlab ...`, or plain `jevlab ...` inside the activated venv.
 
 Running `jevlab` with no command opens the TUI home screen.
@@ -8,15 +8,16 @@ Running `jevlab` with no command opens the TUI home screen.
 ## Global
 
 ```text
-usage: jevlab [-h] [--edition {jev,kev,laya}]
-              {tui,install-laya,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global} ...
+usage: jevlab [-h] [--edition {jev,kev,laya,clef}]
+              {tui,install-laya,install-clef,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global} ...
 
 Offline Jev search lab
 
 positional arguments:
-  {tui,install-laya,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global}
+  {tui,install-laya,install-clef,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global}
     tui                 home screen: choose Search or Publish (default when no command is given)
     install-laya        download Laya weights from Hugging Face into ~/.cache/jevlab (outside the repo)
+    install-clef        download Clef weights from Hugging Face into ~/.cache/jevlab (outside the repo)
     snapshot            pull questions, boards, word impacts, and our attempts into data/jev.db
     calibrate           replay site-scored phrases through the oracle and report parity
     lab                 interactive TUI search for one yes/no or choice question (strict highest or shortest
@@ -25,8 +26,8 @@ positional arguments:
     triage              score the most promising existing lines (Jev's vault and history, estimated vault
                         lines) with this edition's oracle, without searching
     score               score phrases with the oracle
-    vault               list saved winners, queue them for publishing, or drop them; under --edition kev or
-                        laya, import-jev copies Jev's lines in as estimates
+    vault               list saved winners, queue them for publishing, or drop them; under --edition kev,
+                        laya, or clef, import-jev copies Jev's lines in as estimates
     publish             submit queued vault entries to the live site (separate batch loop)
     crosspost           queue Strict vault lines that beat a Golf leader into the golf vault
     errors              failed network calls by service and host (OpenRouter vs the Jev site)
@@ -37,9 +38,9 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --edition {jev,kev,laya}
-                        game edition: jev (data/), kev (data/kev/), or laya (data/laya/); read before anything
-                        else loads
+  --edition {jev,kev,laya,clef}
+                        game edition: jev (data/), kev (data/kev/), laya (data/laya/), or clef (data/clef/);
+                        read before anything else loads
 ```
 
 ## Laya weights
@@ -51,6 +52,23 @@ Downloads `convaiinnovations/laya` into `~/.cache/jevlab/huggingface` (override 
 
 ```text
 usage: jevlab install-laya [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## Clef weights
+
+### `jevlab install-clef`
+
+Downloads `Cloudflare/clef-flash` (9B) into `~/.cache/jevlab/huggingface` (override with `JEV_CLEF_CACHE`). Needs
+`uv sync --extra clef` first. The download stays outside the git repo. Search does not fetch weights on its own,
+and scoring does not call the Cloudflare Workers AI API. The site itself scores with the 27B model; local
+estimates use flash. `JEV_CLEF_QUANT=auto` uses bf16 on a GPU with about 28GB, 4-bit on a GPU with about 8GB,
+and otherwise splits the weights across GPU, RAM, and disk.
+
+```text
+usage: jevlab install-clef [-h]
 
 options:
   -h, --help  show this help message and exit
@@ -137,7 +155,7 @@ options:
   --all-targets         choice questions: run once per answer, one after another
   --win-after N         win mode: once a line beats the leader, stop after N more oracle calls
   --transfer-k K        score K existing lines (Jev's best, estimated vault lines) before generating;
-                        default JEV_TRIAGE_K (40 on Kev and Laya, 0 on Jev)
+                        default JEV_TRIAGE_K (40 on Kev, Laya, and Clef, 0 on Jev)
   --force FORCE         run only this strategy
   --plateau PLATEAU     flat rounds per level (0 = run to budget)
 ```

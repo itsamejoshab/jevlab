@@ -213,7 +213,7 @@ class Backend:
 
 
 def backend_specs() -> list[tuple[str, str, str]]:
-    """(name, base, key). ``huggingface`` is the local Laya checkpoint and needs no key."""
+    """(name, base, key). ``huggingface`` is a local checkpoint (Laya or Clef) and needs no key."""
     known = {"typesafe": (TYPESAFE_BASE, TYPESAFE_KEY), "openrouter": (OPENROUTER_BASE, OPENROUTER_KEY)}
     specs = []
     for name in ORACLE_BACKENDS:
@@ -233,7 +233,8 @@ class BackendPool:
         if not specs:
             raise OracleError(
                 "no Jev backend key: set TYPESAFE_API_KEY and/or OPENROUTER_API_KEY in .env. "
-                "Laya uses the local Hugging Face backend: `uv sync --extra laya` then `jevlab install-laya`."
+                "Laya and Clef score locally: `uv sync --extra laya` then `jevlab install-laya`, "
+                "or `uv sync --extra clef` then `jevlab install-clef`."
             )
         self.backends = [Backend(name, base, key, concurrency) for name, base, key in specs]
         self.cond = asyncio.Condition()
@@ -301,7 +302,7 @@ class BackendPool:
 class Oracle:
     """Scores phrases. With `target` (a choice question's answer option) every value is P(target) instead of
     Jev's top-option probability; samples are stored the same way either way. Remote calls are pooled over
-    Typesafe and OpenRouter. Laya uses the local Hugging Face checkpoint instead, one forward per phrase."""
+    Typesafe and OpenRouter. Laya and Clef use a local Hugging Face checkpoint instead, one forward per phrase."""
 
     def __init__(self, db: DB, question_request: dict, concurrency: int = ORACLE_CONCURRENCY, target: str = ""):
         self.db = db
@@ -473,8 +474,15 @@ class Oracle:
         return stored
 
     async def _score_local(self, states: list[str], n: int, qkey: str | None) -> dict[str, Score]:
-        """Laya is deterministic, so one forward fills every sample a caller asked for."""
-        from .laya_local import LayaError, predict_many
+        """A local checkpoint is deterministic, so one forward fills every sample a caller asked for."""
+        from .config import EDITION
+
+        if EDITION == "clef":
+            from .clef_local import ClefError as LocalError, predict_many
+            who = "Clef"
+        else:
+            from .laya_local import LayaError as LocalError, predict_many
+            who = "Laya"
 
         unique = list(dict.fromkeys(states))
         keys = {state: request_hash(build_request(self.question_request, state)) for state in unique}
@@ -492,10 +500,10 @@ class Oracle:
             started = time.monotonic()
             try:
                 bodies = await asyncio.to_thread(predict_many, pending, questions)
-            except LayaError as error:
+            except LocalError as error:
                 raise OracleError(str(error)) from error
             if len(bodies) != len(pending):
-                raise OracleError(f"Laya returned {len(bodies)} answers for {len(pending)} phrases")
+                raise OracleError(f"{who} returned {len(bodies)} answers for {len(pending)} phrases")
             latency = time.monotonic() - started
             for state, body in zip(pending, bodies):
                 answer = self._answer_of(body)

@@ -27,8 +27,9 @@ def test_referer_follows_edition(tmp_path):
     assert clef.endswith("/clef/")
 
 
-def test_import_jev_refuses_the_jev_edition():
-    with pytest.raises(RuntimeError, match="Kev, Laya, or Clef"):
+def test_import_jev_refuses_the_jev_edition(monkeypatch):
+    monkeypatch.setattr("jevlab.transfer.EDITION", "jev")
+    with pytest.raises(RuntimeError, match="already jev"):
         import_from_jev(None)
 
 
@@ -36,8 +37,15 @@ def test_laya_edition_defaults(tmp_path):
     env = os.environ.copy()
     env["JEV_EDITION"] = "laya"
     env["JEVLAB_DATA"] = str(tmp_path)
-    for key in ("JEV_MODEL", "JEV_ORACLE_BACKENDS", "JEV_ORACLE_CONCURRENCY", "JEV_ORACLE_MAX_CONCURRENCY",
-                "JEV_ORACLE_TIMEOUT", "JEV_TRIAGE_K", "JEV_LAYA_CACHE"):
+    for key in (
+        "JEV_MODEL",
+        "JEV_ORACLE_BACKENDS",
+        "JEV_ORACLE_CONCURRENCY",
+        "JEV_ORACLE_MAX_CONCURRENCY",
+        "JEV_ORACLE_TIMEOUT",
+        "JEV_TRIAGE_K",
+        "JEV_LAYA_CACHE",
+    ):
         env.pop(key, None)
     script = (
         "from pathlib import Path\n"
@@ -59,9 +67,18 @@ def test_clef_edition_defaults(tmp_path):
     env = os.environ.copy()
     env["JEV_EDITION"] = "clef"
     env["JEVLAB_DATA"] = str(tmp_path)
-    for key in ("JEV_MODEL", "JEV_ORACLE_BACKENDS", "JEV_ORACLE_CONCURRENCY", "JEV_ORACLE_MAX_CONCURRENCY",
-                "JEV_ORACLE_TIMEOUT", "JEV_TRIAGE_K", "JEV_CLEF_CACHE", "JEV_CLEF_REPO", "JEV_CLEF_QUANT",
-                "JEV_CLEF_DEVICE"):
+    for key in (
+        "JEV_MODEL",
+        "JEV_ORACLE_BACKENDS",
+        "JEV_ORACLE_CONCURRENCY",
+        "JEV_ORACLE_MAX_CONCURRENCY",
+        "JEV_ORACLE_TIMEOUT",
+        "JEV_TRIAGE_K",
+        "JEV_CLEF_CACHE",
+        "JEV_CLEF_REPO",
+        "JEV_CLEF_QUANT",
+        "JEV_CLEF_DEVICE",
+    ):
         env.pop(key, None)
     script = (
         "from pathlib import Path\n"

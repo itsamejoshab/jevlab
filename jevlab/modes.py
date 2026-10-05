@@ -60,14 +60,16 @@ GOLF_HIGHEST = GameMode("golf-highest", "Golf Highest", play_mode=GOLF)
 GOLF_SHORTEST = GameMode("golf-shortest", "Golf Shortest yes", play_mode=GOLF, board=SHORTEST_YES)
 LIVE = GameMode("live", "Live Mode")
 PUBLISH_MODES = GAME_MODES + (GOLF_HIGHEST, GOLF_SHORTEST)
-HOME_MODES = PUBLISH_MODES + (LIVE,)
+MODES = PUBLISH_MODES + (LIVE,)
+# Golf is a Strict follow-up, not a mode you enter from home.
+HOME_MODES = GAME_MODES + (LIVE,)
 
 
 def from_name(name: str) -> GameMode:
-    for mode in HOME_MODES:
+    for mode in MODES:
         if name in (mode.name, mode.board):
             return mode
-    raise ValueError(f"unknown game mode {name!r}; pick one of {', '.join(m.name for m in HOME_MODES)}")
+    raise ValueError(f"unknown game mode {name!r}; pick one of {', '.join(m.name for m in MODES)}")
 
 
 def from_board(board: str | None, play_mode: str | None = STRICT) -> GameMode:

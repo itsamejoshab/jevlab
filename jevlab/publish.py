@@ -36,7 +36,6 @@ GOLF_BOARD_LAG = 5.0
 MAX_FALLBACKS = 5
 # A line estimated from the other edition gets one oracle sample; it is skipped only when that sample plus this
 # much still loses, since one noisy roll should not kill a line the site may still score higher.
-ESTIMATE_MARGIN = 0.05
 # A re-check this close to 1 - vault score was stored under the opposite goal. Near 0.5 the two readings overlap.
 GOAL_FLIP = 0.01
 
@@ -489,12 +488,8 @@ def publish_entry(
     if not objective.beats(aim, units, leader):
         raise PublishError(f"no longer beats the live leader ({lead})")
     estimated = entry.get("estimated_from")
-    if estimated and verify:
-        fresh = asyncio.run(oracle_check(db, stored, phrase, n=1, target=target))
-        log(f"  estimated from {estimated}: one-sample check {fresh:.3f} ({estimated} said {estimate:.3f})")
-        fresh = settle_goal(db, stored, live, estimate, fresh, dry_run, log)
-        if not objective.beats(min(fresh + ESTIMATE_MARGIN, 1.0), units, leader):
-            raise PublishError(f"check {fresh:.3f} is well short of {lead}")
+    if estimated:
+        log(f"  estimated from {estimated}: posting the borrowed score without an oracle check")
     asked = max(0, rerolls)
     ceiling = asked
     if gamble:
@@ -505,9 +500,7 @@ def publish_entry(
         )
     elif entry.get("long_shot"):
         ceiling = max(asked, long_rerolls)
-        log(
-            f"  long shot: lower bound {entry['p_lcb']:.3f} does not beat {lead}; skipping the oracle re-check"
-        )
+        log(f"  long shot: lower bound {entry['p_lcb']:.3f} does not beat {lead}; skipping the oracle re-check")
     elif verify and not estimated:
         fresh = asyncio.run(oracle_check(db, stored, phrase, target=target))
         log(f"  oracle re-check {fresh:.3f} (vault said {estimate:.3f})")
@@ -567,21 +560,15 @@ def publish_entry(
     if game_mode.golf:
         time.sleep(GOLF_BOARD_LAG)
     refresh_board(db, client, live, mode)
+    detail = f"rerolls={tries}" if won else f"server {best:.2f} after {tries} re-rolls did not beat {lead}"
+    if estimated:
+        vault.apply_site_score(slug, mode, phrase, best, "published" if won else "failed", board, target, detail)
+    elif won:
+        vault.set_status(slug, mode, phrase, "published", board, target=target, server_p=best, detail=detail)
+    else:
+        vault.set_status(slug, mode, phrase, "failed", board, target=target, server_p=best, detail=detail)
     if won:
-        vault.set_status(
-            slug, mode, phrase, "published", board, target=target, server_p=best, detail=f"rerolls={tries}"
-        )
         return f"won {site_round(best):.2f}/{units}{u}"
-    vault.set_status(
-        slug,
-        mode,
-        phrase,
-        "failed",
-        board,
-        target=target,
-        server_p=best,
-        detail=f"server {best:.2f} after {tries} re-rolls did not beat {lead}",
-    )
     return f"short {best:.2f}"
 
 
@@ -683,6 +670,7 @@ def publish(
     board: str | None = None,
     mode: str | None = None,
     crosspost: bool = True,
+    halt=None,
 ) -> int:
     """Publish queued entries (or exactly `entries`), from every board and play mode unless `board` or `mode`
     is given. With `crosspost`, every Strict line that lands (or already holds) its board is followed by the
@@ -717,7 +705,14 @@ def publish(
         crossposted: set[str] = set()
         fallbacks: dict[tuple[str, str, str, str], int] = {}
         wiped: dict[str, set[str]] = {}
+
+        def stopped() -> bool:
+            return bool(halt and halt())
+
         for entry in entries:
+            if stopped():
+                log("stopped")
+                break
             if entry["phrase"] in wiped.get(entry["slug"], ()):
                 log(f"\n== {entry['slug']}: skipped {entry['phrase']}")
                 log("  removed with the other lines scored against the wrong goal")
@@ -754,6 +749,8 @@ def publish(
                     fallback = ban_fall_through(entry, fallbacks.get(key, 0), log)
                     if fallback is None:
                         failures += 1
+                    elif stopped():
+                        log("  stopped; the next line stays queued")
                     else:
                         fallbacks[key] = fallbacks.get(key, 0) + 1
                         seen.add(key + (fallback["phrase"],))
@@ -768,6 +765,8 @@ def publish(
                     fallback = reject_and_fall_through(entry, error, fallbacks.get(key, 0), log)
                     if fallback is None:
                         failures += 1
+                    elif stopped():
+                        log("  stopped; the next line stays queued")
                     else:
                         fallbacks[key] = fallbacks.get(key, 0) + 1
                         seen.add(key + (fallback["phrase"],))
@@ -798,11 +797,18 @@ def publish(
             landed = result.startswith("won") or result == "already"
             if crosspost and not dry_run and landed and entry["mode"] == STRICT and entry["slug"] not in crossposted:
                 crossposted.add(entry["slug"])
-                for golf in golf_followups(db, entry["slug"], log):
+                followups = golf_followups(db, entry["slug"], log)
+                if stopped():
+                    log("  stopped; Golf lines stay queued")
+                    break
+                for golf in followups:
                     key = board_key(golf) + (golf["phrase"],)
                     if key not in seen:
                         seen.add(key)
                         entries.append(golf)
+            elif stopped():
+                log("stopped")
+                break
         if not dry_run:
             sweep_banned(log)
         client.save_session()

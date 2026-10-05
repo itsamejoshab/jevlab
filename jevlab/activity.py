@@ -1,4 +1,4 @@
-"""What the TUI shows, one timestamped line each, in data/activity.log (mirrors: data/kev/ or data/laya/).
+"""What the TUI shows, one timestamped line each, in data/activity.log (mirrors: data/kev/, data/laya/, or data/clef/).
 
 Lab log lines, new bests, level changes, one summary per scored batch, the publisher, and snapshots, so a run can
 be followed from outside the terminal (`tail -f data/activity.log`). The file rolls over at MAX_BYTES and keeps

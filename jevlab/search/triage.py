@@ -1,6 +1,6 @@
 """Triage: which lines we already have should a mirror edition score next, before any new ones are generated.
 
-Kev and Laya start from lines Jev already rates well: estimated lines in this edition's vault, Jev's vault, and
+Mirror editions start from lines Jev already rates well: estimated lines in this edition's vault, Jev's vault, and
 the top of Jev's oracle history. They are ranked by Jev's score for this board, lines already vaulted first on
 ties, near-duplicates dropped, and anything this edition has already measured skipped.
 """

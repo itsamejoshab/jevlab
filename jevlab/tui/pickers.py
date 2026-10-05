@@ -10,14 +10,14 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Input, Label, RichLog, Rule, Select, SelectionList, Static, Switch
+from textual.widgets import Button, Checkbox, Footer, Input, Label, RichLog, Rule, Select, SelectionList, Static, Switch
 from textual.widgets.selection_list import Selection
 
 from .. import activity, vault
 from ..boards import Standing, standings
-from ..config import EDITION, EDITIONS, MIRROR
+from ..config import EDITION, EDITIONS
 from ..db import DB
-from ..modes import HOME_MODES, GameMode, from_name
+from ..modes import GOLF, HOME_MODES, GameMode, from_name
 from ..search.engine import LEVELS
 from .copyselect import SelectableRichLog
 from .lab import LabScreen
@@ -40,8 +40,10 @@ BANNER_GLYPHS = {
     "A": [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
     "B": ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██████╔╝", "╚═════╝ "],
     "Y": ["██╗   ██╗", "╚██╗ ██╔╝", " ╚████╔╝ ", "  ╚██╔╝  ", "   ██║   ", "   ╚═╝   "],
+    "C": [" ██████╗", "██╔════╝", "██║     ", "██║     ", "╚██████╗", " ╚═════╝"],
+    "F": ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "██║     ", "╚═╝     "],
 }
-BANNER = {"kev": "KEVLAB", "laya": "LAYALAB"}.get(EDITION, "JEVLAB")
+BANNER = {"kev": "KEVLAB", "laya": "LAYALAB", "clef": "CLEFLAB"}.get(EDITION, "JEVLAB")
 BANNER_FACE = ["#ffffff", "#e4eef8", "#c6d9ec", "#a8c4e0", "#8aafd4", "#6c9ac8"]
 BANNER_SHADOW = "#3a4f66"
 BANNER_ACCENT = "#8aafd4"
@@ -68,9 +70,10 @@ def dossier() -> Text:
     text.append(
         "Directorate of Offline Adversarial Lexicography & Stochastic Oracle Interrogation\n", style="bold italic"
     )
-    theatre = {"kev": "Kev", "laya": "Laya"}.get(EDITION, "Jev")
-    text.append(f"Trick {theatre} Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B",
-                style="dim")
+    theatre = {"kev": "Kev", "laya": "Laya", "clef": "Clef"}.get(EDITION, "Jev")
+    text.append(
+        f"Trick {theatre} Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B", style="dim"
+    )
     return text
 
 
@@ -248,26 +251,96 @@ class HomeScreen(Screen):
         self.app.push_screen(PublishScreen(self.app.game_mode))
 
     def action_refresh(self) -> None:
-        log = self.query_one("#home-log", RichLog)
-        log.display = True
-        log.clear()
-        self.snapshot_worker()
+        self.app.push_screen(SnapshotScreen())
+
+
+SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"))
+
+
+class SnapshotScreen(Screen):
+    """Pick play modes for this edition. Other editions are shown disabled."""
+
+    CSS = """
+    #snap-help { height: auto; padding: 0 1; }
+    #snap-editions, #snap-modes { height: 3; padding: 0 1; }
+    #snap-editions Checkbox, #snap-modes Checkbox { margin-right: 2; }
+    #snap-actions { height: 3; }
+    #snap-actions Button { margin: 0 1; }
+    #snap-log { height: 1fr; border: round $secondary; }
+    """
+
+    BINDINGS = [Binding("escape", "back", "back")]
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="snap-help")
+        with Horizontal(id="snap-editions"):
+            for edition in EDITIONS:
+                yield Checkbox(
+                    edition.capitalize(),
+                    value=edition == EDITION,
+                    disabled=edition != EDITION,
+                    id=f"snap-ed-{edition}",
+                )
+        with Horizontal(id="snap-modes"):
+            for label, mode in SNAPSHOT_MODES:
+                yield Checkbox(label, value=True, id=f"snap-mode-{mode}")
+        with Horizontal(id="snap-actions"):
+            yield Button("Start", id="start", variant="success")
+            yield Button("Back", id="back")
+        yield SelectableRichLog(id="snap-log", wrap=True, markup=False)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#snap-help", Static).update(
+            f"Snapshot {EDITION}. Other editions are disabled; switch to snapshot them. "
+            "Strict and Golf each fill Highest and Shortest."
+        )
+        self.query_one("#snap-log").border_title = "snapshot"
+        self.busy = False
+
+    def action_back(self) -> None:
+        if self.busy:
+            self.notify("snapshot is still running", severity="warning")
+            return
+        self.app.pop_screen()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back":
+            self.action_back()
+        elif event.button.id == "start":
+            self.start()
+
+    def start(self) -> None:
+        if self.busy:
+            return
+        modes = tuple(mode for _label, mode in SNAPSHOT_MODES if self.query_one(f"#snap-mode-{mode}", Checkbox).value)
+        if not modes:
+            self.notify("pick at least one play mode", severity="warning")
+            return
+        self.busy = True
+        self.query_one("#start", Button).disabled = True
+        self.snapshot_worker(modes)
 
     @work(thread=True, exclusive=True)
-    def snapshot_worker(self) -> None:
+    def snapshot_worker(self, modes: tuple[str, ...]) -> None:
         from ..site.snapshot import take_snapshot
 
-        log = self.query_one("#home-log", RichLog)
+        log = self.query_one("#snap-log", RichLog)
 
         def write(message: str) -> None:
             activity.log("snapshot", message)
             self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
 
         try:
-            take_snapshot(DB(), log=write)
+            take_snapshot(DB(), modes=modes, log=write)
         except Exception as error:
             write(f"snapshot failed: {error!r}")
-        self.app.call_from_thread(self.update_stats)
+
+        def done() -> None:
+            self.busy = False
+            self.query_one("#start", Button).disabled = False
+
+        self.app.call_from_thread(done)
 
 
 class LiveSetupScreen(Screen):
@@ -469,6 +542,7 @@ class SearchSetupScreen(Screen):
         Binding("a", "select_all", "all"),
         Binding("x", "select_none", "none"),
         Binding("l", "select_not_leading", "not leading"),
+        Binding("e", "select_empty", "empty"),
         Binding("t", "target_player", "target player"),
         Binding("escape", "back", "back"),
     ]
@@ -516,6 +590,7 @@ class SearchSetupScreen(Screen):
                 yield Button("All", id="all")
                 yield Button("None", id="none")
                 yield Button("Not leading", id="not-leading")
+                yield Button("Empty", id="empty")
                 yield Select(self.player_options(), prompt="Target player", id="target-player")
                 yield Static(id="actions-spacer")
                 yield Button("GO", id="go", variant="success")
@@ -536,8 +611,11 @@ class SearchSetupScreen(Screen):
         out = []
         for s in self.rows:
             prompt = Text()
-            prompt.append(f"lead {fmt_leader(s)} ", style="yellow")
-            prompt.append(f"{(s.leader.name if s.leader else '')[:14]:<14}  ", style="dim yellow")
+            if s.searchable and s.leader is None:
+                prompt.append("EMPTY           ", style="bold cyan")
+            else:
+                prompt.append(f"lead {fmt_leader(s)} ", style="yellow")
+                prompt.append(f"{(s.leader.name if s.leader else '')[:14]:<14}  ", style="dim yellow")
             prompt.append(f"ours {fmt_ours(s)}  ", style="green" if s.we_lead else "")
             prompt.append("LEAD " if s.we_lead else "     ", style="bold green")
             if s.best_entry:
@@ -606,6 +684,7 @@ class SearchSetupScreen(Screen):
             "all": self.action_select_all,
             "none": self.action_select_none,
             "not-leading": self.action_select_not_leading,
+            "empty": self.action_select_empty,
             "go": self.action_go,
         }[event.button.id]()
 
@@ -623,6 +702,13 @@ class SearchSetupScreen(Screen):
         picker.deselect_all()
         for s in self.rows:
             if s.should_search:
+                picker.select(s.key)
+
+    def action_select_empty(self) -> None:
+        picker = self.query_one("#picker", SelectionList)
+        picker.deselect_all()
+        for s in self.rows:
+            if s.searchable and s.leader is None and not s.unwinnable:
                 picker.select(s.key)
 
     def action_target_player(self) -> None:
@@ -694,10 +780,11 @@ class PublishScreen(Screen):
     CSS = """
     #pub-help { height: auto; padding: 0 1; }
     #pub-picker { height: 1fr; border: round $primary; }
-    #pub-controls { height: 3; }
-    #pub-controls Label { padding: 1 1 0 1; }
+    #pub-controls, #pub-import { height: 3; }
+    #pub-controls Label, #pub-import Label { padding: 1 1 0 1; }
     #pub-controls Input { width: 8; }
-    #pub-controls Button { margin: 0 1; }
+    #pub-controls Button, #pub-import Button { margin: 0 1; }
+    #import-source { width: 22; }
     #pub-log { height: 14; border: round $secondary; }
     """
 
@@ -710,7 +797,9 @@ class PublishScreen(Screen):
         self.game_mode = game_mode
         self.rows: list[Standing] = []
         self.long_rows: list[Standing] = []
+        self.golf_picks: list = []
         self.busy = False
+        self.stop_requested = False
 
     def compose(self) -> ComposeResult:
         yield Static(id="pub-help")
@@ -723,10 +812,14 @@ class PublishScreen(Screen):
             yield Label("re-rolls")
             yield Input("3", id="rerolls", type="integer")
             yield Button("Refresh", id="refresh")
-            if MIRROR:
-                yield Button("Import from Jev", id="import-jev")
             yield Button("Publish selected", id="publish", variant="success")
+            yield Button("Stop", id="stop", disabled=True)
             yield Button("Back", id="back")
+        with Horizontal(id="pub-import"):
+            sources = [(edition.capitalize(), edition) for edition in EDITIONS if edition != EDITION]
+            yield Label("import from")
+            yield Select(sources, prompt="edition", id="import-source")
+            yield Button("Import", id="import-go")
         yield SelectableRichLog(id="pub-log", wrap=True, markup=False)
         yield Footer()
 
@@ -745,6 +838,9 @@ class PublishScreen(Screen):
         )
         self.rows = sorted((s for s in every if s.entry_beats), key=lambda s: s.search_order)
         self.long_rows = sorted((s for s in every if s.long_shot), key=lambda s: s.search_order)
+        from ..crosspost import picks as golf_picks
+
+        self.golf_picks = golf_picks(DB())
         picker = self.query_one("#pub-picker", SelectionList)
         picker.clear_options()
         for s in self.rows:
@@ -771,19 +867,37 @@ class PublishScreen(Screen):
             prompt.append(f"{s.label[:48]:<48} ", style="bold")
             prompt.append(e["phrase"][:90])
             picker.add_option(Selection(prompt, f"long:{s.key}", False))
+        for index, pick in enumerate(self.golf_picks):
+            entry = pick.entry
+            prompt = Text()
+            prompt.append(f"GOLF {pick.mode.label} ", style="bold magenta")
+            prompt.append(
+                f"{entry['p_mean']:.3f}/{pick.units}c  ",
+                style="bold magenta",
+            )
+            lead = "empty" if pick.leader is None else f"{pick.leader.probability:.2f}/{pick.leader.units}c"
+            prompt.append(f"vs {lead}  ", style="yellow")
+            prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
+            prompt.append(entry["phrase"][:80])
+            picker.add_option(Selection(prompt, f"golf:{index}", True))
         help_text = Text()
         help_text.append(f"Publish {self.game_mode.label}  ", style="bold")
         if self.rows:
             help_text.append(
-                f"{len(self.rows)} boards where our best vault line should take the top spot. All are "
-                "preselected; unselect any you want to hold back. Each one is re-checked against the "
-                "live board and the oracle before any turn is sent."
+                f"{len(self.rows)} boards where our best vault line should take the top spot, including "
+                "empty boards. All are preselected. Borrowed lines are posted without an oracle check. "
+                "Lines this edition measured are still re-checked."
             )
         else:
-            first = "Search" if self.game_mode.searchable else "`jevlab crosspost`"
             help_text.append(
-                f"Nothing ready: no vault line beats its current leader. Run {first} first.", style="yellow"
+                "Nothing ready on this board: no vault line beats the leader or takes an empty board.",
+                style="yellow",
             )
+        help_text.append(
+            f"\n{len(self.golf_picks)} Golf lines the Strict vault would crown, on both Golf boards, "
+            "including when you already lead Strict. Uncheck one to hold it this run.",
+            style="magenta",
+        )
         if with_long:
             help_text.append(
                 f"\n{len(self.long_rows)} long shots: lines whose average, but not lower bound, beats "
@@ -803,17 +917,24 @@ class PublishScreen(Screen):
             self.action_back()
         elif event.button.id == "refresh":
             self.reload()
-        elif event.button.id == "import-jev":
-            self.import_jev()
+        elif event.button.id == "import-go":
+            self.import_source()
         elif event.button.id == "publish":
             self.start_publish()
+        elif event.button.id == "stop":
+            self.stop_requested = True
+            self.notify("stopping after the current phrase")
 
-    def import_jev(self) -> None:
-        from ..transfer import import_from_jev
+    def import_source(self) -> None:
+        from ..transfer import import_from
 
+        source = self.query_one("#import-source", Select).value
         log = self.query_one("#pub-log", RichLog)
+        if not isinstance(source, str) or source not in EDITIONS:
+            self.notify("pick an edition to import from", severity="warning")
+            return
         try:
-            import_from_jev(DB(), board=self.game_mode.board, mode=self.game_mode.play_mode, log=log.write)
+            import_from(DB(), source, log=log.write)
         except RuntimeError as error:
             log.write(str(error))
         self.reload()
@@ -859,6 +980,29 @@ class PublishScreen(Screen):
                 )
                 vault.set_status(s.slug, e["mode"], e["phrase"], "queued", board, target=s.target)
                 entries.append(e | {"status": "queued", "board": board, "target": s.target})
+        from ..crosspost import queue as queue_golf
+
+        for index, pick in enumerate(self.golf_picks):
+            if f"golf:{index}" not in chosen:
+                continue
+            queue_golf(DB(), [pick])
+            entry = pick.entry
+            entries.append(
+                {
+                    "slug": pick.slug,
+                    "mode": GOLF,
+                    "phrase": entry["phrase"],
+                    "p_mean": entry["p_mean"],
+                    "p_lcb": entry["p_lcb"],
+                    "spread": entry.get("spread", 0.0),
+                    "n": entry.get("n", 0),
+                    "units": pick.units,
+                    "board": pick.mode.board,
+                    "target": pick.target,
+                    "status": "queued",
+                    "estimated_from": entry.get("estimated_from") or "",
+                }
+            )
         if not entries:
             self.notify("nothing selected", severity="warning")
             return
@@ -868,6 +1012,10 @@ class PublishScreen(Screen):
             rerolls = 3
         dry = self.query_one("#dry", Switch).value
         self.busy = True
+        self.stop_requested = False
+        self.query_one("#publish", Button).disabled = True
+        self.query_one("#stop", Button).disabled = False
+        self.query_one("#import-go", Button).disabled = True
         self.query_one("#pub-log", RichLog).write(
             f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}"
         )
@@ -891,7 +1039,13 @@ class PublishScreen(Screen):
 
         try:
             publish(
-                dry_run=dry, rerolls=rerolls, entries=entries, log=write, on_result=on_result, long_rerolls=LONG_REROLLS
+                dry_run=dry,
+                rerolls=rerolls,
+                entries=entries,
+                log=write,
+                on_result=on_result,
+                long_rerolls=LONG_REROLLS,
+                halt=lambda: self.stop_requested,
             )
         except Exception as error:
             write(f"publisher crashed: {error!r}")
@@ -910,6 +1064,10 @@ class PublishScreen(Screen):
 
         def done() -> None:
             self.busy = False
+            self.stop_requested = False
+            self.query_one("#publish", Button).disabled = False
+            self.query_one("#stop", Button).disabled = True
+            self.query_one("#import-go", Button).disabled = False
             self.reload()
 
         self.app.call_from_thread(done)

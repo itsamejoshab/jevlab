@@ -18,6 +18,14 @@ dependencies = [
 [project.optional-dependencies]
 embed = ["fastembed>=0.4"]
 laya = ["laya>=0.3.22"]
+clef = [
+    "accelerate>=1.0",
+    "bitsandbytes>=0.45",
+    "huggingface-hub>=0.26",
+    "pillow>=10",
+    "safetensors>=0.4",
+    "transformers>=5.10.2",
+]
 
 [project.scripts]
 jevlab = "jevlab.cli:main"

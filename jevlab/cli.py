@@ -11,7 +11,9 @@ import urllib.parse
 def question_slug(value: str) -> str:
     text = value.strip()
     if "://" in text or text.startswith(("?", "/")):
-        parsed = urllib.parse.urlparse(text if "://" in text else "https://x" + ("" if text.startswith("/") else "/") + text)
+        parsed = urllib.parse.urlparse(
+            text if "://" in text else "https://x" + ("" if text.startswith("/") else "/") + text
+        )
         found = urllib.parse.parse_qs(parsed.query).get("q", [""])[0].strip()
         if found:
             return found
@@ -42,6 +44,19 @@ def cmd_install_laya(_args) -> int:
         print(error, file=sys.stderr)
         return 1
     print(f"Laya weights ready at {path}")
+    print(f"cache {cache_dir()}")
+    return 0
+
+
+def cmd_install_clef(_args) -> int:
+    from .clef_local import ClefError, cache_dir, install
+
+    try:
+        path = install()
+    except ClefError as error:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"Clef weights ready at {path}")
     print(f"cache {cache_dir()}")
     return 0
 
@@ -95,17 +110,29 @@ def cmd_search(args) -> int:
     for target in search_targets(db, slug, args):
         if target:
             print(f"\n==== {slug} -> {target}", flush=True)
-        engine = Engine(db, slug, budget=args.budget, use_llm=not args.no_llm,
-                        seed=args.seed, on_event=on_event, max_stall=args.plateau,
-                        escalate=not args.no_escalate, max_level=args.max_level, board=board_of(args), target=target,
-                        win_extra=args.win_after, **({"triage_k": args.transfer_k} if args.transfer_k is not None
-                                                     else {}))
+        engine = Engine(
+            db,
+            slug,
+            budget=args.budget,
+            use_llm=not args.no_llm,
+            seed=args.seed,
+            on_event=on_event,
+            max_stall=args.plateau,
+            escalate=not args.no_escalate,
+            max_level=args.max_level,
+            board=board_of(args),
+            target=target,
+            win_extra=args.win_after,
+            **({"triage_k": args.transfer_k} if args.transfer_k is not None else {}),
+        )
         if args.force:
             engine.force(args.force)
         asyncio.run(engine.run())
         print("\n".join(engine.summary(15)))
-        print(f"{engine.oracle.calls} oracle calls, {engine.llm.calls if engine.llm else 0} LLM calls, "
-              f"ended at L{engine.level} {LEVELS[engine.level][0]}")
+        print(
+            f"{engine.oracle.calls} oracle calls, {engine.llm.calls if engine.llm else 0} LLM calls, "
+            f"ended at L{engine.level} {LEVELS[engine.level][0]}"
+        )
     return 0
 
 
@@ -165,15 +192,27 @@ def cmd_triage(args) -> int:
     if args.q:
         slugs = [question_slug(s) for s in args.q]
     else:
-        slugs = [r["slug"] for r in db.all("SELECT slug, kind, json_extract(raw, '$.ranked') AS ranked "
-                                            "FROM questions ORDER BY slug")
-                 if is_searchable(r["kind"], bool(r["ranked"]))]
+        slugs = [
+            r["slug"]
+            for r in db.all("SELECT slug, kind, json_extract(raw, '$.ranked') AS ranked FROM questions ORDER BY slug")
+            if is_searchable(r["kind"], bool(r["ranked"]))
+        ]
     if not slugs:
         print("no questions; run `jevlab snapshot` first", file=sys.stderr)
         return 1
     for slug in slugs:
-        asyncio.run(run_triage(db, slug, board_of(args), k=args.k, n=args.n, confirm_n=args.confirm_n,
-                               target=args.target or "", queue=args.queue))
+        asyncio.run(
+            run_triage(
+                db,
+                slug,
+                board_of(args),
+                k=args.k,
+                n=args.n,
+                confirm_n=args.confirm_n,
+                target=args.target or "",
+                queue=args.queue,
+            )
+        )
     return 0
 
 
@@ -190,8 +229,15 @@ def cmd_lab(args) -> int:
 
     slug = question_slug(args.q)
     key = f"{slug}{TARGET_SEP}{args.target}" if args.target else slug
-    return run_lab(key, budget=args.budget, use_llm=not args.no_llm, seed=args.seed,
-                   escalate=not args.no_escalate, max_level=args.max_level, board=board_of(args))
+    return run_lab(
+        key,
+        budget=args.budget,
+        use_llm=not args.no_llm,
+        seed=args.seed,
+        escalate=not args.no_escalate,
+        max_level=args.max_level,
+        board=board_of(args),
+    )
 
 
 def cmd_vault(args) -> int:
@@ -201,13 +247,23 @@ def cmd_vault(args) -> int:
     from .rules.banned import contains as phrase_banned
 
     board = board_of(args)
-    if args.action == "import-jev":
+    if args.action in ("import-jev", "import-from"):
         from .db import DB
-        from .transfer import import_from_jev
+        from .transfer import import_from
 
+        source = "jev" if args.action == "import-jev" else args.from_edition
+        if args.action == "import-from" and not source:
+            print("import-from needs --from-edition", file=sys.stderr)
+            return 1
         try:
-            import_from_jev(DB(), [question_slug(args.q)] if args.q else None, board,
-                            mode_name(args.mode) if args.mode else None, queue=args.queue)
+            import_from(
+                DB(),
+                source,
+                [question_slug(args.q)] if args.q else None,
+                board,
+                mode_name(args.mode) if args.mode else None,
+                log=print,
+            )
         except RuntimeError as error:
             print(error, file=sys.stderr)
             return 1
@@ -236,10 +292,12 @@ def cmd_vault(args) -> int:
             need = f"{lead.get('p', 0):.2f}/{lead.get('units', 0)}{u}" if lead else "-"
             server = f" server {e['server_p']:.2f}" if e.get("server_p") is not None else ""
             estimated = f"est({e['estimated_from']}) " if e.get("estimated_from") else ""
-            print(f"{game_mode.name:<13} {e['status']:<9} {estimated}{e['p_mean']:.3f} lcb {e['p_lcb']:.3f} "
-                  f"n={e['n']:<2} {e['units']:2}{u} vs {need:<9} {'WIN ' if e['beats'] else '    '}"
-                  f"{e['slug'][:40]:<40} {'-> ' + e['target'] + ' | ' if e.get('target') else ''}"
-                  f"{e['phrase']}{server}")
+            print(
+                f"{game_mode.name:<13} {e['status']:<9} {estimated}{e['p_mean']:.3f} lcb {e['p_lcb']:.3f} "
+                f"n={e['n']:<2} {e['units']:2}{u} vs {need:<9} {'WIN ' if e['beats'] else '    '}"
+                f"{e['slug'][:40]:<40} {'-> ' + e['target'] + ' | ' if e.get('target') else ''}"
+                f"{e['phrase']}{server}"
+            )
         return 0
     if not args.q:
         print("--q is required for queue/unqueue/drop", file=sys.stderr)
@@ -290,8 +348,17 @@ def cmd_publish(args) -> int:
             if line.strip():
                 activity.log("publish", line)
 
-    return publish(dry_run=args.dry_run, rerolls=args.rerolls, verify=not args.no_verify, slugs=slugs,
-                   delay=args.delay, board=board_of(args), mode=mode, crosspost=not args.no_crosspost, log=log)
+    return publish(
+        dry_run=args.dry_run,
+        rerolls=args.rerolls,
+        verify=not args.no_verify,
+        slugs=slugs,
+        delay=args.delay,
+        board=board_of(args),
+        mode=mode,
+        crosspost=not args.no_crosspost,
+        log=log,
+    )
 
 
 def cmd_errors(args) -> int:
@@ -312,7 +379,7 @@ def cmd_errors(args) -> int:
     for (service, where, status), n in tally.most_common():
         ago = int(time.time() - last[(service, where, status)])
         print(f"  {n:>5}x  {service:<10} {status:<16} {where}   (last {ago // 60}m{ago % 60:02d}s ago)")
-    for r in rows[-args.tail:]:
+    for r in rows[-args.tail :]:
         stamp = time.strftime("%H:%M:%S", time.localtime(r["at"]))
         print(f"  {stamp} {r['service']:<10} {r['status']:<14} {r['host']}{r['endpoint']}  {r['detail'][:120]}")
     return 0
@@ -334,8 +401,10 @@ def cmd_crosspost(args) -> int:
         e, lead = pick.entry, pick.leader
         need = f"{lead.probability:.2f}/{lead.units}c {lead.name}" if lead else "empty board"
         aimed = f"-> {pick.target} | " if pick.target else ""
-        print(f"{pick.mode.name:<13} {e['p_mean']:.3f} lcb {e['p_lcb']:.3f} {pick.units:>3}c vs {need:<28} "
-              f"{pick.slug[:40]:<40} {aimed}{e['phrase']}")
+        print(
+            f"{pick.mode.name:<13} {e['p_mean']:.3f} lcb {e['p_lcb']:.3f} {pick.units:>3}c vs {need:<28} "
+            f"{pick.slug[:40]:<40} {aimed}{e['phrase']}"
+        )
     if args.dry_run:
         print(f"\ndry run: {len(found)} line(s) would be queued")
         return 0
@@ -359,8 +428,10 @@ def cmd_boosters(args) -> int:
     for goal in args.goal or ["yes", "no"]:
         print(f"\n[{goal}] boosters (source, lift, questions, wins/tries):")
         for row in boosters.library(db, goal, args.top):
-            print(f"  {row['source']:<9} {row['lift']:+.3f} x{row['questions']:<3} {row['wins']}/{row['tries']:<4} "
-                  f"{row['text']}")
+            print(
+                f"  {row['source']:<9} {row['lift']:+.3f} x{row['questions']:<3} {row['wins']}/{row['tries']:<4} "
+                f"{row['text']}"
+            )
     return 0
 
 
@@ -411,9 +482,13 @@ def main(argv: list[str] | None = None) -> int:
     from .config import EDITION, EDITIONS
 
     parser = argparse.ArgumentParser(prog="jevlab", description="Offline Jev search lab")
-    parser.add_argument("--edition", choices=EDITIONS, default=EDITION,
-                        help="game edition: jev (data/), kev (data/kev/), or laya (data/laya/); "
-                             "read before anything else loads")
+    parser.add_argument(
+        "--edition",
+        choices=EDITIONS,
+        default=EDITION,
+        help="game edition: jev (data/), kev (data/kev/), laya (data/laya/), or clef (data/clef/); "
+        "read before anything else loads",
+    )
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("tui", help="home screen: choose Search or Publish (default when no command is given)")
@@ -424,6 +499,12 @@ def main(argv: list[str] | None = None) -> int:
         help="download Laya weights from Hugging Face into ~/.cache/jevlab (outside the repo)",
     )
     p.set_defaults(func=cmd_install_laya)
+
+    p = sub.add_parser(
+        "install-clef",
+        help="download Clef weights from Hugging Face into ~/.cache/jevlab (outside the repo)",
+    )
+    p.set_defaults(func=cmd_install_clef)
 
     p = sub.add_parser("snapshot", help="pull questions, boards, word impacts, and our attempts into data/jev.db")
     p.add_argument("--q", nargs="*", help="limit to these slugs or play URLs")
@@ -453,20 +534,34 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--max-level", type=int, default=4, help="highest escalation level (0-4)")
         p.add_argument("--target", help="choice questions: aim at this answer (score = P(answer))")
         if name == "search":
-            p.add_argument("--all-targets", action="store_true",
-                           help="choice questions: run once per answer, one after another")
-            p.add_argument("--win-after", type=int, default=0, metavar="N",
-                           help="win mode: once a line beats the leader, stop after N more oracle calls")
+            p.add_argument(
+                "--all-targets", action="store_true", help="choice questions: run once per answer, one after another"
+            )
+            p.add_argument(
+                "--win-after",
+                type=int,
+                default=0,
+                metavar="N",
+                help="win mode: once a line beats the leader, stop after N more oracle calls",
+            )
         if name == "search":
-            p.add_argument("--transfer-k", type=int, default=None, metavar="K",
-                           help="score K existing lines (Jev's best, estimated vault lines) before generating; "
-                                "default JEV_TRIAGE_K (40 on Kev and Laya, 0 on Jev)")
+            p.add_argument(
+                "--transfer-k",
+                type=int,
+                default=None,
+                metavar="K",
+                help="score K existing lines (Jev's best, estimated vault lines) before generating; "
+                "default JEV_TRIAGE_K (40 on Kev, Laya, and Clef, 0 on Jev)",
+            )
             p.add_argument("--force", help="run only this strategy")
             p.add_argument("--plateau", type=int, default=0, help="flat rounds per level (0 = run to budget)")
         p.set_defaults(func=func)
 
-    p = sub.add_parser("triage", help="score the most promising existing lines (Jev's vault and history, "
-                                      "estimated vault lines) with this edition's oracle, without searching")
+    p = sub.add_parser(
+        "triage",
+        help="score the most promising existing lines (Jev's vault and history, "
+        "estimated vault lines) with this edition's oracle, without searching",
+    )
     p.add_argument("--q", nargs="*", help="question slugs or play URLs (default: every searchable question)")
     p.add_argument("--board", default="highest", choices=board_names, help="board to judge the lines on")
     p.add_argument("--target", help="choice questions: lines aimed at this answer")
@@ -483,34 +578,53 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("phrases", nargs="+")
     p.set_defaults(func=cmd_score)
 
-    p = sub.add_parser("vault", help="list saved winners, queue them for publishing, or drop them; under "
-                                     "--edition kev or laya, import-jev copies Jev's lines in as estimates")
-    p.add_argument("action", nargs="?", default="list", choices=["list", "queue", "unqueue", "drop", "import-jev"])
-    p.add_argument("--queue", action="store_true",
-                   help="import-jev: queue the best estimated line on each board where Jev beats the leader")
+    p = sub.add_parser(
+        "vault",
+        help="list saved winners, queue them for publishing, or drop them; "
+        "import-from copies another edition's best measured Strict lines in as estimates",
+    )
+    p.add_argument(
+        "action", nargs="?", default="list", choices=["list", "queue", "unqueue", "drop", "import-jev", "import-from"]
+    )
+    p.add_argument(
+        "--from-edition", choices=["jev", "kev", "laya", "clef"], help="import-from: edition whose vault to read"
+    )
     p.add_argument("--q", help="question slug or play URL")
     p.add_argument("--phrase", help="exact phrase to queue/drop (default: the best candidate)")
     p.add_argument("--all", action="store_true", help="queue every winning candidate for the question")
     p.add_argument("--status", choices=["candidate", "queued", "published", "failed", "rejected", "dropped"])
-    p.add_argument("--target", help="choice questions: only lines aimed at this answer "
-                                    "(queue/unqueue/drop default: whole-question lines)")
-    p.add_argument("--board", choices=board_names,
-                   help="game mode board (list: default every board; queue/unqueue/drop: default highest)")
-    p.add_argument("--mode", choices=["strict", "golf"],
-                   help="play mode (list: default every mode; queue/unqueue/drop: default strict)")
+    p.add_argument(
+        "--target",
+        help="choice questions: only lines aimed at this answer (queue/unqueue/drop default: whole-question lines)",
+    )
+    p.add_argument(
+        "--board",
+        choices=board_names,
+        help="game mode board (list: default every board; queue/unqueue/drop: default highest)",
+    )
+    p.add_argument(
+        "--mode",
+        choices=["strict", "golf"],
+        help="play mode (list: default every mode; queue/unqueue/drop: default strict)",
+    )
     p.set_defaults(func=cmd_vault)
 
     p = sub.add_parser("publish", help="submit queued vault entries to the live site (separate batch loop)")
     p.add_argument("--q", nargs="*", help="only these slugs")
     p.add_argument("--dry-run", action="store_true", help="verify boards and oracle, but send no turns")
-    p.add_argument("--rerolls", type=int, default=3,
-                   help="re-score the final word N times even after a win; the board keeps the best")
+    p.add_argument(
+        "--rerolls",
+        type=int,
+        default=3,
+        help="re-score the final word N times even after a win; the board keeps the best",
+    )
     p.add_argument("--no-verify", action="store_true", help="skip the oracle re-check")
     p.add_argument("--delay", type=float, default=0.01, help="seconds between site turns")
     p.add_argument("--board", choices=board_names, help="only this game mode board (default every board)")
     p.add_argument("--mode", choices=["strict", "golf"], help="only this play mode (default every mode)")
-    p.add_argument("--no-crosspost", action="store_true",
-                   help="do not follow each landed Strict line with its Golf cross-posts")
+    p.add_argument(
+        "--no-crosspost", action="store_true", help="do not follow each landed Strict line with its Golf cross-posts"
+    )
     p.set_defaults(func=cmd_publish)
 
     p = sub.add_parser("crosspost", help="queue Strict vault lines that beat a Golf leader into the golf vault")

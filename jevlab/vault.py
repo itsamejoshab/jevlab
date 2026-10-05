@@ -63,10 +63,28 @@ def eligible(objective: Objective, p_lcb: float, units: int, leader: Leader | No
     return objective.beats(p_lcb, units, leader)
 
 
-def save(slug: str, mode: str, phrase: str, *, p_mean: float, p_lcb: float, spread: float, n: int,
-         units: int, leader: Leader | None, beats: bool, title: str = "", origin: str = "",
-         status: str = "candidate", note: str = "", board: str = HIGH_SCORES, extra: dict | None = None,
-         target: str = "", estimated_from: str = "", jev_p: float | None = None) -> dict:
+def save(
+    slug: str,
+    mode: str,
+    phrase: str,
+    *,
+    p_mean: float,
+    p_lcb: float,
+    spread: float,
+    n: int,
+    units: int,
+    leader: Leader | None,
+    beats: bool,
+    title: str = "",
+    origin: str = "",
+    status: str = "candidate",
+    note: str = "",
+    board: str = HIGH_SCORES,
+    extra: dict | None = None,
+    target: str = "",
+    estimated_from: str = "",
+    jev_p: float | None = None,
+) -> dict:
     """`extra` carries board-specific fields, e.g. Shortest yes gambles: gamble, p_reach (best roll), hits.
     `target` files the line under one answer of a choice question (its p values are P(target)).
     `estimated_from` names the edition whose scores stand in for this one's (a mirror line copied from Jev, n=0).
@@ -80,8 +98,15 @@ def save(slug: str, mode: str, phrase: str, *, p_mean: float, p_lcb: float, spre
             _write(data)
         return entry
     fields = {
-        "phrase": phrase, "p_mean": round(p_mean, 4), "p_lcb": round(p_lcb, 4), "spread": round(spread, 4),
-        "n": n, "units": units, "beats": beats, "title": title, "origin": origin,
+        "phrase": phrase,
+        "p_mean": round(p_mean, 4),
+        "p_lcb": round(p_lcb, 4),
+        "spread": round(spread, 4),
+        "n": n,
+        "units": units,
+        "beats": beats,
+        "title": title,
+        "origin": origin,
         "leader": {"p": leader.probability, "units": leader.units, "name": leader.name} if leader else None,
         "updated_at": now,
     }
@@ -111,8 +136,41 @@ def save(slug: str, mode: str, phrase: str, *, p_mean: float, p_lcb: float, spre
     return entry
 
 
-def set_status(slug: str, mode: str, phrase: str, status: str, board: str = HIGH_SCORES, target: str = "",
-               **extra) -> dict | None:
+def apply_site_score(
+    slug: str,
+    mode: str,
+    phrase: str,
+    server_p: float,
+    status: str,
+    board: str = HIGH_SCORES,
+    target: str = "",
+    detail: str = "",
+) -> dict | None:
+    """Replace a borrowed estimate with the score the site just gave this edition."""
+    if status not in STATUSES:
+        raise ValueError(f"unknown status {status!r}")
+    data = load(slug, mode, board, target)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for entry in data["entries"]:
+        if entry["phrase"] != phrase:
+            continue
+        entry["status"] = status
+        entry["p_mean"] = round(float(server_p), 4)
+        entry["p_lcb"] = round(float(server_p), 4)
+        entry["n"] = max(int(entry.get("n") or 0), 1)
+        entry.pop("estimated_from", None)
+        entry["server_p"] = server_p
+        if detail:
+            entry["detail"] = detail
+        entry.setdefault("history", []).append({"status": status, "at": now, "server_p": server_p, "detail": detail})
+        _write(data)
+        return entry
+    return None
+
+
+def set_status(
+    slug: str, mode: str, phrase: str, status: str, board: str = HIGH_SCORES, target: str = "", **extra
+) -> dict | None:
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}")
     data = load(slug, mode, board, target)
@@ -141,8 +199,15 @@ def all_entries(board: str | None = None, root: Path | None = None) -> list[dict
             continue
         data = json.loads(path.read_text())
         for entry in data["entries"]:
-            out.append(entry | {"slug": data["slug"], "mode": data.get("mode") or mode, "board": file_board,
-                                "target": data.get("target") or ""})
+            out.append(
+                entry
+                | {
+                    "slug": data["slug"],
+                    "mode": data.get("mode") or mode,
+                    "board": file_board,
+                    "target": data.get("target") or "",
+                }
+            )
     return out
 
 

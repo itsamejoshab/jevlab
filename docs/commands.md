@@ -26,8 +26,8 @@ positional arguments:
     triage              score the most promising existing lines (Jev's vault and history, estimated vault
                         lines) with this edition's oracle, without searching
     score               score phrases with the oracle
-    vault               list saved winners, queue them for publishing, or drop them; under --edition kev,
-                        laya, or clef, import-jev copies Jev's lines in as estimates
+    vault               list saved winners, queue them for publishing, or drop them; import-from copies
+                        another edition's best measured Strict lines in as estimates
     publish             submit queued vault entries to the live site (separate batch loop)
     crosspost           queue Strict vault lines that beat a Golf leader into the golf vault
     errors              failed network calls by service and host (OpenRouter vs the Jev site)
@@ -199,17 +199,18 @@ options:
 ### `jevlab vault`
 
 ```text
-usage: jevlab vault [-h] [--queue] [--q Q] [--phrase PHRASE] [--all]
+usage: jevlab vault [-h] [--from-edition {jev,kev,laya,clef}] [--q Q] [--phrase PHRASE] [--all]
                     [--status {candidate,queued,published,failed,rejected,dropped}] [--target TARGET]
                     [--board {highest,shortest}] [--mode {strict,golf}]
-                    [{list,queue,unqueue,drop,import-jev}]
+                    [{list,queue,unqueue,drop,import-jev,import-from}]
 
 positional arguments:
-  {list,queue,unqueue,drop,import-jev}
+  {list,queue,unqueue,drop,import-jev,import-from}
 
 options:
   -h, --help            show this help message and exit
-  --queue               import-jev: queue the best estimated line on each board where Jev beats the leader
+  --from-edition {jev,kev,laya,clef}
+                        import-from: edition whose vault to read
   --q Q                 question slug or play URL
   --phrase PHRASE       exact phrase to queue/drop (default: the best candidate)
   --all                 queue every winning candidate for the question

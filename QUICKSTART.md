@@ -100,7 +100,7 @@ Kev's classifier is `jaredpalmer/kev-4b` on OpenRouter, so the same API key scor
 
 ```bash
 uv run jevlab --edition kev snapshot
-uv run jevlab --edition kev vault import-jev --queue
+uv run jevlab --edition kev vault import-jev
 uv run jevlab --edition kev search --q is-cereal-a-soup
 ```
 
@@ -118,7 +118,7 @@ required. Only the classifier is local, and it does not download on its own if t
 
 ```bash
 uv run jevlab --edition laya snapshot
-uv run jevlab --edition laya vault import-jev --queue   # copy Jev lines in as estimates
+uv run jevlab --edition laya vault import-jev   # copy Jev's best measured lines in as estimates
 uv run jevlab --edition laya search --q is-cereal-a-soup
 ```
 
@@ -138,7 +138,7 @@ exactly.
 
 ```bash
 uv run jevlab --edition clef snapshot
-uv run jevlab --edition clef vault import-jev --queue
+uv run jevlab --edition clef vault import-jev
 uv run jevlab --edition clef search --q is-cereal-a-soup
 ```
 

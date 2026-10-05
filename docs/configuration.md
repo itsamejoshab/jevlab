@@ -120,8 +120,9 @@ lowers concurrency. Laya and Clef score with a local Hugging Face model.
 | Weights | — | — | `~/.cache/jevlab/huggingface` | `~/.cache/jevlab/huggingface` |
 
 A mirror reads Jev's database and vault read-only (`JEV_SOURCE_MODEL` names the model Jev's samples were recorded
-under), so it can start from lines that already work on Jev. `jevlab --edition clef vault import-jev` copies those
-lines in as estimates.
+under), so it can start from lines that already work on Jev. `jevlab --edition clef vault import-jev` copies the
+best measured Strict line per board in as an estimate. `vault import-from --from-edition kev` does the same from
+any other edition.
 
 ## Other settings
 

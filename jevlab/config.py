@@ -23,10 +23,10 @@ def load_dotenv(path: Path = ROOT / ".env") -> None:
 load_dotenv()
 
 SITE_BASE = os.environ.get("JEV_SITE", "https://i-wanna-date-jev.begin-363.workers.dev")
-EDITIONS = ("jev", "kev", "laya")
-# Trick Kev and Trick Laya are mirrors of the game, each with its own question revisions, boards, and model.
-# Each edition keeps its own database, vault, and snapshots. A mirror reads Jev's (never writes them) to borrow
-# estimates.
+EDITIONS = ("jev", "kev", "laya", "clef")
+# Trick Kev, Trick Laya, and Trick Clef are mirrors of the game, each with its own question revisions, boards,
+# and model. Each edition keeps its own database, vault, and snapshots. A mirror reads Jev's (never writes them)
+# to borrow estimates.
 EDITION = os.environ.get("JEV_EDITION", "jev").strip().casefold() or "jev"
 if EDITION not in EDITIONS:
     raise SystemExit(f"JEV_EDITION must be one of {', '.join(EDITIONS)}, not {EDITION!r}")
@@ -46,11 +46,13 @@ TYPESAFE_KEY = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("TYPESAFE_K
 TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1")
 # `typesafe/jev-latest` is rejected; the bare id is what the site sends too, and Typesafe's own API takes it.
 # Each id is the `model` in that edition's site `jevRequest`. Kev is an OpenRouter /systemone model.
-# Laya is not hosted there: the same id is a Hugging Face repo, scored in-process.
+# Laya and Clef are scored in-process. Laya's id is its Hugging Face repo. The site asks for `clef` (27B);
+# local estimates use `clef-flash`, the smallest published checkpoint.
 EDITION_MODELS = {
     "jev": "jev-latest",
     "kev": "jaredpalmer/kev-4b",
     "laya": "convaiinnovations/laya",
+    "clef": "clef-flash",
 }
 JEV_MODEL = os.environ.get("JEV_MODEL", EDITION_MODELS[EDITION])
 # Hugging Face repo for `jevlab install-laya`. Independent of the current edition's oracle model.
@@ -60,17 +62,25 @@ JEV_SOURCE_MODEL = os.environ.get("JEV_SOURCE_MODEL", "jev-latest")
 # Weights for the local Laya oracle. This stays outside the repo; `jevlab install-laya` downloads them here.
 LAYA_CACHE = Path(os.environ.get("JEV_LAYA_CACHE", Path.home() / ".cache" / "jevlab" / "huggingface")).expanduser()
 LAYA_DEVICE = os.environ.get("JEV_LAYA_DEVICE", "").strip()
+# Hugging Face repo for `jevlab install-clef`. Clef-flash is the 9B checkpoint. `Cloudflare/clef` is the 27B
+# model the site scores with.
+CLEF_REPO = os.environ.get("JEV_CLEF_REPO", "Cloudflare/clef-flash")
+# Weights for the local Clef oracle. Same cache root as Laya, still outside the repo.
+CLEF_CACHE = Path(os.environ.get("JEV_CLEF_CACHE", Path.home() / ".cache" / "jevlab" / "huggingface")).expanduser()
+CLEF_DEVICE = os.environ.get("JEV_CLEF_DEVICE", "").strip()
+# auto: bf16 on a ~28GB GPU, 4-bit on a GPU with about 8GB, otherwise the checkpoint split across GPU, RAM, and disk.
+CLEF_QUANT = os.environ.get("JEV_CLEF_QUANT", "auto").strip().lower() or "auto"
 # Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev is OpenRouter only.
-# Laya loads the Hugging Face checkpoint locally (`huggingface`), one forward at a time.
-_LAYA = EDITION == "laya"
-_DEFAULT_BACKENDS = "huggingface" if _LAYA else ("openrouter" if MIRROR else "typesafe,openrouter")
+# Laya and Clef load a Hugging Face checkpoint locally (`huggingface`), one forward at a time.
+_LOCAL = EDITION in ("laya", "clef")
+_DEFAULT_BACKENDS = "huggingface" if _LOCAL else ("openrouter" if MIRROR else "typesafe,openrouter")
 ORACLE_BACKENDS = [b.strip() for b in os.environ.get("JEV_ORACLE_BACKENDS", _DEFAULT_BACKENDS).split(",") if b.strip()]
-ORACLE_CONCURRENCY = int(os.environ.get("JEV_ORACLE_CONCURRENCY", "1" if _LAYA else ("4" if MIRROR else "24")))
-ORACLE_MAX_CONCURRENCY = int(os.environ.get("JEV_ORACLE_MAX_CONCURRENCY", "1" if _LAYA else ("8" if MIRROR else "48")))
+ORACLE_CONCURRENCY = int(os.environ.get("JEV_ORACLE_CONCURRENCY", "1" if _LOCAL else ("4" if MIRROR else "24")))
+ORACLE_MAX_CONCURRENCY = int(os.environ.get("JEV_ORACLE_MAX_CONCURRENCY", "1" if _LOCAL else ("8" if MIRROR else "48")))
 # Mirror searches first score this many lines Jev already rates well (search/triage.py) before generating any.
 TRIAGE_K = int(os.environ.get("JEV_TRIAGE_K", "40" if MIRROR else "0"))
 # Under load Jev's p99 is ~7s and p99.9 ~10s (2026-09-28), with a tail past 20s; slower calls give up and retry.
-# Kev's host is slower. Laya's local forward has no HTTP timeout; the value only applies if a remote backend is added.
+# Kev's host is slower. A local forward has no HTTP timeout; the value only applies if a remote backend is added.
 ORACLE_TIMEOUT = float(os.environ.get("JEV_ORACLE_TIMEOUT", "60" if MIRROR else "20"))
 
 @dataclass(frozen=True)

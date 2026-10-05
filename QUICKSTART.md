@@ -16,8 +16,9 @@ cd jevlab
 uv sync                     # creates .venv and installs jevlab plus its dependencies
 # optional: local CPU embeddings instead of OpenRouter ones
 # uv sync --extra embed
-# optional: local Laya classifier (weights are a separate download; see section 7)
+# optional: local Laya or Clef classifier (weights are a separate download; see section 7)
 # uv sync --extra laya
+# uv sync --extra clef
 ```
 
 With pip instead: `python -m venv .venv && . .venv/bin/activate && pip install -e .`
@@ -89,11 +90,11 @@ uv run jevlab publish                             # send the queued lines
 
 Please be a good guest. This is someone's hobby game. Keep the default delays, and don't flood the boards.
 
-## 7. Trick Kev and Trick Laya
+## 7. Trick Kev, Trick Laya, and Trick Clef
 
-The site has two mirror games, Trick Kev and Trick Laya, each with its own model and boards. Add `--edition kev`
-or `--edition laya` to any command, or set `JEV_EDITION` in `.env`. Each mirror keeps its data in `data/kev/` or
-`data/laya/` and reads (never writes) Jev's data to borrow estimates.
+The site has three mirror games, Trick Kev, Trick Laya, and Trick Clef, each with its own model and boards. Add
+`--edition kev`, `--edition laya`, or `--edition clef` to any command, or set `JEV_EDITION` in `.env`. Each mirror
+keeps its data in `data/kev/`, `data/laya/`, or `data/clef/` and reads (never writes) Jev's data to borrow estimates.
 
 Kev's classifier is `jaredpalmer/kev-4b` on OpenRouter, so the same API key scores it:
 
@@ -121,6 +122,26 @@ uv run jevlab --edition laya vault import-jev --queue   # copy Jev lines in as e
 uv run jevlab --edition laya search --q is-cereal-a-soup
 ```
 
+Clef on the site is the 27B model. Local estimates use Clef-flash (`Cloudflare/clef-flash`, about 19GB), the
+smallest published checkpoint, so scoring stays fast. The classifier does not call the Cloudflare Workers AI
+API. Weights go under `~/.cache/jevlab/huggingface` (or `JEV_CLEF_CACHE`).
+
+```bash
+uv sync --extra clef
+uv run jevlab install-clef
+```
+
+`JEV_CLEF_DEVICE` is `cpu`, `cuda`, or `mps`. `JEV_CLEF_QUANT=auto` loads flash in bf16 when the GPU has about
+28GB, uses 4-bit when the GPU has about 8GB (a 12GB card), and otherwise splits the weights across the GPU, RAM,
+and disk. Search does not download the weights on its own. Flash estimates will not match the site's 27B scores
+exactly.
+
+```bash
+uv run jevlab --edition clef snapshot
+uv run jevlab --edition clef vault import-jev --queue
+uv run jevlab --edition clef search --q is-cereal-a-soup
+```
+
 ## 8. Tests
 
 ```bash
@@ -139,10 +160,11 @@ uv run ruff check
 | `data/models/` | Trained cross-question predictor (`jevlab train-global`) |
 | `data/kev/` | The same layout for the Kev edition |
 | `data/laya/` | The same layout for the Laya edition |
-| `~/.cache/jevlab/huggingface` | Laya weights from `jevlab install-laya` (outside the repo; `JEV_LAYA_CACHE`) |
+| `data/clef/` | The same layout for the Clef edition |
+| `~/.cache/jevlab/huggingface` | Laya and Clef weights (`JEV_LAYA_CACHE`, `JEV_CLEF_CACHE`) |
 
 `data/`, `.env`, and `session.json` are gitignored. Move the data elsewhere with `JEVLAB_DATA=/path`. The Laya
-weights never land in the repo; they stay in the cache above.
+and Clef weights never land in the repo; they stay in the cache above.
 
 ## Next
 

@@ -322,7 +322,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--q", nargs="*", default=[], help="limit to these slugs")
     parser.add_argument("--limit", type=int, default=0, help="cap how many attempts to re-roll (0 = all)")
     parser.add_argument("--modes", nargs="*", default=list(PLAY_MODES), help="play modes to scan")
-    parser.add_argument("--edition", choices=["jev", "kev", "laya"], help="game edition (also accepted anywhere on the line)")
+    parser.add_argument("--edition", choices=["jev", "kev", "laya", "clef"],
+                        help="game edition (also accepted anywhere on the line)")
     args = parser.parse_args(argv)
     return run(args)
 

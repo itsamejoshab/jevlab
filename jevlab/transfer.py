@@ -1,4 +1,4 @@
-"""Borrow Jev's vault for a mirror edition (Kev or Laya): every Jev line becomes a line estimated from Jev.
+"""Borrow Jev's vault for a mirror edition (Kev, Laya, or Clef): every Jev line becomes a line estimated from Jev.
 
 A mirror is the same game with its own model, question revisions, and boards. Instead of searching from scratch,
 Jev's winners are copied into this edition's vault with Jev's scores as stand-ins (`estimated_from="jev"`, n=0)
@@ -68,7 +68,9 @@ def import_from_jev(db: DB, slugs: list[str] | None = None, board: str | None = 
     """Copy Jev vault lines into this edition's vault as estimates. With `queue`, queue the best estimated line
     on each board whose Jev estimate beats the leader (unless that board already has something queued)."""
     if EDITION == "jev":
-        raise RuntimeError("import-jev runs under Kev or Laya: `jevlab --edition laya vault import-jev`")
+        raise RuntimeError(
+            "import-jev runs under Kev, Laya, or Clef: `jevlab --edition clef vault import-jev`"
+        )
     if db.latest_snapshot() is None:
         raise RuntimeError(f"no {EDITION} snapshot yet: run `jevlab --edition {EDITION} snapshot` first")
     jev = jev_db()

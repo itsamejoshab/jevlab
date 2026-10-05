@@ -40,8 +40,10 @@ BANNER_GLYPHS = {
     "A": [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
     "B": ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██████╔╝", "╚═════╝ "],
     "Y": ["██╗   ██╗", "╚██╗ ██╔╝", " ╚████╔╝ ", "  ╚██╔╝  ", "   ██║   ", "   ╚═╝   "],
+    "C": [" ██████╗", "██╔════╝", "██║     ", "██║     ", "╚██████╗", " ╚═════╝"],
+    "F": ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "██║     ", "╚═╝     "],
 }
-BANNER = {"kev": "KEVLAB", "laya": "LAYALAB"}.get(EDITION, "JEVLAB")
+BANNER = {"kev": "KEVLAB", "laya": "LAYALAB", "clef": "CLEFLAB"}.get(EDITION, "JEVLAB")
 BANNER_FACE = ["#ffffff", "#e4eef8", "#c6d9ec", "#a8c4e0", "#8aafd4", "#6c9ac8"]
 BANNER_SHADOW = "#3a4f66"
 BANNER_ACCENT = "#8aafd4"
@@ -68,7 +70,7 @@ def dossier() -> Text:
     text.append(
         "Directorate of Offline Adversarial Lexicography & Stochastic Oracle Interrogation\n", style="bold italic"
     )
-    theatre = {"kev": "Kev", "laya": "Laya"}.get(EDITION, "Jev")
+    theatre = {"kev": "Kev", "laya": "Laya", "clef": "Clef"}.get(EDITION, "Jev")
     text.append(f"Trick {theatre} Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B",
                 style="dim")
     return text

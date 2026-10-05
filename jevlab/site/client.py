@@ -1,6 +1,6 @@
 """Trick Jev site client: TanStack Start server functions over the TSS framed protocol.
 
-Every call takes `edition` ("jev", "kev", or "laya"), the attempt comes from mode-run,
+Every call takes `edition` ("jev", "kev", "laya", or "clef"), the attempt comes from mode-run,
 the player from viewer, and `$TSR/Error` responses raise instead of passing through.
 """
 

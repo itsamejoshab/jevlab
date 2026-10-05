@@ -62,7 +62,7 @@ uv run jevlab snapshot
 uv run jevlab lab --q is-cereal-a-soup
 ```
 
-See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough: installation, the first search, the vault, publishing, and the Kev and Laya editions.
+See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough: installation, the first search, the vault, publishing, and the Kev, Laya, and Clef editions.
 
 ## Documentation
 
@@ -71,7 +71,7 @@ See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough: installation, the f
 | [QUICKSTART.md](QUICKSTART.md) | Install, configure, and run everything |
 | [docs/how-it-works.md](docs/how-it-works.md) | Technical summary: why Jev is hard to read, and how the search is built |
 | [docs/commands.md](docs/commands.md) | Every command and flag |
-| [docs/configuration.md](docs/configuration.md) | Model roles, swapping models, costs, Jev vs Kev vs Laya |
+| [docs/configuration.md](docs/configuration.md) | Model roles, swapping models, costs, Jev vs Kev vs Laya vs Clef |
 | [docs/architecture.md](docs/architecture.md) | Full engine write-up, with the math, plus a source map |
 | [scripts/README.md](scripts/README.md) | Research scripts and benchmarks |
 

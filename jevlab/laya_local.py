@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 
-from .config import LAYA_CACHE, LAYA_DEVICE, LAYA_REPO
+from .config import LAYA_BATCH, LAYA_CACHE, LAYA_DEVICE, LAYA_REPO
 
 REPO = LAYA_REPO
 # The checkpoint repo also ships sibling models. These are the files one English agent needs.
@@ -92,9 +92,15 @@ def load_agent():
 
 
 def predict_many(states: list[str], questions: dict) -> list[dict]:
-    """One system-one result per state. A single state uses system_one; several share a forward pass."""
+    """One system-one result per state. A single state uses system_one; several share forward passes.
+
+    A search round can be ~90 phrases. One pass of that size exhausted RAM and swap, so each pass
+    holds at most LAYA_BATCH states. Results stay in input order.
+    """
     agent = load_agent()
     with _lock:
         if len(states) == 1:
             return [agent.system_one(states[0], questions)]
-        return list(agent.predict_batch(states, questions))
+        if LAYA_BATCH < 1:
+            raise LayaError(f"JEV_LAYA_BATCH must be at least 1, not {LAYA_BATCH}")
+        return list(agent.predict_batch(states, questions, batch_size=LAYA_BATCH))

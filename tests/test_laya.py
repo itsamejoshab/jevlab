@@ -73,3 +73,35 @@ def test_missing_weights_message_names_the_cache():
     text = weights_message()
     assert "jevlab install-laya" in text
     assert str(cache_dir()) in text
+
+
+def test_predict_many_bounds_each_forward(monkeypatch):
+    """A search round of ~90 phrases must not be one forward. That is what filled RAM and swap."""
+    cap = laya_local.LAYA_BATCH
+    assert cap == 8
+    states = [f"p{i}" for i in range(cap * 2 + 1)]
+    forwards = []
+
+    class Agent:
+        def system_one(self, state, questions):
+            raise AssertionError("several states share predict_batch")
+
+        def predict_batch(self, batch, questions, batch_size=None):
+            step = batch_size if batch_size and batch_size > 0 else len(batch)
+            if step > cap:
+                pytest.fail(f"one forward would score {step} states; the cap is {cap}")
+            out = []
+            for start in range(0, len(batch), step):
+                chunk = batch[start : start + step]
+                if len(chunk) > cap:
+                    pytest.fail(f"one forward would score {len(chunk)} states; the cap is {cap}")
+                forwards.append(list(chunk))
+                out.extend({"model": "laya", "answers": {"q": state}, "usage": {}} for state in chunk)
+            return out
+
+    monkeypatch.setattr(laya_local, "load_agent", lambda: Agent())
+    results = laya_local.predict_many(states, {"q": {"type": "noul"}})
+    assert [row["answers"]["q"] for row in results] == states
+    scored = [state for chunk in forwards for state in chunk]
+    assert scored == states
+    assert forwards and all(1 <= len(chunk) <= cap for chunk in forwards)

@@ -240,7 +240,10 @@ def single_words_user(ctx, count: int) -> str:
         lines.append(f"Board leader: {ctx.leader.units} words at {ctx.leader.probability:.0%} (text hidden).")
     singles = sorted((c for c in ctx.archive.items.values() if c.units <= 2), key=lambda c: -c.p)[:15]
     if singles:
-        lines.append("Our best one- and two-word lines so far: " + ", ".join(f"{c.phrase} {c.p:.2f}" for c in singles))
+        shown = [c for c in singles if c.units == 1] if ctx.engine.one_word_race else singles
+        if shown:
+            label = "Our best one-word lines so far" if ctx.engine.one_word_race else "Our best one- and two-word lines so far"
+            lines.append(label + ": " + ", ".join(f"{c.phrase} {c.p:.2f}" for c in shown))
     impacts = ctx.top_impacts(20)
     if impacts:
         lines.append(
@@ -251,13 +254,24 @@ def single_words_user(ctx, count: int) -> str:
         lines.append(
             "The site refused these as more than one word; avoid words built the same way: " + ", ".join(refused)
         )
+    if ctx.engine.one_word_race:
+        ask = (
+            f"\nWrite {count} single words, each exactly one word. The leader is already one word, so a longer "
+            "phrase cannot win. "
+        )
+        shape = '{"phrases": [{"text": "<one word>"}]}'
+    else:
+        ask = (
+            f"\nWrite {count} candidates: about two thirds single words, the rest two-word phrases. "
+        )
+        shape = '{"phrases": [{"text": "<word or two>"}]}'
     lines.append(
-        f"\nWrite {count} candidates: about two thirds single words, the rest two-word phrases. Think of words "
+        ask + "Think of words "
         "that by themselves make Jev answer the target: synonyms of the answer, words that define the subject "
         "into the answer, the speaker's identity, foreign-language words, names. Each word must already exist "
         "as one word (a dictionary word, a name, a brand): the site's word check rejects words glued together "
         "from a phrase, like milkfirst or mynameisjev. "
-        'Return JSON: {"phrases": [{"text": "<word or two>"}]}'
+        f"Return JSON: {shape}"
     )
     return "\n".join(lines)
 
@@ -277,7 +291,13 @@ def gen_user(ctx, archetypes: list[str], count: int, variants_of: list = (), fre
         f"Empty-phrase score: {goal_baseline(ctx):.0%}",
     ]
     shortest = ctx.objective.shortest
-    if leader and shortest:
+    if leader and shortest and ctx.engine.one_word_race:
+        lines.append(
+            f"Board leader to beat: 1 word at {leader.probability:.0%} (their text is hidden). "
+            f"Only another one-word line can win, and it needs a higher score than the leader "
+            f"while staying at or above {ctx.objective.threshold:.2f}."
+        )
+    elif leader and shortest:
         lines.append(
             f"Board leader to beat: {leader.units} words at {leader.probability:.0%} (their text is hidden). "
             f"Beat it with fewer words at or above {ctx.objective.threshold:.2f}, "
@@ -339,7 +359,12 @@ def gen_user(ctx, archetypes: list[str], count: int, variants_of: list = (), fre
         for phrase in variants_of:
             lines.append(f"- {phrase}")
     cap = ctx.engine.grow_cap
-    if shortest:
+    if shortest and ctx.engine.one_word_race:
+        span = (
+            f"exactly 1 word each. The leader is already 1 word, so a longer phrase cannot win; "
+            f"the word must reach at least {ctx.objective.threshold:.2f} and outscore the leader"
+        )
+    elif shortest:
         span = (
             f"1 to {min(cap, 6)} words each, most of them 1 to 3 words; "
             f"just tip past {ctx.objective.threshold:.2f}, fewest words wins"
@@ -375,7 +400,12 @@ def rewrite_user(ctx, parents: list[str], per_parent: int) -> str:
     q = ctx.question
     body = "\n".join(f"- {p}" for p in parents)
     leader = ctx.leader
-    if ctx.objective.shortest:
+    if ctx.engine.one_word_race:
+        length = (
+            "The leader is already one word, so every child must be exactly one word. "
+            f"It has to reach at least {ctx.objective.threshold:.2f}."
+        )
+    elif ctx.objective.shortest:
         length = (
             "This is the Shortest yes board: cut every word you can while the line still tips past 51%. "
             "Children should be shorter than their parent, ideally one to three words."

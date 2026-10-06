@@ -60,6 +60,16 @@ def jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / max(len(a | b), 1)
 
 
+def length_can_win(units: int, leader: Leader | None) -> bool:
+    """Shortest yes: a line places only when it is shorter than the leader. A one-word leader has no shorter
+    length, so another one-word line is the line that can win."""
+    if leader is None:
+        return True
+    if leader.units == 1:
+        return units == 1
+    return units < leader.units
+
+
 def rank_candidates(db: DB, slug: str, objective: Objective, leader: Leader | None, k: int, target: str = "",
                     jev: DB | None = None, exclude: set[str] | None = None,
                     length_cap: int = MAX_WORDS) -> list[TriageItem]:
@@ -101,8 +111,9 @@ def rank_candidates(db: DB, slug: str, objective: Objective, leader: Leader | No
 
     items = list(pool.values())
     if objective.shortest:
-        # Only lines shorter than the leader that Jev (nearly) took to yes can win here.
-        items = [i for i in items if objective.qualifies(i.jev_p + 0.1) and (leader is None or i.units < leader.units)]
+        # Lines Jev (nearly) took to yes, and that can place on length. A one-word leader is beaten by
+        # another one-word line; a longer leader is beaten by something shorter.
+        items = [i for i in items if objective.qualifies(i.jev_p + 0.1) and length_can_win(i.units, leader)]
         items.sort(key=lambda i: (i.units, -(i.jev_p + VAULT_BONUS * i.vaulted)))
     else:
         items.sort(key=lambda i: (-round(i.jev_p + VAULT_BONUS * i.vaulted, 2), i.units, -i.jev_p))

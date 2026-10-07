@@ -165,6 +165,8 @@ class LLMGenerate(Strategy):
         self.prefetch(ctx)
         task, self.pending = self.pending, None
         model, archetypes, proposals, fresh = await task
+        if ctx.engine.one_word_race:
+            proposals = [(text, tactic) for text, tactic in proposals if len(text.split()) == 1]
         if not model:
             return
         if proposals:
@@ -196,7 +198,12 @@ class LocalEdit(Strategy):
         self.expanded: dict[str, int] = {}
 
     def pick_parent(self, ctx):
-        top = ctx.parents(8) if ctx.fresh else ctx.archive.top(8, min_n=1)
+        if ctx.engine.one_word_race:
+            top = ctx.single_word_lines(8)
+        else:
+            top = []
+        if not top:
+            top = ctx.parents(8) if ctx.fresh else ctx.archive.top(8, min_n=1)
         weights = [1.0 / (1 + i) / (1 + self.expanded.get(c.phrase, 0)) ** 2 for i, c in enumerate(top)]
         return ctx.rng.choices(top, weights)[0]
 
@@ -229,9 +236,10 @@ class LocalEdit(Strategy):
             for alt in choices:
                 if alt != word:
                     optional.append(" ".join(words[:i] + [alt] + words[i + 1 :]))
-        for slot in range(len(words) + 1):
-            for word in ctx.rng.sample(pool + FUNCTION_WORDS, min(10, len(pool) + len(FUNCTION_WORDS))):
-                optional.append(" ".join(words[:slot] + [word] + words[slot:]))
+        if not ctx.engine.one_word_race:
+            for slot in range(len(words) + 1):
+                for word in ctx.rng.sample(pool + FUNCTION_WORDS, min(10, len(pool) + len(FUNCTION_WORDS))):
+                    optional.append(" ".join(words[:slot] + [word] + words[slot:]))
 
         optional = [p for p in dict.fromkeys(optional) if p not in ctx.archive]
         budget = max(self.cap - len(must), 50)
@@ -260,6 +268,8 @@ class Compress(Strategy):
         if cand.units <= 1:
             return False
         if ctx.objective.shortest:
+            if ctx.engine.one_word_race:
+                return True
             return ctx.objective.reachable(cand.score)
         if ctx.objective.long:
             # Longer lines belong to chain compaction; below the ceiling only a line level with the leader pays.
@@ -286,6 +296,12 @@ class Compress(Strategy):
     async def compress(self, ctx, root) -> bool:
         """Returns True if a shorter line kept the rounded score (Shortest yes: still lands rolls over the
         threshold, which is worth a gamble since the board keeps our best roll)."""
+        if ctx.engine.one_word_race:
+            self.done.add(root.phrase)
+            fresh = [w for w in dict.fromkeys(root.words) if w not in ctx.archive]
+            if fresh:
+                await ctx.evaluate([(w, self.name, root.phrase, root.archetype) for w in fresh])
+            return False
         self.done.add(root.phrase)
         await ctx.evaluate([(root.phrase, "resample", root.parent, root.archetype)], n=4)
         root = ctx.archive.items[root.phrase]

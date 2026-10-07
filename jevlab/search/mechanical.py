@@ -706,7 +706,7 @@ class Sweep(LevelStrategy):
 class SingleWord(Strategy):
     """Shortest yes: most boards are led by one word, so score single words (and pairs) directly. Each round
     sends LLM ideas, casings and pairs of our best singles, the best player words, then the next slice of the
-    big vocabulary."""
+    big vocabulary. When the leader is already one word, pairs are left out."""
 
     name = "single_word"
     needs_llm = False
@@ -742,9 +742,10 @@ class SingleWord(Strategy):
         singles = sorted((c for c in ctx.archive.items.values() if c.units == 1), key=lambda c: -c.p)[:12]
         for cand in singles:
             pool += vocab.casings(cand.phrase)
-        tops = [c.phrase for c in singles[:8]]
-        pool += [f"{a} {b}" for a in tops for b in tops if a != b]
-        pool += [f"{w} {t}" for t in tops[:4] for w in ("yes", "no", "definitely", "absolutely", "my", "our")]
+        if not ctx.engine.one_word_race:
+            tops = [c.phrase for c in singles[:8]]
+            pool += [f"{a} {b}" for a in tops for b in tops if a != b]
+            pool += [f"{w} {t}" for t in tops[:4] for w in ("yes", "no", "definitely", "absolutely", "my", "our")]
         pool += [w for w, impact in ctx.top_impacts(150) if impact > 0]
         pool = ctx.valid_only([p for p in dict.fromkeys(pool) if p and p not in ctx.archive])[: self.send]
         while len(pool) < self.send and self.cursor < len(self.vocab):

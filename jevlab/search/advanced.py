@@ -36,7 +36,10 @@ class Genetic(Strategy):
         pop = {c.phrase: c for c in ctx.archive.elite_list()}
         for c in ctx.parents(30):
             pop.setdefault(c.phrase, c)
-        return list(pop.values())
+        values = list(pop.values())
+        if ctx.engine.one_word_race:
+            values = [c for c in values if c.units == 1]
+        return values
 
     def tournament(self, pop, rng, size: int = 3):
         return max(rng.sample(pop, min(size, len(pop))), key=lambda c: c.fitness)
@@ -65,6 +68,8 @@ class Genetic(Strategy):
         self.generation += 1
         rng = ctx.rng
         pop = self.population(ctx)
+        if not pop:
+            return
         pool = ctx.word_pool(60)
         children: dict[str, tuple[str, str]] = {}
         for _ in range(self.offspring * 3):
@@ -107,6 +112,10 @@ class SurrogateBO(Strategy):
     async def run(self, ctx) -> None:
         rng = ctx.rng
         parents = ctx.parents(20) + ctx.archive.elite_list()
+        if ctx.engine.one_word_race:
+            parents = [c for c in parents if c.units == 1]
+        if not parents:
+            return
         pool_words = ctx.word_pool(120)
         cands: dict[str, tuple[str, str]] = {}
         for _ in range(self.pool_size * 2):
@@ -147,6 +156,10 @@ class GCGSwap(Strategy):
     async def run(self, ctx) -> None:
         rng = ctx.rng
         starts = ctx.parents(4)
+        if ctx.engine.one_word_race:
+            starts = [c for c in starts if c.units == 1]
+        if not starts:
+            return
         current = starts[rng.randrange(len(starts))]
         vocab = ctx.word_pool(400)
         for step in range(self.steps):

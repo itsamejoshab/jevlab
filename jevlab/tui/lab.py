@@ -56,7 +56,8 @@ STRATEGY_INFO = {
     "clause. Cheap and steady once a good line exists.",
     "compress": "Removes each word of the best line in turn to measure how much it matters (the word colours "
     "above), then deletes as many words as it can while the rounded score holds. Only runs when shorter "
-    "helps: level with the leader's score, or longer than their line.",
+    "helps: level with the leader's score, or longer than their line. Against a one-word Shortest yes "
+    "leader it scores each word of a longer line on its own.",
     "genetic": "Genetic algorithm seeded from diverse good lines: picks parents by tournament, splices them at "
     "clause boundaries, mutates the children, and now and then has an LLM rewrite one.",
     "surrogate_bo": "Generates thousands of edits locally and asks the surrogate (a small model trained on our own "
@@ -75,7 +76,7 @@ STRATEGY_INFO = {
     "prefix is itself a scoreable line, so it finds framings the edit strategies can't reach.",
     "single_word": "Shortest yes: most boards are led by one word, so this scores single words and pairs directly: "
     "LLM ideas, casings and pairs of our best singles, other players' words, then the next slice of "
-    "the big vocabulary.",
+    "the big vocabulary. When the leader is already one word, pairs are left out.",
     "extend": "Plateau mode. Grows the best line toward the leader's length a clause at a time, using pieces of our "
     "other strong lines, boosters and a cheap model's supporting clauses. Lines that tie are raced on "
     "averaged scores.",

@@ -101,8 +101,19 @@ class LabContext:
                 seen.add(cand.phrase)
         return sorted(rows, key=lambda r: -r[1])[:k]
 
+    def single_word_lines(self, k: int | None = None) -> list[Candidate]:
+        """One-word lines in board order. The only lines that can win a one-word Shortest yes race."""
+        lines = [c for c in self.archive.items.values() if c.units == 1]
+        lines.sort(key=lambda c: (self.objective.score_key(c.score, c.units), c.p), reverse=True)
+        return lines if k is None else lines[:k]
+
     def parents(self, k: int) -> list[Candidate]:
-        """Top lines to build on. On a fresh start half come from this run, so edits leave the old peak."""
+        """Top lines to build on. On a fresh start half come from this run, so edits leave the old peak.
+        Against a one-word Shortest yes leader, edits stay on one-word lines."""
+        if self.engine.one_word_race:
+            singles = self.single_word_lines(k)
+            if singles:
+                return singles
         if not self.fresh:
             return self.archive.top(k)
         new = self.archive.top_session(k // 2)
@@ -122,6 +133,10 @@ class LabContext:
         on Shortest yes, board order."""
         from .mechanical import noise_sd
 
+        if self.engine.one_word_race:
+            singles = self.single_word_lines(k)
+            if singles:
+                return singles
         if self.objective.shortest or self.engine.winning():
             return self.archive.top_by_board(k)
         cap = self.engine.grow_cap
@@ -139,9 +154,12 @@ class LabContext:
         out = []
         for phrase in phrases:
             try:
-                out.append(check_phrase(phrase, self.engine.choices, self.engine.length_cap))
+                phrase = check_phrase(phrase, self.engine.choices, self.engine.length_cap)
             except RuleError:
                 continue
+            if self.engine.one_word_race and self.objective.units(phrase) != 1:
+                continue
+            out.append(phrase)
         return out
 
     def rank(self, phrases: list[str], k: int) -> list[str]:
@@ -346,8 +364,9 @@ class Engine:
         self._roots: tuple[int, list[Candidate]] = (-1, [])
         if self.objective.shortest:
             # Any length stays valid so restored long lines can be compressed; only growth is capped.
+            # A one-word leader is beaten only by another one-word line, so nothing is grown past that.
             self.length_cap = MAX_WORDS
-            self.grow_cap = max(8, self.leader.units + 2) if self.leader else 8
+            self.grow_cap = 1 if self.one_word_race else (max(8, self.leader.units + 2) if self.leader else 8)
         elif self.long:
             if self.leader:
                 self.objective.par_units = self.leader.units
@@ -413,6 +432,8 @@ class Engine:
         if self.objective.shortest:
             short_leader = self.leader is not None and self.leader.units <= 2
             priors.update({"compress": 1.6, "single_word": 2.5 if short_leader else 1.2, "boosters": 0.5})
+            if self.one_word_race:
+                priors["single_word"] = 4.0
         if self.long:
             priors.update({s.name: 1.3 for s in chain_arms})
             priors.update({"chain_ablate": 1.2, "chain_compact": 2.0, "compress": 1.6})
@@ -448,6 +469,8 @@ class Engine:
             try:
                 phrase = check_phrase(normalize(text), self.choices, self.length_cap)
             except RuleError:
+                continue
+            if self.one_word_race and origin != "manual" and self.objective.units(phrase) != 1:
                 continue
             if phrase not in self.archive.items:
                 words = {w.casefold() for w in phrase.split()}
@@ -509,6 +532,11 @@ class Engine:
 
     async def start(self) -> None:
         self.oracle = Oracle(self.db, self.question["jev_request"], target=self.target)
+        if self.one_word_race:
+            self.emit(
+                "log",
+                message="[shortest] leader is already 1 word; only a one-word line can win, so multi-word tries are skipped",
+            )
         self.oracle.on_error = lambda message: self.emit("log", message=message)
         if self.ctx.chains is not None:
             self.ctx.chains.probe = Probe(self.oracle.qkey)
@@ -625,6 +653,11 @@ class Engine:
                 + "; ".join(f"{s.name} ({', '.join(m.split('/')[-1] for m in s.models)})" for s in joined),
             )
 
+    @property
+    def one_word_race(self) -> bool:
+        """Shortest yes whose leader is already one word. Only another one-word line can place ahead."""
+        return self.objective.shortest and self.leader is not None and self.leader.units == 1
+
     def winning(self) -> bool:
         if not len(self.archive):
             return False
@@ -664,6 +697,12 @@ class Engine:
         return any(c.units <= WORD_STAGE for c in self.roots())
 
     def allowed(self, name: str) -> bool:
+        if self.one_word_race and name == "boosters":
+            return False
+        # Edits of a longer line stay longer, and a longer line cannot win this race.
+        if self.one_word_race and name in {"precision", "sweep", "local_edit", "genetic", "gcg", "surrogate_bo"}:
+            if not any(c.units == 1 for c in self.archive.items.values()):
+                return False
         if name in ("extend", "grow", "drift", "probe_climb", "scenario_join"):
             return self.plateau
         if name == "beam" and self.plateau:
@@ -902,10 +941,14 @@ class Engine:
         out: dict[str, tuple[str, str, str, str]] = {}
         for cand in tops:
             words = cand.words
-            for n in range(1, len(words)):
-                prefix = " ".join(words[:n])
-                if prefix not in self.archive.items:
-                    out.setdefault(prefix, (prefix, "prefix", cand.phrase, cand.archetype))
+            if self.one_word_race:
+                # Each word of a strong line can win on its own; a longer prefix cannot.
+                pieces = words
+            else:
+                pieces = [" ".join(words[:n]) for n in range(1, len(words))]
+            for piece in pieces:
+                if piece and piece not in self.archive.items:
+                    out.setdefault(piece, (piece, "prefix", cand.phrase, cand.archetype))
         return list(out.values())
 
     # Surrogates.

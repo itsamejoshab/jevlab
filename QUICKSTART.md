@@ -90,18 +90,23 @@ uv run jevlab publish                             # send the queued lines
 
 Please be a good guest. This is someone's hobby game. Keep the default delays, and don't flood the boards.
 
-## 7. Trick Kev, Trick Laya, and Trick Clef
+## 7. Trick Kev, Trick Luna, Trick Decider, Trick Laya, and Trick Clef
 
-The site has three mirror games, Trick Kev, Trick Laya, and Trick Clef, each with its own model and boards. Add
-`--edition kev`, `--edition laya`, or `--edition clef` to any command, or set `JEV_EDITION` in `.env`. Each mirror
-keeps its data in `data/kev/`, `data/laya/`, or `data/clef/` and reads (never writes) Jev's data to borrow estimates.
+The site has five mirror games, Trick Kev, Trick Luna, Trick Decider, Trick Laya, and Trick Clef, each with its own
+model and boards. Add `--edition kev`, `--edition luna`, `--edition decider`, `--edition laya`, or `--edition clef`
+to any command, or set `JEV_EDITION` in `.env`. Each mirror keeps its data in `data/kev/`, `data/luna/`,
+`data/decider/`, `data/laya/`, or `data/clef/` and reads (never writes) Jev's data to borrow estimates.
 
-Kev's classifier is `jaredpalmer/kev-4b` on OpenRouter, so the same API key scores it:
+Kev's classifier is `jaredpalmer/kev-4b` on OpenRouter, Luna's is `openai/gpt-6-luna-decisions`, and Decider's is
+`perplexity/pplx-decider-v1-27b`, also on OpenRouter, so the same API key scores them:
 
 ```bash
 uv run jevlab --edition kev snapshot
 uv run jevlab --edition kev vault import-jev
 uv run jevlab --edition kev search --q is-cereal-a-soup
+
+uv run jevlab --edition luna snapshot
+uv run jevlab --edition decider snapshot
 ```
 
 Laya (`convaiinnovations/laya`) is not on OpenRouter. The classifier runs locally from a Hugging Face checkpoint.
@@ -159,6 +164,8 @@ uv run ruff check
 | `data/snapshots/` | Raw JSON from each `jevlab snapshot` |
 | `data/models/` | Trained cross-question predictor (`jevlab train-global`) |
 | `data/kev/` | The same layout for the Kev edition |
+| `data/luna/` | The same layout for the Luna edition |
+| `data/decider/` | The same layout for the Decider edition |
 | `data/laya/` | The same layout for the Laya edition |
 | `data/clef/` | The same layout for the Clef edition |
 | `~/.cache/jevlab/huggingface` | Laya and Clef weights (`JEV_LAYA_CACHE`, `JEV_CLEF_CACHE`) |

@@ -23,10 +23,10 @@ def load_dotenv(path: Path = ROOT / ".env") -> None:
 load_dotenv()
 
 SITE_BASE = os.environ.get("JEV_SITE", "https://i-wanna-date-jev.begin-363.workers.dev")
-EDITIONS = ("jev", "kev", "laya", "clef")
-# Trick Kev, Trick Laya, and Trick Clef are mirrors of the game, each with its own question revisions, boards,
-# and model. Each edition keeps its own database, vault, and snapshots. A mirror reads Jev's (never writes them)
-# to borrow estimates.
+EDITIONS = ("jev", "kev", "laya", "clef", "luna", "decider")
+# Trick Kev, Trick Laya, Trick Clef, Trick Luna, and Trick Decider are mirrors of the game, each with its own
+# question revisions, boards, and model. Each edition keeps its own database, vault, and snapshots. A mirror
+# reads Jev's (never writes them) to borrow estimates.
 EDITION = os.environ.get("JEV_EDITION", "jev").strip().casefold() or "jev"
 if EDITION not in EDITIONS:
     raise SystemExit(f"JEV_EDITION must be one of {', '.join(EDITIONS)}, not {EDITION!r}")
@@ -45,7 +45,10 @@ OPENROUTER_BASE = os.environ.get("OPENROUTER_BASE", "https://openrouter.ai/api/v
 TYPESAFE_KEY = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("TYPESAFE_KEY") or "").strip()
 TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1")
 # `typesafe/jev-latest` is rejected; the bare id is what the site sends too, and Typesafe's own API takes it.
-# Each id is the `model` in that edition's site `jevRequest`. Kev is an OpenRouter /systemone model.
+# Each id is the `model` in that edition's site `jevRequest`, except Luna: the site says `gpt-6-luna`,
+# and OpenRouter maps that bare id onto `typesafe/gpt-6-luna`, which does not exist. The route that
+# answers is `openai/gpt-6-luna-decisions`. Decider's route is `perplexity/pplx-decider-v1-27b`. Kev, Luna, and
+# Decider are OpenRouter /systemone models.
 # Laya and Clef are scored in-process. Laya's id is its Hugging Face repo. The site asks for `clef` (27B);
 # local estimates use `clef-flash`, the smallest published checkpoint.
 EDITION_MODELS = {
@@ -53,6 +56,8 @@ EDITION_MODELS = {
     "kev": "jaredpalmer/kev-4b",
     "laya": "convaiinnovations/laya",
     "clef": "clef-flash",
+    "luna": "openai/gpt-6-luna-decisions",
+    "decider": "perplexity/pplx-decider-v1-27b",
 }
 JEV_MODEL = os.environ.get("JEV_MODEL", EDITION_MODELS[EDITION])
 # Hugging Face repo for `jevlab install-laya`. Independent of the current edition's oracle model.
@@ -70,7 +75,7 @@ CLEF_CACHE = Path(os.environ.get("JEV_CLEF_CACHE", Path.home() / ".cache" / "jev
 CLEF_DEVICE = os.environ.get("JEV_CLEF_DEVICE", "").strip()
 # auto: bf16 on a ~28GB GPU, 4-bit on a GPU with about 8GB, otherwise the checkpoint split across GPU, RAM, and disk.
 CLEF_QUANT = os.environ.get("JEV_CLEF_QUANT", "auto").strip().lower() or "auto"
-# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev is OpenRouter only.
+# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev, Luna, and Decider are OpenRouter only.
 # Laya and Clef load a Hugging Face checkpoint locally (`huggingface`), one forward at a time.
 _LOCAL = EDITION in ("laya", "clef")
 _DEFAULT_BACKENDS = "huggingface" if _LOCAL else ("openrouter" if MIRROR else "typesafe,openrouter")

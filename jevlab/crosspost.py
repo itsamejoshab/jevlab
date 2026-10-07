@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import vault
+from .vault import site_p
 from .db import DB
 from .modes import GOLF, GOLF_HIGHEST, GOLF_SHORTEST, STRICT, GameMode
 from .objective import Leader, board_leader, objective_for, target_rows
@@ -43,8 +44,9 @@ def strict_pool(slugs: list[str] | None = None) -> dict[tuple[str, str], list[di
     return {key: list(by_phrase.values()) for key, by_phrase in pool.items()}
 
 
-def picks(db: DB, modes: tuple[GameMode, ...] = (GOLF_HIGHEST, GOLF_SHORTEST),
-          slugs: list[str] | None = None) -> list[Pick]:
+def picks(
+    db: DB, modes: tuple[GameMode, ...] = (GOLF_HIGHEST, GOLF_SHORTEST), slugs: list[str] | None = None
+) -> list[Pick]:
     """Best Strict line per question (or answer) and Golf board whose lower bound beats the Golf leader."""
     me = db.me()
     out = []
@@ -53,24 +55,31 @@ def picks(db: DB, modes: tuple[GameMode, ...] = (GOLF_HIGHEST, GOLF_SHORTEST),
         if not question:
             continue
         for mode in modes:
+            known = {
+                (entry["slug"], entry.get("target") or "", entry["phrase"]): site_p(entry)
+                for entry in vault.all_entries(mode.board)
+                if entry["mode"] == GOLF and site_p(entry) is not None
+            }
             if target:
-                rows = target_rows({b: db.board(slug, GOLF, b) for b in (mode.board, "champions")}, mode.board,
-                                   target)
+                rows = target_rows({b: db.board(slug, GOLF, b) for b in (mode.board, "champions")}, mode.board, target)
             else:
                 rows = db.board(slug, GOLF, mode.board)
             leader = board_leader(rows, me, board=mode.board)
-            ours = board_leader([r for r in rows if me and r.get("userId") == me], me, include_ours=True,
-                                board=mode.board)
+            ours = board_leader(
+                [r for r in rows if me and r.get("userId") == me], me, include_ours=True, board=mode.board
+            )
             objective = objective_for(question, unit="char", board=mode.board)
             ranked = []
             for entry in entries:
                 units = objective.units(entry["phrase"])
-                p = float(entry["p_lcb"])
+                recorded = known.get((slug, target, entry["phrase"]))
+                p = recorded if recorded is not None else float(entry["p_lcb"])
+                mean = recorded if recorded is not None else float(entry["p_mean"])
                 if not objective.beats(p, units, leader):
                     continue
-                if ours and objective.leader_key(ours) >= objective.key(float(entry["p_mean"]), units):
+                if ours and objective.leader_key(ours) >= objective.key(mean, units):
                     continue
-                ranked.append((objective.key(p, units), float(entry["p_mean"]), units, entry))
+                ranked.append((objective.key(p, units), mean, units, entry))
             if not ranked:
                 continue
             _, _, units, entry = max(ranked, key=lambda r: (r[0], r[1]))
@@ -82,8 +91,23 @@ def queue(db: DB, found: list[Pick]) -> None:
     for pick in found:
         e = pick.entry
         question = db.question(pick.slug) or {}
-        vault.save(pick.slug, GOLF, e["phrase"], p_mean=e["p_mean"], p_lcb=e["p_lcb"], spread=e.get("spread", 0.0),
-                   n=e.get("n", 0), units=pick.units, leader=pick.leader, beats=True,
-                   title=e.get("title") or question.get("title") or "", origin="crosspost", status="queued",
-                   note=f"from strict {e['board']}", board=pick.mode.board, target=pick.target,
-                   estimated_from=e.get("estimated_from") or "", jev_p=e.get("jev_p"))
+        vault.save(
+            pick.slug,
+            GOLF,
+            e["phrase"],
+            p_mean=e["p_mean"],
+            p_lcb=e["p_lcb"],
+            spread=e.get("spread", 0.0),
+            n=e.get("n", 0),
+            units=pick.units,
+            leader=pick.leader,
+            beats=True,
+            title=e.get("title") or question.get("title") or "",
+            origin="crosspost",
+            status="queued",
+            note=f"from strict {e['board']}",
+            board=pick.mode.board,
+            target=pick.target,
+            estimated_from=e.get("estimated_from") or "",
+            jev_p=e.get("jev_p"),
+        )

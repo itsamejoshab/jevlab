@@ -17,8 +17,17 @@ from dataclasses import dataclass, field
 import httpx
 
 from . import netlog
-from .config import (JEV_MODEL, OPENROUTER_BASE, OPENROUTER_KEY, ORACLE_BACKENDS, ORACLE_CONCURRENCY,
-                     ORACLE_MAX_CONCURRENCY, ORACLE_TIMEOUT, TYPESAFE_BASE, TYPESAFE_KEY)
+from .config import (
+    JEV_MODEL,
+    OPENROUTER_BASE,
+    OPENROUTER_KEY,
+    ORACLE_BACKENDS,
+    ORACLE_CONCURRENCY,
+    ORACLE_MAX_CONCURRENCY,
+    ORACLE_TIMEOUT,
+    TYPESAFE_BASE,
+    TYPESAFE_KEY,
+)
 from .db import DB
 
 
@@ -99,8 +108,7 @@ def history(db: DB, question_request: dict, target: str = "") -> dict[str, list[
     """Every oracle sample for this question, grouped by phrase; with `target`, P(target) per sample."""
     backfill_qkeys(db, question_request)
     out: dict[str, list[float]] = {}
-    for r in db.all("SELECT state, noul, answer FROM oracle_samples WHERE qkey = ?",
-                    (question_key(question_request),)):
+    for r in db.all("SELECT state, noul, answer FROM oracle_samples WHERE qkey = ?", (question_key(question_request),)):
         value = target_value(r["answer"], target) if target else r["noul"]
         if value is not None:
             out.setdefault(r["state"], []).append(float(value))
@@ -115,6 +123,11 @@ THROTTLE_CAP = 60.0
 # How long one call keeps waiting out back-offs before giving up; waiting does not use up its ordinary retries.
 THROTTLE_MAX_WAIT = 900.0
 RETRIES = 6
+
+
+def is_refusal(body: str) -> bool:
+    """OpenAI declined this question for this phrase. Retrying gets the same 502."""
+    return "refused to answer" in body.casefold()
 
 
 def retry_after(response: httpx.Response) -> float | None:
@@ -193,7 +206,7 @@ class Backend:
     def throttle(self, retry_after: float | None) -> float:
         """The server asked us to slow down: no calls go here until the wait is over. The wait is what
         Retry-After asks for, else exponential (2s, 4s, ... up to THROTTLE_CAP) with jitter."""
-        backoff = min(THROTTLE_CAP, THROTTLE_BASE * 2 ** self.throttles) * random.uniform(0.8, 1.2)
+        backoff = min(THROTTLE_CAP, THROTTLE_BASE * 2**self.throttles) * random.uniform(0.8, 1.2)
         wait = max(retry_after or 0.0, backoff)
         self.throttles += 1
         self.throttled_until = max(self.throttled_until, time.monotonic() + wait)
@@ -272,7 +285,7 @@ class BackendPool:
         if not ready:
             return None
         self.turn = (self.turn + 1) % len(self.backends)
-        order = self.backends[self.turn:] + self.backends[:self.turn]
+        order = self.backends[self.turn :] + self.backends[: self.turn]
         return max(ready, key=lambda b: (b.limiter.free / max(b.limiter.limit, 1), -order.index(b)))
 
     async def acquire(self, avoid: Backend | None = None) -> Backend:
@@ -288,9 +301,13 @@ class BackendPool:
             backend.limiter.in_flight += 1
             return backend
 
-    async def release(self, backend: Backend, ok: bool) -> None:
+    async def release(self, backend: Backend, ok: bool | None) -> None:
+        """`ok` None is a refusal: the host is fine, so this call does not cut concurrency or start a rest."""
         async with self.cond:
-            backend.done(ok)
+            if ok is None:
+                backend.limiter.in_flight -= 1
+            else:
+                backend.done(ok)
             self.cond.notify_all()
 
     async def close(self) -> None:
@@ -370,13 +387,16 @@ class Oracle:
                     "the huggingface backend is local; it does not share a pool with remote /systemone calls"
                 )
             ok = False
+            counted = True
             throttled = False
             t0 = time.monotonic()
             try:
                 response = await backend.http.post("/systemone", json=request)
                 if response.status_code == 200:
                     body = response.json()
-                    answer = (body.get("answers") or {}).get("q") or next(iter((body.get("answers") or {}).values()), None)
+                    answer = (body.get("answers") or {}).get("q") or next(
+                        iter((body.get("answers") or {}).values()), None
+                    )
                     if not answer:
                         raise OracleError(f"no answer in {str(body)[:200]}")
                     value = self.answer_value(answer)
@@ -385,17 +405,32 @@ class Oracle:
                     self.calls += 1
                     self.cost += cost
                     self.latencies.append(latency)
+                    filed = qkey or self.qkey
                     self.db.execute(
                         "INSERT INTO oracle_samples (request_hash, model, state, noul, answer, latency_ms, cost, at, qkey)"
                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (key, body.get("model"), state, value, json.dumps(answer), int(latency * 1000), cost,
-                         time.time(), qkey or self.qkey),
+                        (
+                            key,
+                            body.get("model"),
+                            state,
+                            value,
+                            json.dumps(answer),
+                            int(latency * 1000),
+                            cost,
+                            time.time(),
+                            filed,
+                        ),
                     )
+                    self.db.execute("DELETE FROM oracle_refusals WHERE qkey = ? AND state = ?", (filed, state))
                     if self.target:
                         value = float((answer.get("probabilities") or {}).get(self.target) or 0.0)
                     self._cached(key).append(value)
                     ok = True
                     return value
+                if is_refusal(response.text):
+                    self._keep_refusal(state, qkey, response.text)
+                    counted = False
+                    raise OracleError(f"refused to answer {state[:60]!r}")
                 if response.status_code == 400:
                     raise OracleError(self.failed(backend, response.status_code, response.text))
                 if response.status_code in (401, 402, 403):
@@ -409,19 +444,26 @@ class Oracle:
                     wait = backend.throttle(asked)
                     throttled = True
                     why = THROTTLE_STATUS[response.status_code]
-                    self.failed(backend, response.status_code,
-                                f"{why}; {backend.name} backs off {wait:.0f}s"
-                                f"{f' (Retry-After {asked:.0f}s)' if asked is not None else ''}: {response.text}",
-                                action="waiting it out")
+                    self.failed(
+                        backend,
+                        response.status_code,
+                        f"{why}; {backend.name} backs off {wait:.0f}s"
+                        f"{f' (Retry-After {asked:.0f}s)' if asked is not None else ''}: {response.text}",
+                        action="waiting it out",
+                    )
                 else:
                     self.failed(backend, response.status_code, response.text)
             except httpx.TimeoutException as error:
-                self.failed(backend, "timeout", f"no reply within {ORACLE_TIMEOUT:g}s, so we stopped waiting "
-                                                f"(the server sent no status; {type(error).__name__})")
+                self.failed(
+                    backend,
+                    "timeout",
+                    f"no reply within {ORACLE_TIMEOUT:g}s, so we stopped waiting "
+                    f"(the server sent no status; {type(error).__name__})",
+                )
             except httpx.TransportError as error:
                 self.failed(backend, type(error).__name__, str(error))
             finally:
-                await self.limiter.release(backend, ok)
+                await self.limiter.release(backend, ok if counted else None)
             last = backend
             if throttled:
                 # Being told to slow down is not a failed try; keep waiting, up to THROTTLE_MAX_WAIT per call.
@@ -441,12 +483,24 @@ class Oracle:
         if now - at >= NOTICE_EVERY:
             more = f" (+{quiet} more since last notice)" if quiet else ""
             if self.on_error:
-                self.on_error(f"[net] {self.last_error}{more}; {action}, "
-                              f"concurrency {self.limiter.describe()}")
+                self.on_error(f"[net] {self.last_error}{more}; {action}, concurrency {self.limiter.describe()}")
             self._noticed[kind] = (now, 0)
         else:
             self._noticed[kind] = (at, quiet + 1)
         return self.last_error
+
+    def _keep_refusal(self, state: str, qkey: str | None, detail: str) -> None:
+        """Remember the phrase. The next search scores it again; this call does not."""
+        filed = qkey or self.qkey
+        text = " ".join(detail.split())[:300]
+        self.db.execute(
+            "INSERT INTO oracle_refusals (qkey, state, detail, at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(qkey, state) DO UPDATE SET detail = excluded.detail, at = excluded.at",
+            (filed, state, text, time.time()),
+        )
+        netlog.record("jev-oracle", "openrouter.ai", "/systemone", "refused", f"{text} phrase={state[:120]}")
+        if self.on_error:
+            self.on_error(f"refused to answer; kept for the next run: {state[:120]}")
 
     def _answer_of(self, body: dict) -> dict:
         answer = (body.get("answers") or {}).get("q") or next(iter((body.get("answers") or {}).values()), None)
@@ -454,8 +508,18 @@ class Oracle:
             raise OracleError(f"no answer in {str(body)[:200]}")
         return answer
 
-    def _store(self, key: str, state: str, stored: float, answer: dict, model: str, qkey: str | None,
-               latency: float, copies: int, shown: float) -> None:
+    def _store(
+        self,
+        key: str,
+        state: str,
+        stored: float,
+        answer: dict,
+        model: str,
+        qkey: str | None,
+        latency: float,
+        copies: int,
+        shown: float,
+    ) -> None:
         """Write `copies` identical samples. The in-memory cache keeps `shown` (P(target) when aiming)."""
         now = time.time()
         qk = qkey or self.qkey
@@ -479,9 +543,11 @@ class Oracle:
 
         if EDITION == "clef":
             from .clef_local import ClefError as LocalError, predict_many
+
             who = "Clef"
         else:
             from .laya_local import LayaError as LocalError, predict_many
+
             who = "Laya"
 
         unique = list(dict.fromkeys(states))
@@ -509,7 +575,14 @@ class Oracle:
                 answer = self._answer_of(body)
                 stored = self.answer_value(answer)
                 self._store(
-                    keys[state], state, stored, answer, str(body.get("model") or ""), qkey, latency, n,
+                    keys[state],
+                    state,
+                    stored,
+                    answer,
+                    str(body.get("model") or ""),
+                    qkey,
+                    latency,
+                    n,
                     self._shown(answer, stored),
                 )
                 self.calls += 1

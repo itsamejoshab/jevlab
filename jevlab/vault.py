@@ -58,6 +58,14 @@ def _write(data: dict) -> None:
     tmp.replace(path)
 
 
+def site_p(entry: dict) -> float | None:
+    """The score the site already gave this line, when a submit has recorded one."""
+    raw = entry.get("server_p")
+    if raw is None:
+        return None
+    return float(raw)
+
+
 def eligible(objective: Objective, p_lcb: float, units: int, leader: Leader | None) -> bool:
     """Only save lines whose lower confidence bound still wins on the board."""
     return objective.beats(p_lcb, units, leader)

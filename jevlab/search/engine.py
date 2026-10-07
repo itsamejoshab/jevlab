@@ -23,7 +23,17 @@ from ..config import (
 from ..db import DB
 from ..llm import LLM, LLMError
 from ..modes import BOARDS, HIGH_SCORES, from_board, is_searchable
-from ..objective import CEILING_MIN_N, Leader, Objective, board_leader, goal_p, logit, objective_for, site_round, target_rows
+from ..objective import (
+    CEILING_MIN_N,
+    Leader,
+    Objective,
+    board_leader,
+    goal_p,
+    logit,
+    objective_for,
+    site_round,
+    target_rows,
+)
 from ..oracle import Oracle, Score, history
 from ..rules import CopyGuard, RuleError, check_phrase, check_word, normalize, option_names
 from ..rules.banned import contains as phrase_banned
@@ -895,6 +905,12 @@ class Engine:
             seeds += self.prefix_seeds()
         triaged = self.triage_items()
         seeds += [(i.phrase, f"triage:{i.source}", "", "other") for i in triaged]
+        have = {phrase for phrase, *_rest in seeds}
+        for row in self.db.all("SELECT state FROM oracle_refusals WHERE qkey = ?", (self.oracle.qkey,)):
+            phrase = row["state"]
+            if phrase not in past and phrase not in have:
+                seeds.append((phrase, "refused", "", ""))
+                have.add(phrase)
         self.emit(
             "log",
             message=f"archive restored {len(self.archive)} phrases; scoring {len(seeds)} site/seed lines"
@@ -1256,7 +1272,9 @@ class Engine:
                     else:
                         if not idle_noted:
                             self.emit("status", status="budget spent")
-                            self.emit("log", message="budget spent; commands still work, `budget <n>` to keep searching")
+                            self.emit(
+                                "log", message="budget spent; commands still work, `budget <n>` to keep searching"
+                            )
                             idle_noted = True
                         await asyncio.sleep(0.5)
                         continue

@@ -513,13 +513,18 @@ def publish_entry(
         log(f"  dry run: would {what}: {phrase}")
         return "dry-run"
 
+    picked = ""
+    shown_p: float | None = None
     if game_mode.golf:
         best = golf_try(client, live, words[0], log, target)
         log(f"    = {units}c {best:.2f}")
     else:
         attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
         attempt, server_p = build_chain(client, attempt, words, log)
-        best = credited(last_turn(attempt), target) if target else (server_p if server_p is not None else 0.0)
+        turn = last_turn(attempt)
+        picked = str((turn or {}).get("choice") or "")
+        shown_p = server_p
+        best = credited(turn, target) if target else (server_p if server_p is not None else 0.0)
     tries = 0
     if asked:
         how = "re-scoring the phrase" if game_mode.golf else "re-rolling the last word"
@@ -530,12 +535,20 @@ def publish_entry(
         if game_mode.golf:
             p = golf_try(client, live, words[0], log, target)
         else:
-            attempt, p = reroll(client, attempt, log)
-            if target:
-                p = credited(last_turn(attempt), target)
+            attempt, raw = reroll(client, attempt, log)
+            turn = last_turn(attempt)
+            picked = str((turn or {}).get("choice") or "")
+            shown_p = raw
+            p = credited(turn, target) if target else raw
         best = max(best, p)
         log(f"    re-roll {tries}: {p:.2f} (best {best:.2f})")
     won = objective.beats(best, units, need)
+    missed = bool(target and picked and picked != target and not won)
+    if missed and shown_p is not None:
+        log(
+            f"  Jev picked {picked!r} ({shown_p:.2f}), not {target!r}; "
+            "the row lands on that answer, so this board stays empty"
+        )
     db.execute(
         "INSERT INTO publishes (slug, mode, phrase, estimate, server, status, detail, at, board) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -560,15 +573,18 @@ def publish_entry(
     if game_mode.golf:
         time.sleep(GOLF_BOARD_LAG)
     refresh_board(db, client, live, mode)
-    detail = f"rerolls={tries}" if won else f"server {best:.2f} after {tries} re-rolls did not beat {lead}"
-    if estimated:
-        vault.apply_site_score(slug, mode, phrase, best, "published" if won else "failed", board, target, detail)
-    elif won:
-        vault.set_status(slug, mode, phrase, "published", board, target=target, server_p=best, detail=detail)
+    if won:
+        detail = f"rerolls={tries}"
+    elif missed and shown_p is not None:
+        detail = f"Jev picked {picked!r} ({shown_p:.2f}), not {target!r}"
     else:
-        vault.set_status(slug, mode, phrase, "failed", board, target=target, server_p=best, detail=detail)
+        detail = f"server {best:.2f} after {tries} re-rolls did not beat {lead}"
+    # The site score replaces the local estimate, so a later submit does not treat the estimate as still best.
+    vault.apply_site_score(slug, mode, phrase, best, "published" if won else "failed", board, target, detail)
     if won:
         return f"won {site_round(best):.2f}/{units}{u}"
+    if missed and shown_p is not None:
+        return f"missed {target}; Jev picked {picked} ({shown_p:.2f})"
     return f"short {best:.2f}"
 
 

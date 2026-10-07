@@ -1,6 +1,6 @@
 # Command reference
 
-Generated from `jevlab <command> --help`. Every command also accepts `--edition jev|kev|laya|clef` anywhere on the line.
+Generated from `jevlab <command> --help`. Every command also accepts `--edition jev|kev|laya|clef|luna|decider` anywhere on the line.
 Run through uv as `uv run jevlab ...`, or plain `jevlab ...` inside the activated venv.
 
 Running `jevlab` with no command opens the TUI home screen.
@@ -8,7 +8,7 @@ Running `jevlab` with no command opens the TUI home screen.
 ## Global
 
 ```text
-usage: jevlab [-h] [--edition {jev,kev,laya,clef}]
+usage: jevlab [-h] [--edition {jev,kev,laya,clef,luna,decider}]
               {tui,install-laya,install-clef,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global} ...
 
 Offline Jev search lab
@@ -38,8 +38,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --edition {jev,kev,laya,clef}
-                        game edition: jev (data/), kev (data/kev/), laya (data/laya/), or clef (data/clef/);
+  --edition {jev,kev,laya,clef,luna,decider}
+                        game edition: jev (data/), kev (data/kev/), laya (data/laya/), clef (data/clef/), luna (data/luna/), or decider (data/decider/);
                         read before anything else loads
 ```
 
@@ -199,7 +199,7 @@ options:
 ### `jevlab vault`
 
 ```text
-usage: jevlab vault [-h] [--from-edition {jev,kev,laya,clef}] [--q Q] [--phrase PHRASE] [--all]
+usage: jevlab vault [-h] [--from-edition {jev,kev,laya,clef,luna,decider}] [--q Q] [--phrase PHRASE] [--all]
                     [--status {candidate,queued,published,failed,rejected,dropped}] [--target TARGET]
                     [--board {highest,shortest}] [--mode {strict,golf}]
                     [{list,queue,unqueue,drop,import-jev,import-from}]
@@ -209,7 +209,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --from-edition {jev,kev,laya,clef}
+  --from-edition {jev,kev,laya,clef,luna,decider}
                         import-from: edition whose vault to read
   --q Q                 question slug or play URL
   --phrase PHRASE       exact phrase to queue/drop (default: the best candidate)

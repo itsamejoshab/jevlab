@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 
 from . import vault
+from .vault import site_p
 from .db import DB
 from .modes import HIGH_SCORES, SHORTEST_YES, STRICT, is_searchable
 from .objective import Leader, Objective, board_leader, objective_for, site_round, target_rows
@@ -57,8 +58,12 @@ class Standing:
     def unwinnable(self) -> bool:
         """Leader already has the top rounded score in one word; we could only tie, and ties go to them.
         The same holds on both boards: one word at 1.00 cannot be beaten on length or probability."""
-        return bool(self.leader) and not self.we_lead and site_round(self.leader.probability) >= 1.0 \
+        return (
+            bool(self.leader)
+            and not self.we_lead
+            and site_round(self.leader.probability) >= 1.0
             and self.leader.units <= 1
+        )
 
     @property
     def should_search(self) -> bool:
@@ -82,16 +87,26 @@ def has_rejected_word(phrase: str) -> bool:
     return any(rejected.is_rejected(w) for w in phrase.split())
 
 
-def long_shot(db: DB, slug: str, mode: str, objective: Objective, leader: Leader | None,
-              ours: Leader | None, tried: set[str], min_n: int = 2) -> dict | None:
+def long_shot(
+    db: DB,
+    slug: str,
+    mode: str,
+    objective: Objective,
+    leader: Leader | None,
+    ours: Leader | None,
+    tried: set[str],
+    min_n: int = 2,
+) -> dict | None:
     """Best scored line whose mean beats the leader on the board while its lower bound does not."""
     question = db.question(slug)
     if not question or not question.get("jev_request") or leader is None:
         return None
     choices = list((question.get("raw") or {}).get("choices") or [])
     samples: dict[str, list[float]] = {}
-    for r in db.all("SELECT state, noul FROM oracle_samples WHERE qkey = ? AND noul IS NOT NULL",
-                    (question_key(question["jev_request"]),)):
+    for r in db.all(
+        "SELECT state, noul FROM oracle_samples WHERE qkey = ? AND noul IS NOT NULL",
+        (question_key(question["jev_request"]),),
+    ):
         samples.setdefault(r["state"], []).append(float(r["noul"]))
     shots = []
     for state, values in samples.items():
@@ -111,14 +126,25 @@ def long_shot(db: DB, slug: str, mode: str, objective: Objective, leader: Leader
             continue
         if phrase_banned(state):
             continue
-        return {"slug": slug, "mode": mode, "board": objective.board, "phrase": state, "p_mean": round(p, 4),
-                "p_lcb": round(lcb, 4), "spread": round(score.spread, 4), "n": score.n, "units": units,
-                "status": "long shot", "long_shot": True}
+        return {
+            "slug": slug,
+            "mode": mode,
+            "board": objective.board,
+            "phrase": state,
+            "p_mean": round(p, 4),
+            "p_lcb": round(lcb, 4),
+            "spread": round(score.spread, 4),
+            "n": score.n,
+            "units": units,
+            "status": "long shot",
+            "long_shot": True,
+        }
     return None
 
 
-def standings(db: DB, mode: str = STRICT, long_shots: bool = False,
-              board: str = HIGH_SCORES, targets: bool = False) -> list[Standing]:
+def standings(
+    db: DB, mode: str = STRICT, long_shots: bool = False, board: str = HIGH_SCORES, targets: bool = False
+) -> list[Standing]:
     """One row per question; with `targets`, also one row per answer of each searchable choice question."""
     me = db.me()
     entries: dict[tuple[str, str], list[dict]] = {}
@@ -138,8 +164,10 @@ def standings(db: DB, mode: str = STRICT, long_shots: bool = False,
     memories = by_slug(db, board) if mode == STRICT else {}
     target_memories = by_target(db, board) if mode == STRICT and targets else {}
     out = []
-    for row in db.all("SELECT slug, title, kind, goal, yes_threshold, json_extract(raw, '$.ranked') AS ranked, "
-                      "json_extract(raw, '$.choices') AS choices FROM questions ORDER BY slug"):
+    for row in db.all(
+        "SELECT slug, title, kind, goal, yes_threshold, json_extract(raw, '$.ranked') AS ranked, "
+        "json_extract(raw, '$.choices') AS choices FROM questions ORDER BY slug"
+    ):
         boards = {b: db.board(row["slug"], mode, b) for b in (board, "champions")}
         ranked = bool(row["ranked"])
         aims = [""]
@@ -148,31 +176,81 @@ def standings(db: DB, mode: str = STRICT, long_shots: bool = False,
         for target in aims:
             rows = target_rows(boards, board, target) if target else boards[board]
             memory = target_memories.get((row["slug"], target)) if target else memories.get(row["slug"])
-            out.append(standing(db, row, rows, entries.get((row["slug"], target), []), spent, memory, me, mode,
-                                board, ranked, long_shots and not target, target))
+            out.append(
+                standing(
+                    db,
+                    row,
+                    rows,
+                    entries.get((row["slug"], target), []),
+                    spent,
+                    memory,
+                    me,
+                    mode,
+                    board,
+                    ranked,
+                    long_shots and not target,
+                    target,
+                )
+            )
     return out
 
 
-def standing(db: DB, row, rows: list[dict], pool: list[dict], spent: dict[str, set[str]], memory, me: str,
-             mode: str, board: str, ranked: bool, long_shots: bool, target: str) -> Standing:
+def standing(
+    db: DB,
+    row,
+    rows: list[dict],
+    pool: list[dict],
+    spent: dict[str, set[str]],
+    memory,
+    me: str,
+    mode: str,
+    board: str,
+    ranked: bool,
+    long_shots: bool,
+    target: str,
+) -> Standing:
     leader = board_leader(rows, me, board=board)
     ours = board_leader([r for r in rows if me and r.get("userId") == me], me, include_ours=True, board=board)
     objective = objective_for(dict(row), board=board)
     we_lead = bool(ours) and (leader is None or objective.leader_key(ours) > objective.leader_key(leader))
+
     # Winning lines come first, so a saved long shot never hides a safe winner. On Shortest yes a gamble
     # (fewer words, some rolls over the threshold) is judged on its best roll, so it outranks longer lines.
-    pool.sort(key=lambda e: (not objective.beats(objective.entry_p(e, leader), e["units"], leader),
-                             tuple(-x for x in objective.key(max(e["p_mean"], objective.entry_p(e, leader)),
-                                                             e["units"])), -e["p_lcb"]))
+    def offer_p(entry: dict) -> float:
+        """A recorded site score replaces the local estimate for the next submit."""
+        known = site_p(entry)
+        return known if known is not None else objective.entry_p(entry, leader)
+
+    pool.sort(
+        key=lambda e: (
+            not objective.beats(offer_p(e), e["units"], leader),
+            tuple(-x for x in objective.key(offer_p(e), e["units"])),
+            -offer_p(e),
+        )
+    )
     best = pool[0] if pool else None
     beats = False
     if best:
-        p_win = objective.entry_p(best, leader)
+        p_win = offer_p(best)
         beats = objective.beats(p_win, best["units"], leader)
-        if ours and objective.leader_key(ours) >= objective.key(max(best["p_mean"], p_win), best["units"]):
+        if ours and objective.leader_key(ours) >= objective.key(p_win, best["units"]):
             beats = False
     shot = None
     if long_shots and mode == STRICT and not we_lead and is_searchable(row["kind"] or "noul", ranked):
         shot = long_shot(db, row["slug"], mode, objective, leader, ours, set(spent.get(row["slug"], ())))
-    return Standing(row["slug"], row["title"] or row["slug"], row["kind"] or "", row["goal"] or "yes",
-                    leader, ours, best, we_lead, beats, memory, shot, board, ranked, target)
+    return Standing(
+        row["slug"],
+        row["title"] or row["slug"],
+        row["kind"] or "",
+        row["goal"] or "yes",
+        leader,
+        ours,
+        best,
+        we_lead,
+        beats,
+        memory,
+        shot,
+        board,
+        ranked,
+        target,
+    )

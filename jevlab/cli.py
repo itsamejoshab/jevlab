@@ -486,8 +486,8 @@ def main(argv: list[str] | None = None) -> int:
         "--edition",
         choices=EDITIONS,
         default=EDITION,
-        help="game edition: jev (data/), kev (data/kev/), laya (data/laya/), or clef (data/clef/); "
-        "read before anything else loads",
+        help="game edition: jev (data/), kev (data/kev/), laya (data/laya/), clef (data/clef/), "
+        "or luna (data/luna/), or decider (data/decider/); read before anything else loads",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -587,7 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         "action", nargs="?", default="list", choices=["list", "queue", "unqueue", "drop", "import-jev", "import-from"]
     )
     p.add_argument(
-        "--from-edition", choices=["jev", "kev", "laya", "clef"], help="import-from: edition whose vault to read"
+        "--from-edition", choices=EDITIONS, help="import-from: edition whose vault to read"
     )
     p.add_argument("--q", help="question slug or play URL")
     p.add_argument("--phrase", help="exact phrase to queue/drop (default: the best candidate)")

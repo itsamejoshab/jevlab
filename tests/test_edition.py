@@ -11,8 +11,8 @@ from jevlab.site.client import SiteClient
 from jevlab.transfer import import_from_jev
 
 
-def test_editions_include_laya_and_clef():
-    assert EDITIONS == ("jev", "kev", "laya", "clef")
+def test_editions_include_the_mirrors():
+    assert EDITIONS == ("jev", "kev", "laya", "clef", "luna", "decider")
 
 
 def test_referer_follows_edition(tmp_path):
@@ -21,10 +21,14 @@ def test_referer_follows_edition(tmp_path):
     kev = SiteClient("kev", session_path=missing)._headers()["referer"]
     laya = SiteClient("laya", session_path=missing)._headers()["referer"]
     clef = SiteClient("clef", session_path=missing)._headers()["referer"]
+    luna = SiteClient("luna", session_path=missing)._headers()["referer"]
+    decider = SiteClient("decider", session_path=missing)._headers()["referer"]
     assert jev.endswith("/") and not jev.endswith("/jev/")
     assert kev.endswith("/kev/")
     assert laya.endswith("/laya/")
     assert clef.endswith("/clef/")
+    assert luna.endswith("/luna/")
+    assert decider.endswith("/decider/")
 
 
 def test_import_jev_refuses_the_jev_edition(monkeypatch):
@@ -94,6 +98,60 @@ def test_clef_edition_defaults(tmp_path):
         "assert ORACLE_CONCURRENCY == 1 and ORACLE_MAX_CONCURRENCY == 1\n"
         "assert CLEF_CACHE == Path.home() / '.cache' / 'jevlab' / 'huggingface'\n"
         "assert ROOT not in CLEF_CACHE.parents\n"
+        "assert TRIAGE_K == 40\n"
+    )
+    subprocess.check_call([sys.executable, "-c", script], env=env)
+
+
+def test_luna_edition_defaults(tmp_path):
+    env = os.environ.copy()
+    env["JEV_EDITION"] = "luna"
+    env["JEVLAB_DATA"] = str(tmp_path)
+    for key in (
+        "JEV_MODEL",
+        "JEV_ORACLE_BACKENDS",
+        "JEV_ORACLE_CONCURRENCY",
+        "JEV_ORACLE_MAX_CONCURRENCY",
+        "JEV_ORACLE_TIMEOUT",
+        "JEV_TRIAGE_K",
+    ):
+        env.pop(key, None)
+    script = (
+        "from jevlab.config import (DATA, EDITION, JEV_MODEL, MIRROR, ORACLE_BACKENDS,\n"
+        "                           ORACLE_CONCURRENCY, ORACLE_MAX_CONCURRENCY, ORACLE_TIMEOUT, TRIAGE_K)\n"
+        "assert EDITION == 'luna' and MIRROR\n"
+        "assert DATA.name == 'luna'\n"
+        "assert JEV_MODEL == 'openai/gpt-6-luna-decisions'\n"
+        "assert ORACLE_BACKENDS == ['openrouter']\n"
+        "assert ORACLE_CONCURRENCY == 4 and ORACLE_MAX_CONCURRENCY == 8\n"
+        "assert ORACLE_TIMEOUT == 60\n"
+        "assert TRIAGE_K == 40\n"
+    )
+    subprocess.check_call([sys.executable, "-c", script], env=env)
+
+
+def test_decider_edition_defaults(tmp_path):
+    env = os.environ.copy()
+    env["JEV_EDITION"] = "decider"
+    env["JEVLAB_DATA"] = str(tmp_path)
+    for key in (
+        "JEV_MODEL",
+        "JEV_ORACLE_BACKENDS",
+        "JEV_ORACLE_CONCURRENCY",
+        "JEV_ORACLE_MAX_CONCURRENCY",
+        "JEV_ORACLE_TIMEOUT",
+        "JEV_TRIAGE_K",
+    ):
+        env.pop(key, None)
+    script = (
+        "from jevlab.config import (DATA, EDITION, JEV_MODEL, MIRROR, ORACLE_BACKENDS,\n"
+        "                           ORACLE_CONCURRENCY, ORACLE_MAX_CONCURRENCY, ORACLE_TIMEOUT, TRIAGE_K)\n"
+        "assert EDITION == 'decider' and MIRROR\n"
+        "assert DATA.name == 'decider'\n"
+        "assert JEV_MODEL == 'perplexity/pplx-decider-v1-27b'\n"
+        "assert ORACLE_BACKENDS == ['openrouter']\n"
+        "assert ORACLE_CONCURRENCY == 4 and ORACLE_MAX_CONCURRENCY == 8\n"
+        "assert ORACLE_TIMEOUT == 60\n"
         "assert TRIAGE_K == 40\n"
     )
     subprocess.check_call([sys.executable, "-c", script], env=env)

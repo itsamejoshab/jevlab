@@ -74,6 +74,13 @@ CREATE TABLE IF NOT EXISTS oracle_samples (
     at REAL
 );
 CREATE INDEX IF NOT EXISTS oracle_hash ON oracle_samples(request_hash);
+CREATE TABLE IF NOT EXISTS oracle_refusals (
+    qkey TEXT NOT NULL,
+    state TEXT NOT NULL,
+    detail TEXT,
+    at REAL,
+    PRIMARY KEY (qkey, state)
+);
 CREATE TABLE IF NOT EXISTS lab_candidates (
     qkey TEXT,
     state TEXT,
@@ -130,8 +137,7 @@ class DB:
         """`readonly` opens another edition's database (a mirror reading Jev's) without schema work or writes."""
         self.path = path
         if readonly:
-            self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False,
-                                        isolation_level=None)
+            self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False, isolation_level=None)
         else:
             self.conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
@@ -207,8 +213,10 @@ class DB:
         if not row:
             return []
         rows = json.loads(row["rows"])
-        choices = self.one("SELECT json_extract(raw, '$.choices') AS choices FROM questions "
-                           "WHERE slug = ? AND kind = 'choice'", (slug,))
+        choices = self.one(
+            "SELECT json_extract(raw, '$.choices') AS choices FROM questions WHERE slug = ? AND kind = 'choice'",
+            (slug,),
+        )
         if choices and choices["choices"]:
             from .rules import drop_clashing
 

@@ -62,6 +62,8 @@ JEV_SOURCE_MODEL = os.environ.get("JEV_SOURCE_MODEL", "jev-latest")
 # Weights for the local Laya oracle. This stays outside the repo; `jevlab install-laya` downloads them here.
 LAYA_CACHE = Path(os.environ.get("JEV_LAYA_CACHE", Path.home() / ".cache" / "jevlab" / "huggingface")).expanduser()
 LAYA_DEVICE = os.environ.get("JEV_LAYA_DEVICE", "").strip()
+# States per forward pass. A search round is ~90 phrases; one pass of that size exhausted RAM and swap.
+LAYA_BATCH = int(os.environ.get("JEV_LAYA_BATCH", "8"))
 # Hugging Face repo for `jevlab install-clef`. Clef-flash is the 9B checkpoint. `Cloudflare/clef` is the 27B
 # model the site scores with.
 CLEF_REPO = os.environ.get("JEV_CLEF_REPO", "Cloudflare/clef-flash")

@@ -16,11 +16,13 @@ import hashlib
 import math
 import os
 import re
+import sqlite3
 import threading
 import time
 import warnings
 
 import numpy as np
+
 # Imported here, not inside fit(): per-question training and the cross-question prior both start in worker
 # threads, and two threads doing sklearn's first import at once can raise importlib's _DeadlockError.
 from sklearn.linear_model import BayesianRidge
@@ -33,6 +35,38 @@ warnings.filterwarnings("ignore", module="sklearn")
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 
+class _EmbeddingStore:
+    """The vector cache, in its own file. The hot database no longer carries these blobs."""
+
+    def __init__(self):
+        from ..config import embeddings_path
+
+        path = embeddings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS embeddings (model TEXT, text TEXT, vec BLOB, PRIMARY KEY (model, text))"
+        )
+        self.lock = threading.Lock()
+
+    def all(self, sql: str, params: tuple | list = ()) -> list[sqlite3.Row]:
+        with self.lock:
+            return list(self.conn.execute(sql, params))
+
+    def executemany(self, sql: str, rows: list) -> None:
+        with self.lock:
+            self.conn.execute("BEGIN")
+            try:
+                self.conn.executemany(sql, rows)
+                self.conn.execute("COMMIT")
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
+
+
 class OpenRouterEmbeddings:
     """POST /embeddings with batching; every vector is cached in SQLite so a text is embedded once."""
 
@@ -40,17 +74,15 @@ class OpenRouterEmbeddings:
         import httpx
 
         from ..config import OPENROUTER_BASE, OPENROUTER_KEY
-        from ..db import DB
 
         if not OPENROUTER_KEY:
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         self.model = model
         self.batch = batch
-        self.db = DB()
-        self.db.execute("CREATE TABLE IF NOT EXISTS embeddings (model TEXT, text TEXT, vec BLOB, "
-                        "PRIMARY KEY (model, text))")
-        self.http = httpx.Client(base_url=OPENROUTER_BASE, timeout=120,
-                                 headers={"Authorization": f"Bearer {OPENROUTER_KEY}"})
+        self.db = _EmbeddingStore()
+        self.http = httpx.Client(
+            base_url=OPENROUTER_BASE, timeout=120, headers={"Authorization": f"Bearer {OPENROUTER_KEY}"}
+        )
         self.cost = 0.0
 
     def _stored(self, texts: list[str]) -> dict[str, np.ndarray]:
@@ -58,8 +90,9 @@ class OpenRouterEmbeddings:
         for start in range(0, len(texts), 500):
             chunk = texts[start : start + 500]
             marks = ",".join("?" * len(chunk))
-            for row in self.db.all(f"SELECT text, vec FROM embeddings WHERE model = ? AND text IN ({marks})",
-                                   (self.model, *chunk)):
+            for row in self.db.all(
+                f"SELECT text, vec FROM embeddings WHERE model = ? AND text IN ({marks})", (self.model, *chunk)
+            ):
                 out[row["text"]] = np.frombuffer(row["vec"], dtype=np.float32)
         return out
 
@@ -85,8 +118,10 @@ class OpenRouterEmbeddings:
             self.cost += float((data.get("usage") or {}).get("cost") or 0)
             rows = sorted(data["data"], key=lambda r: r.get("index", 0))
             vectors = [np.asarray(r["embedding"], dtype=np.float32) for r in rows]
-            self.db.executemany("INSERT OR REPLACE INTO embeddings VALUES (?, ?, ?)",
-                                [(self.model, t, v.tobytes()) for t, v in zip(chunk, vectors)])
+            self.db.executemany(
+                "INSERT OR REPLACE INTO embeddings VALUES (?, ?, ?)",
+                [(self.model, t, v.tobytes()) for t, v in zip(chunk, vectors)],
+            )
             found.update(zip(chunk, vectors))
         for text in texts:
             yield found[text]
@@ -261,8 +296,7 @@ class WordSurrogate:
         E = self.embedder.embed(words)
         weights = np.arange(1, len(words) + 1, dtype=np.float32)
         weights /= weights.sum()
-        return np.concatenate([E.mean(axis=0), (E * weights[:, None]).sum(axis=0),
-                               [len(words) / self.length_scale]])
+        return np.concatenate([E.mean(axis=0), (E * weights[:, None]).sum(axis=0), [len(words) / self.length_scale]])
 
     def features(self, phrases: list[str]) -> np.ndarray:
         return np.stack([self._pool(p.split()) for p in phrases])
@@ -284,8 +318,14 @@ class WordSurrogate:
         cut = int(len(order) * 0.8)
 
         def make():
-            return MLPRegressor(hidden_layer_sizes=(self.hidden,), activation="relu", alpha=1e-3,
-                                max_iter=400, early_stopping=True, random_state=seed)
+            return MLPRegressor(
+                hidden_layer_sizes=(self.hidden,),
+                activation="relu",
+                alpha=1e-3,
+                max_iter=400,
+                early_stopping=True,
+                random_state=seed,
+            )
 
         holdout = make().fit(X[order[:cut]], y[order[:cut]])
         self.rho = spearman(holdout.predict(X[order[cut:]]), y[order[cut:]])

@@ -92,9 +92,7 @@ def test_casual_proxy_offers_the_strict_highest_line_where_it_takes_the_board(tm
     short_leader = json.dumps(
         [{"userId": "ada", "name": "Ada", "phrase": "yes please", "probability": 0.62, "wordCount": 2}]
     )
-    ceiling = json.dumps(
-        [{"userId": "ada", "name": "Ada", "phrase": "yes", "probability": 0.99, "wordCount": 1}]
-    )
+    ceiling = json.dumps([{"userId": "ada", "name": "Ada", "phrase": "yes", "probability": 0.99, "wordCount": 1}])
     db.execute("INSERT INTO boards VALUES ('short', 'word_chain', 'highScores', 0, ?)", (short_leader,))
     db.execute("INSERT INTO boards VALUES ('short', 'word_chain', 'shortestYes', 0, ?)", (short_leader,))
     db.execute("INSERT INTO boards VALUES ('tied', 'word_chain', 'highScores', 0, ?)", (ceiling,))
@@ -111,3 +109,45 @@ def test_casual_proxy_offers_the_strict_highest_line_where_it_takes_the_board(tm
     assert not any(slug == "short" and mode == "casual-shortest" for slug, mode, _ in found)
     assert not any(slug == "tied" for slug, mode, _ in found)
     assert not any(phrase == "one two" for _, _, phrase in found)
+
+
+def test_crosspost_reads_the_vault_once_and_keeps_every_empty_board(tmp_path, monkeypatch):
+    """Many questions must not re-read the vault per question. Empty boards still get the Strict line."""
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    db.execute("INSERT INTO snapshots (taken_at, edition, me, raw_dir) VALUES ('t', 'jev', 'me', '')")
+    phrase = "alpha beta gamma"
+    slugs = [f"q{i}" for i in range(12)]
+    for slug in slugs:
+        db.execute(
+            "INSERT INTO questions VALUES (?, 0, 'r1', ?, '', 'noul', 'yes', 0.2, 0.5, 'm', '{}', '{}')",
+            (slug, slug),
+        )
+        for mode in ("golf", "word_chain"):
+            for board in ("highScores", "shortestYes"):
+                db.execute("INSERT INTO boards VALUES (?, ?, ?, 0, '[]')", (slug, mode, board))
+            db.execute(
+                "INSERT INTO boards VALUES (?, ?, 'winner', 0, ?)",
+                (slug, mode, '{"userId": "them", "name": "Ada", "phrase": "taken"}'),
+            )
+        _save(slug, STRICT, phrase, 0.9, 3)
+        _save(slug, STRICT, "nope", 0.2, 1)
+
+    reads = {"n": 0}
+    original = vault.all_entries
+
+    def counting(*args, **kwargs):
+        reads["n"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(vault, "all_entries", counting)
+
+    golf = {(pick.slug, pick.mode.name, pick.entry["phrase"]) for pick in picks(db)}
+    golf_reads = reads["n"]
+    reads["n"] = 0
+    casual = {(pick.slug, pick.mode.name, pick.entry["phrase"]) for pick in casual_picks(db)}
+
+    assert golf_reads == 1
+    assert reads["n"] == 1
+    assert golf == {(slug, mode, phrase) for slug in slugs for mode in ("golf-highest", "golf-shortest")}
+    assert casual == {(slug, mode, phrase) for slug in slugs for mode in ("casual-highest", "casual-shortest")}

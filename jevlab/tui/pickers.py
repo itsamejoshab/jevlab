@@ -63,9 +63,16 @@ BANNER_GLYPHS = {
     "I": ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
     "R": ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██║  ██║", "╚═╝  ╚═╝"],
 }
-BANNER = {"kev": "KEVLAB", "laya": "LAYALAB", "clef": "CLEFLAB", "luna": "LUNALAB", "decider": "DECLAB"}.get(
-    EDITION, "JEVLAB"
-)
+
+
+def _banner_word() -> str:
+    return "JEVLAB"
+
+
+def _theatre() -> str:
+    return {"kev": "Kev", "laya": "Laya", "clef": "Clef", "luna": "Luna", "decider": "Decider"}.get(EDITION, "Jev")
+
+
 BANNER_FACE = ["#ffffff", "#e4eef8", "#c6d9ec", "#a8c4e0", "#8aafd4", "#6c9ac8"]
 BANNER_SHADOW = "#3a4f66"
 BANNER_ACCENT = "#8aafd4"
@@ -75,8 +82,9 @@ CLASSIFICATION = "TOP SECRET // JEV-ORCON // NOFORN // EYES ONLY"
 
 def banner() -> Text:
     text = Text(justify="center", no_wrap=True)
+    word = _banner_word()
     for row, face in enumerate(BANNER_FACE):
-        line = "   ".join(BANNER_GLYPHS[letter][row] for letter in BANNER)
+        line = "   ".join(BANNER_GLYPHS[letter][row] for letter in word)
         for ch in line:
             text.append(ch, style=f"bold {face}" if ch == "█" else BANNER_SHADOW)
         text.append("\n")
@@ -92,11 +100,15 @@ def dossier() -> Text:
     text.append(
         "Directorate of Offline Adversarial Lexicography & Stochastic Oracle Interrogation\n", style="bold italic"
     )
-    theatre = {"kev": "Kev", "laya": "Laya", "clef": "Clef", "luna": "Luna", "decider": "Decider"}.get(EDITION, "Jev")
     text.append(
-        f"Trick {theatre} Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B", style="dim"
+        f"Trick {_theatre()} Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B",
+        style="dim",
     )
     return text
+
+
+def edition_status() -> str:
+    return f"{_theatre()} Mode Activated"
 
 
 def card(value: Text | str, caption: str) -> Text:
@@ -116,11 +128,13 @@ class HomeScreen(Screen):
     }
     #home-banner { width: 100%; text-align: center; text-wrap: nowrap; }
     #home-dossier { width: 100%; margin-top: 1; text-align: center; }
+    #edition-status { width: 100%; margin-top: 1; text-align: center; text-style: bold; color: $accent; }
     #home-rule { color: $primary-darken-2; margin: 1 0 0 0; }
     #home-mode { height: 3; margin-top: 1; align: center middle; }
     #home-mode Label { padding: 1 1 0 0; text-style: bold; color: $accent; }
     #game-mode { width: 40; }
-    #edition { width: 16; margin-left: 2; }
+    #edition-label { margin-left: 2; }
+    #edition { width: 16; }
     #home-cards { height: 4; margin-top: 1; }
     .card { width: 1fr; height: 4; margin: 0 1; border: round $primary-darken-1; content-align: center middle; text-align: center;
             border-title-color: $accent; border-title-style: bold; border-title-align: center; }
@@ -141,6 +155,7 @@ class HomeScreen(Screen):
         with Vertical(id="home"):
             yield Static(banner(), id="home-banner")
             yield Static(dossier(), id="home-dossier")
+            yield Static(edition_status(), id="edition-status")
             yield Rule(id="home-rule", line_style="heavy")
             with Horizontal(id="home-mode"):
                 yield Label("GAME MODE")
@@ -150,6 +165,7 @@ class HomeScreen(Screen):
                     allow_blank=False,
                     id="game-mode",
                 )
+                yield Label("EDITION", id="edition-label")
                 yield Select([(e.capitalize(), e) for e in EDITIONS], value=EDITION, allow_blank=False, id="edition")
             with Horizontal(id="home-cards"):
                 yield Static(id="card-lead", classes="card")
@@ -185,7 +201,11 @@ class HomeScreen(Screen):
             self.app.game_mode = from_name(event.value)
             self.update_stats()
         elif event.select.id == "edition" and isinstance(event.value, str) and event.value != EDITION:
-            self.app.exit(event.value)
+            from ..config import activate
+
+            activate(event.value)
+            self.app.title = f"jevlab · {event.value}"
+            self.app.switch_screen(HomeScreen())
 
     def update_stats(self) -> None:
         mode: GameMode = self.app.game_mode
@@ -901,6 +921,10 @@ class PublishScreen(Screen):
         self.long_rows: list[Standing] = []
         self.golf_picks: list = []
         self.casual_picks: list = []
+        self._rows_off: list[Standing] | None = None
+        self._rows_long: list[Standing] | None = None
+        self._golf_all: list | None = None
+        self._casual_all: list | None = None
         self.busy = False
         self.stop_requested = False
         self.transcript = PublishLog()
@@ -948,24 +972,36 @@ class PublishScreen(Screen):
         self.query_one("#pub-log").border_title = "publisher"
         self.reload()
 
-    def reload(self) -> None:
+    def reload(self, full: bool = False) -> None:
+        if full:
+            self._rows_off = self._rows_long = self._golf_all = self._casual_all = None
         with_long = self.query_one("#long", Checkbox).value
         include_leading = self.query_one("#leading", Checkbox).value
         include_casual = self.query_one("#casual", Checkbox).value
         u = self.game_mode.unit_abbr
-        every = standings(
-            DB(), mode=self.game_mode.play_mode, long_shots=with_long, board=self.game_mode.board, targets=True
-        )
-        self.rows = sorted((s for s in every if s.entry_beats), key=lambda s: s.search_order)
-        self.long_rows = sorted((s for s in every if s.long_shot), key=lambda s: s.search_order)
+        cached = self._rows_long if with_long else self._rows_off
+        if cached is None:
+            cached = standings(
+                DB(), mode=self.game_mode.play_mode, long_shots=with_long, board=self.game_mode.board, targets=True
+            )
+            if with_long:
+                self._rows_long = cached
+            else:
+                self._rows_off = cached
+        self.rows = sorted((s for s in cached if s.entry_beats), key=lambda s: s.search_order)
+        self.long_rows = sorted((s for s in cached if s.long_shot), key=lambda s: s.search_order) if with_long else []
         from ..crosspost import picks as golf_picks
 
-        self.golf_picks = golf_picks(DB())
+        if self._golf_all is None:
+            self._golf_all = golf_picks(DB())
+        self.golf_picks = list(self._golf_all)
         self.casual_picks = []
         if include_casual:
             from ..crosspost import casual_picks
 
-            self.casual_picks = casual_picks(DB())
+            if self._casual_all is None:
+                self._casual_all = casual_picks(DB())
+            self.casual_picks = list(self._casual_all)
         if not include_leading:
             self.rows = [s for s in self.rows if not s.we_lead]
             self.golf_picks = [pick for pick in self.golf_picks if not _already_leading(pick)]
@@ -1083,7 +1119,7 @@ class PublishScreen(Screen):
         if event.button.id == "back":
             self.action_back()
         elif event.button.id == "refresh":
-            self.reload()
+            self.reload(full=True)
         elif event.button.id == "import-go":
             self.import_source()
         elif event.button.id == "publish":
@@ -1103,7 +1139,7 @@ class PublishScreen(Screen):
             import_from(DB(), source, log=self.note)
         except RuntimeError as error:
             self.note(str(error))
-        self.reload()
+        self.reload(full=True)
 
     def action_back(self) -> None:
         if self.busy:

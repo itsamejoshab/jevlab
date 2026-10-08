@@ -115,6 +115,9 @@ class Objective:
 
     def p_lcb(self, score: Score, z: float = 1.0) -> float:
         if self.kind == "noul" and self.goal == "no":
+            if score.moment_n is not None:
+                sd = max(score.spread, 0.01)
+                return (1.0 - score.mean) - z * sd / math.sqrt(max(score.n, 1))
             flipped = Score(score.state, [1 - s for s in score.samples])
             return flipped.lcb(z)
         return score.lcb(z)
@@ -143,8 +146,13 @@ class Objective:
     def gamble(self, score: Score, units: int, leader: Leader | None) -> bool:
         """A Shortest-yes line that is shorter than the leader and landed on at least one of GAMBLE_MIN_N+
         samples, but whose lower bound does not qualify."""
-        return (self.shortest and score.n >= GAMBLE_MIN_N and self.hits(score) > 0
-                and not self.qualifies(self.p_lcb(score)) and (leader is None or units < leader.units))
+        return (
+            self.shortest
+            and score.n >= GAMBLE_MIN_N
+            and self.hits(score) > 0
+            and not self.qualifies(self.p_lcb(score))
+            and (leader is None or units < leader.units)
+        )
 
     def win_p(self, score: Score, units: int, leader: Leader | None) -> float:
         """The probability a win is judged on: the lower bound, or for a Shortest-yes gamble its best roll."""
@@ -228,8 +236,9 @@ def target_rows(boards: dict, board: str, target: str) -> list[dict]:
     return rows
 
 
-def board_leader(rows: list[dict], me: str = "", include_ours: bool = False, unit_key: str = "wordCount",
-                 board: str = HIGH_SCORES) -> Leader | None:
+def board_leader(
+    rows: list[dict], me: str = "", include_ours: bool = False, unit_key: str = "wordCount", board: str = HIGH_SCORES
+) -> Leader | None:
     """Top of a board. Our own row is skipped unless include_ours."""
     shortest = board == SHORTEST_YES
     best: Leader | None = None

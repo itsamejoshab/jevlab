@@ -299,8 +299,28 @@ class HomeScreen(Screen):
 SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"))
 
 
+def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log) -> None:
+    """Snapshot each edition on its own database, then come back to the one that was open."""
+    from ..config import activate
+    from ..site.snapshot import take_snapshot
+
+    origin = EDITION
+    try:
+        for edition in editions:
+            try:
+                log(f"{edition}: opening its database")
+                activate(edition)
+                take_snapshot(DB(), modes=modes, log=log)
+            except Exception as error:
+                log(f"{edition} snapshot failed: {error!r}")
+    finally:
+        if EDITION != origin:
+            log(f"back to {origin}")
+            activate(origin)
+
+
 class SnapshotScreen(Screen):
-    """Pick play modes for this edition. Other editions are shown disabled."""
+    """Pick editions and play modes. One start snapshots each checked edition in turn."""
 
     CSS = """
     #snap-actions { height: auto; padding: 0 1; margin-bottom: 1; }
@@ -329,13 +349,7 @@ class SnapshotScreen(Screen):
         with Horizontal(id="snap-editions"):
             yield Label("Editions")
             for edition in EDITIONS:
-                yield Setting(
-                    edition.capitalize(),
-                    value=edition == EDITION,
-                    disabled=edition != EDITION,
-                    id=f"snap-ed-{edition}",
-                    compact=True,
-                )
+                yield Setting(edition.capitalize(), value=True, id=f"snap-ed-{edition}", compact=True)
         with Horizontal(id="snap-modes"):
             yield Label("Modes")
             for label, mode in SNAPSHOT_MODES:
@@ -345,7 +359,7 @@ class SnapshotScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#snap-help", Static).update(
-            f"Snapshot {EDITION}. Other editions are disabled; switch to snapshot them. "
+            "One start snapshots each checked edition, switching its database, then returns here. "
             "Strict, Golf, and Casual each fill Highest and Shortest."
         )
         self.query_one("#snap-log").border_title = "snapshot"
@@ -366,28 +380,27 @@ class SnapshotScreen(Screen):
     def start(self) -> None:
         if self.busy:
             return
+        editions = tuple(edition for edition in EDITIONS if self.query_one(f"#snap-ed-{edition}", Checkbox).value)
         modes = tuple(mode for _label, mode in SNAPSHOT_MODES if self.query_one(f"#snap-mode-{mode}", Checkbox).value)
+        if not editions:
+            self.notify("pick at least one edition", severity="warning")
+            return
         if not modes:
             self.notify("pick at least one play mode", severity="warning")
             return
         self.busy = True
         self.query_one("#start", Button).disabled = True
-        self.snapshot_worker(modes)
+        self.snapshot_worker(editions, modes)
 
     @work(thread=True, exclusive=True)
-    def snapshot_worker(self, modes: tuple[str, ...]) -> None:
-        from ..site.snapshot import take_snapshot
-
+    def snapshot_worker(self, editions: tuple[str, ...], modes: tuple[str, ...]) -> None:
         log = self.query_one("#snap-log", RichLog)
 
         def write(message: str) -> None:
             activity.log("snapshot", message)
             self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
 
-        try:
-            take_snapshot(DB(), modes=modes, log=write)
-        except Exception as error:
-            write(f"snapshot failed: {error!r}")
+        run_snapshots(editions, modes, write)
 
         def done() -> None:
             self.busy = False

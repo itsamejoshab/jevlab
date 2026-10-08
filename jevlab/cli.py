@@ -509,7 +509,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("snapshot", help="pull questions, boards, word impacts, and our attempts into data/jev.db")
     p.add_argument("--q", nargs="*", help="limit to these slugs or play URLs")
     p.add_argument("--modes", nargs="*", help="strict casual golf emoji (default all)")
-    p.add_argument("--workers", type=int, default=6)
+    p.add_argument("--workers", type=int, default=16)
     p.set_defaults(func=cmd_snapshot)
 
     p = sub.add_parser("calibrate", help="replay site-scored phrases through the oracle and report parity")

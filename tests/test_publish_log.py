@@ -335,8 +335,38 @@ def test_snapshot_screen_toggles_are_one_line() -> None:
             assert casual.value is True
             assert current.region.y == other.region.y
             assert casual.region.y == strict.region.y
-            assert other.disabled
+            assert current.value is True
+            assert other.value is True
+            assert not other.disabled
             assert strict.region.y > current.region.y
             assert start.region.y < current.region.y
 
     asyncio.run(check())
+
+
+def test_snapshot_switches_each_edition_then_returns(monkeypatch):
+    from jevlab.tui import pickers
+
+    monkeypatch.setattr(pickers, "EDITION", "jev")
+    seen = []
+
+    def activate(edition):
+        pickers.EDITION = edition
+        seen.append(("on", edition))
+
+    def take(db, modes, log):
+        seen.append(("snap", pickers.EDITION, db, modes))
+
+    monkeypatch.setattr(pickers, "DB", lambda: "db")
+    monkeypatch.setattr("jevlab.config.activate", activate)
+    monkeypatch.setattr("jevlab.site.snapshot.take_snapshot", take)
+
+    pickers.run_snapshots(("kev", "laya"), ("strict_chain",), lambda message: seen.append(("log", message)))
+
+    assert [item for item in seen if item[0] != "log"] == [
+        ("on", "kev"),
+        ("snap", "kev", "db", ("strict_chain",)),
+        ("on", "laya"),
+        ("snap", "laya", "db", ("strict_chain",)),
+        ("on", "jev"),
+    ]

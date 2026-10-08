@@ -17,7 +17,7 @@ from .. import activity, vault
 from ..boards import Standing, standings
 from ..config import EDITION, EDITIONS
 from ..db import DB
-from ..modes import GOLF, HOME_MODES, GameMode, from_name
+from ..modes import HOME_MODES, GameMode, from_name
 from ..objective import site_round
 from ..search.engine import LEVELS
 from .copyselect import SelectableRichLog
@@ -63,7 +63,7 @@ BANNER_GLYPHS = {
     "I": ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
     "R": ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██║  ██║", "╚═╝  ╚═╝"],
 }
-BANNER = {"kev": "KEVLAB", "laya": "LAYALAB", "clef": "CLEFLAB", "luna": "LUNALAB", "decider": "DECIDERLAB"}.get(
+BANNER = {"kev": "KEVLAB", "laya": "LAYALAB", "clef": "CLEFLAB", "luna": "LUNALAB", "decider": "DECLAB"}.get(
     EDITION, "JEVLAB"
 )
 BANNER_FACE = ["#ffffff", "#e4eef8", "#c6d9ec", "#a8c4e0", "#8aafd4", "#6c9ac8"]
@@ -326,7 +326,7 @@ class SnapshotScreen(Screen):
     def on_mount(self) -> None:
         self.query_one("#snap-help", Static).update(
             f"Snapshot {EDITION}. Other editions are disabled; switch to snapshot them. "
-            "Strict and Golf each fill Highest and Shortest."
+            "Strict, Golf, and Casual each fill Highest and Shortest."
         )
         self.query_one("#snap-log").border_title = "snapshot"
         self.busy = False
@@ -900,9 +900,11 @@ class PublishScreen(Screen):
         self.rows: list[Standing] = []
         self.long_rows: list[Standing] = []
         self.golf_picks: list = []
+        self.casual_picks: list = []
         self.busy = False
         self.stop_requested = False
         self.transcript = PublishLog()
+        self._chain_lines = 0
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="pub-body"):
@@ -920,8 +922,11 @@ class PublishScreen(Screen):
                         yield Setting("Near-misses", False, id="long", compact=True)
                         yield Static("include long shots", classes="hint")
                     with Horizontal(classes="opt"):
-                        yield Setting("Exclude me leading", True, id="leading", compact=True)
-                        yield Static("skip boards we already lead", classes="hint")
+                        yield Setting("Include me leading", False, id="leading", compact=True)
+                        yield Static("boards we already lead", classes="hint")
+                    with Horizontal(classes="opt"):
+                        yield Setting("Include casual proxy", False, id="casual", compact=True)
+                        yield Static("strict highest on casual boards", classes="hint")
                     with Horizontal(classes="opt"):
                         yield Label("Re-rolls")
                         yield Input("3", id="rerolls", type="integer", compact=True)
@@ -945,7 +950,8 @@ class PublishScreen(Screen):
 
     def reload(self) -> None:
         with_long = self.query_one("#long", Checkbox).value
-        exclude_leading = self.query_one("#leading", Checkbox).value
+        include_leading = self.query_one("#leading", Checkbox).value
+        include_casual = self.query_one("#casual", Checkbox).value
         u = self.game_mode.unit_abbr
         every = standings(
             DB(), mode=self.game_mode.play_mode, long_shots=with_long, board=self.game_mode.board, targets=True
@@ -955,9 +961,15 @@ class PublishScreen(Screen):
         from ..crosspost import picks as golf_picks
 
         self.golf_picks = golf_picks(DB())
-        if exclude_leading:
+        self.casual_picks = []
+        if include_casual:
+            from ..crosspost import casual_picks
+
+            self.casual_picks = casual_picks(DB())
+        if not include_leading:
             self.rows = [s for s in self.rows if not s.we_lead]
             self.golf_picks = [pick for pick in self.golf_picks if not _already_leading(pick)]
+            self.casual_picks = [pick for pick in self.casual_picks if not _already_leading(pick)]
         picker = self.query_one("#pub-picker", SelectionList)
         picker.clear_options()
         for s in self.rows:
@@ -997,6 +1009,16 @@ class PublishScreen(Screen):
             prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
             prompt.append(entry["phrase"][:80])
             picker.add_option(Selection(prompt, f"golf:{index}", True))
+        for index, pick in enumerate(self.casual_picks):
+            entry = pick.entry
+            prompt = Text()
+            prompt.append(f"CASUAL {pick.mode.label} ", style="bold cyan")
+            prompt.append(f"{entry['p_mean']:.3f}/{pick.units}w  ", style="bold cyan")
+            lead = "empty" if pick.leader is None else f"{pick.leader.probability:.2f}/{pick.leader.units}w"
+            prompt.append(f"vs {lead}  ", style="yellow")
+            prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
+            prompt.append(entry["phrase"][:80])
+            picker.add_option(Selection(prompt, f"casual:{index}", True))
         help_text = Text()
         help_text.append(f"Publish {self.game_mode.label}  ", style="bold")
         if self.rows:
@@ -1015,6 +1037,13 @@ class PublishScreen(Screen):
             "including when you already lead Strict. Uncheck one to hold it this run.",
             style="magenta",
         )
+        if include_casual:
+            help_text.append(
+                f"\n{len(self.casual_picks)} Casual lines: the Strict Highest answer on a Casual board it would "
+                "take, including an empty board. A 1–2 word Casual leader usually keeps a tied score. "
+                "Uncheck one to hold it this run.",
+                style="cyan",
+            )
         if with_long:
             help_text.append(
                 f"\n{len(self.long_rows)} long shots: lines whose average, but not lower bound, beats "
@@ -1026,7 +1055,7 @@ class PublishScreen(Screen):
         self.query_one("#pub-help", Static).update(help_text)
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        if event.checkbox.id in ("long", "leading") and not self.busy:
+        if event.checkbox.id in ("long", "leading", "casual") and not self.busy:
             self.reload()
 
     def note(self, message: str) -> None:
@@ -1035,8 +1064,20 @@ class PublishScreen(Screen):
             if line.strip():
                 activity.log("publish", line)
         rendered = self.transcript.render(message)
-        if rendered.plain.strip():
-            self.query_one("#pub-log", RichLog).write(rendered)
+        if not rendered.plain.strip():
+            return
+        log = self.query_one("#pub-log", SelectableRichLog)
+        follow = log.is_vertical_scroll_end
+        one_line = self.transcript.chain is not None and "\n" not in rendered.plain
+        if one_line and self.transcript.extends_chain:
+            written = log.replace_tail(rendered, self._chain_lines, scroll_end=follow, one_line=True)
+        elif one_line:
+            written = log.append_one_line(rendered, scroll_end=follow)
+        else:
+            before = len(log.lines)
+            log.write(rendered, scroll_end=follow)
+            written = len(log.lines) - before
+        self._chain_lines = written if one_line else 0
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
@@ -1105,29 +1146,30 @@ class PublishScreen(Screen):
                 )
                 vault.set_status(s.slug, e["mode"], e["phrase"], "queued", board, target=s.target)
                 entries.append(e | {"status": "queued", "board": board, "target": s.target})
-        from ..crosspost import queue as queue_golf
+        from ..crosspost import queue as queue_cross
 
-        for index, pick in enumerate(self.golf_picks):
-            if f"golf:{index}" not in chosen:
-                continue
-            queue_golf(DB(), [pick])
-            entry = pick.entry
-            entries.append(
-                {
-                    "slug": pick.slug,
-                    "mode": GOLF,
-                    "phrase": entry["phrase"],
-                    "p_mean": entry["p_mean"],
-                    "p_lcb": entry["p_lcb"],
-                    "spread": entry.get("spread", 0.0),
-                    "n": entry.get("n", 0),
-                    "units": pick.units,
-                    "board": pick.mode.board,
-                    "target": pick.target,
-                    "status": "queued",
-                    "estimated_from": entry.get("estimated_from") or "",
-                }
-            )
+        for prefix, picks in (("golf", self.golf_picks), ("casual", self.casual_picks)):
+            for index, pick in enumerate(picks):
+                if f"{prefix}:{index}" not in chosen:
+                    continue
+                queue_cross(DB(), [pick])
+                entry = pick.entry
+                entries.append(
+                    {
+                        "slug": pick.slug,
+                        "mode": pick.mode.play_mode,
+                        "phrase": entry["phrase"],
+                        "p_mean": entry["p_mean"],
+                        "p_lcb": entry["p_lcb"],
+                        "spread": entry.get("spread", 0.0),
+                        "n": entry.get("n", 0),
+                        "units": pick.units,
+                        "board": pick.mode.board,
+                        "target": pick.target,
+                        "status": "queued",
+                        "estimated_from": entry.get("estimated_from") or "",
+                    }
+                )
         if not entries:
             self.notify("nothing selected", severity="warning")
             return

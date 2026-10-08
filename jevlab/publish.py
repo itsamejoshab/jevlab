@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from . import vault
 from .config import DATA
 from .db import DB
-from .modes import GOLF, HIGH_SCORES, STRICT, from_board
+from .modes import CASUAL, GOLF, HIGH_SCORES, STRICT, from_board
 from .objective import Leader, Objective, board_leader, objective_for, site_round, target_rows
 from .oracle import Oracle, question_key
 from .rules import RuleError, check_phrase, drop_clashing, option_clash, rejected
@@ -425,7 +425,7 @@ def publish_entry(
     known_ban = hit_ban(phrase)
     if known_ban:
         raise BannedPhrase(phrase, known_ban)
-    if mode not in (STRICT, GOLF):
+    if mode not in (STRICT, GOLF, CASUAL):
         raise PublishError(f"mode {mode} is not supported by the publisher yet")
     game_mode = from_board(board, mode)
     u = game_mode.unit_abbr

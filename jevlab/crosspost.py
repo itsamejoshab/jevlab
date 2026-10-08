@@ -13,7 +13,17 @@ from dataclasses import dataclass
 from . import vault
 from .vault import site_p
 from .db import DB
-from .modes import GOLF, GOLF_HIGHEST, GOLF_SHORTEST, STRICT, GameMode
+from .modes import (
+    CASUAL,
+    CASUAL_HIGHEST,
+    CASUAL_SHORTEST,
+    GOLF,
+    GOLF_HIGHEST,
+    GOLF_SHORTEST,
+    HIGH_SCORES,
+    STRICT,
+    GameMode,
+)
 from .objective import Leader, board_leader, objective_for, target_rows
 
 
@@ -87,13 +97,63 @@ def picks(
     return out
 
 
+def casual_picks(db: DB, slugs: list[str] | None = None) -> list[Pick]:
+    """The Strict Highest answer, on each Casual board that answer would take.
+
+    Casual ranks by words, the same way Strict Highest does. A leader already at one or two words wins a
+    tie against a longer line at the same score, so a crowded board usually yields nothing. An empty board
+    is a take, temporary or not. Shortest yes still requires the line to clear that question's yes line.
+    """
+    me = db.me()
+    out = []
+    for (slug, target), entries in sorted(strict_pool(slugs).items()):
+        question = db.question(slug)
+        if not question:
+            continue
+        highest = objective_for(question, unit="word", board=HIGH_SCORES)
+        ranked_src = []
+        for entry in entries:
+            recorded = site_p(entry)
+            p = recorded if recorded is not None else float(entry["p_lcb"])
+            mean = recorded if recorded is not None else float(entry["p_mean"])
+            units = highest.units(entry["phrase"])
+            ranked_src.append((highest.key(p, units), mean, units, entry))
+        _, _, units, entry = max(ranked_src, key=lambda row: (row[0], row[1]))
+        for mode in (CASUAL_HIGHEST, CASUAL_SHORTEST):
+            known = {
+                (item["slug"], item.get("target") or "", item["phrase"]): site_p(item)
+                for item in vault.all_entries(mode.board)
+                if item["mode"] == CASUAL and site_p(item) is not None
+            }
+            if target:
+                rows = target_rows(
+                    {b: db.board(slug, CASUAL, b) for b in (mode.board, "champions")}, mode.board, target
+                )
+            else:
+                rows = db.board(slug, CASUAL, mode.board)
+            leader = board_leader(rows, me, board=mode.board)
+            ours = board_leader(
+                [r for r in rows if me and r.get("userId") == me], me, include_ours=True, board=mode.board
+            )
+            objective = objective_for(question, unit="word", board=mode.board)
+            recorded = known.get((slug, target, entry["phrase"]))
+            p = recorded if recorded is not None else float(entry["p_lcb"])
+            mean = recorded if recorded is not None else float(entry["p_mean"])
+            if not objective.beats(p, units, leader):
+                continue
+            if ours and objective.leader_key(ours) >= objective.key(mean, units):
+                continue
+            out.append(Pick(slug, mode, entry, units, leader, ours, target))
+    return out
+
+
 def queue(db: DB, found: list[Pick]) -> None:
     for pick in found:
         e = pick.entry
         question = db.question(pick.slug) or {}
         vault.save(
             pick.slug,
-            GOLF,
+            pick.mode.play_mode,
             e["phrase"],
             p_mean=e["p_mean"],
             p_lcb=e["p_lcb"],

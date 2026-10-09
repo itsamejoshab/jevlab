@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 import httpx
 
 from .. import netlog
-from ..config import EDITION, ROOT, SITE_BASE
+from ..config import ROOT, SITE_BASE
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 SESSION_PATH = ROOT / "session.json"
@@ -154,10 +155,15 @@ def decode_jev_request(raw: str | None) -> dict | None:
 
 
 class SiteClient:
-    def __init__(self, edition: str = EDITION, delay: float = 0.01, session_path: Path = SESSION_PATH):
+    def __init__(self, edition: str | None = None, delay: float = 0.01, session_path: Path = SESSION_PATH):
+        if edition is None:
+            from ..config import EDITION
+
+            edition = EDITION
         self.edition = edition
         self.delay = delay
         self.session_path = session_path
+        self._cookie_lock = threading.Lock()
         self._next_ok = 0.0
         self.cookies: dict[str, str] = {}
         if session_path.exists():
@@ -207,8 +213,9 @@ class SiteClient:
             raise SiteError(f"no reply ({error!r})", status="timeout") from error
         except httpx.TransportError as error:
             raise SiteError(f"connection failed ({error!r})", status="network") from error
-        for name_, value in response.cookies.items():
-            self.cookies[name_] = value
+        with self._cookie_lock:
+            for name_, value in response.cookies.items():
+                self.cookies[name_] = value
         try:
             decoded = _decode(response.json(), {})
         except json.JSONDecodeError as error:

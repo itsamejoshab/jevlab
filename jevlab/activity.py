@@ -21,6 +21,22 @@ BACKUPS = 2
 _logger: logging.Logger | None = None
 
 
+def reopen() -> None:
+    """Close the log so the next line follows the edition that is current now."""
+    global _logger, PATH
+    from .config import DATA, EDITION
+
+    PATH = DATA / "activity.log"
+    if _logger is None:
+        return
+    for handler in list(_logger.handlers):
+        _logger.removeHandler(handler)
+        handler.close()
+    _logger = None
+    # EDITION is read when the handler is built again.
+    globals()["EDITION"] = EDITION
+
+
 def _get() -> logging.Logger | None:
     global _logger
     if _logger is None:
@@ -32,8 +48,9 @@ def _get() -> logging.Logger | None:
             handler = RotatingFileHandler(PATH, maxBytes=MAX_BYTES, backupCount=BACKUPS, encoding="utf-8")
         except OSError:
             return None
-        handler.setFormatter(logging.Formatter(f"%(asctime)s {EDITION} {os.getpid()} %(source)s %(message)s",
-                                               "%Y-%m-%d %H:%M:%S"))
+        handler.setFormatter(
+            logging.Formatter(f"%(asctime)s {EDITION} {os.getpid()} %(source)s %(message)s", "%Y-%m-%d %H:%M:%S")
+        )
         logger.addHandler(handler)
         _logger = logger
     return _logger

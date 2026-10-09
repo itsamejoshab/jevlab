@@ -12,6 +12,7 @@ SHORTEST_YES = "shortestYes"
 BOARDS = (HIGH_SCORES, SHORTEST_YES)
 STRICT = "strict_chain"
 GOLF = "golf"
+CASUAL = "word_chain"
 SEARCHABLE_KINDS = ("noul", "choice", "score")
 
 
@@ -54,14 +55,16 @@ class GameMode:
 
 
 HIGHEST = GameMode("highest", "Strict Highest")
-SHORTEST = GameMode("shortest", "Strict Shortest yes", board=SHORTEST_YES)
+SHORTEST = GameMode("shortest", "Strict Shortest", board=SHORTEST_YES)
 GAME_MODES = (HIGHEST, SHORTEST)
 GOLF_HIGHEST = GameMode("golf-highest", "Golf Highest", play_mode=GOLF)
-GOLF_SHORTEST = GameMode("golf-shortest", "Golf Shortest yes", play_mode=GOLF, board=SHORTEST_YES)
+GOLF_SHORTEST = GameMode("golf-shortest", "Golf Shortest", play_mode=GOLF, board=SHORTEST_YES)
+CASUAL_HIGHEST = GameMode("casual-highest", "Casual Highest", play_mode=CASUAL)
+CASUAL_SHORTEST = GameMode("casual-shortest", "Casual Shortest", play_mode=CASUAL, board=SHORTEST_YES)
 LIVE = GameMode("live", "Live Mode")
-PUBLISH_MODES = GAME_MODES + (GOLF_HIGHEST, GOLF_SHORTEST)
+PUBLISH_MODES = GAME_MODES + (GOLF_HIGHEST, GOLF_SHORTEST, CASUAL_HIGHEST, CASUAL_SHORTEST)
 MODES = PUBLISH_MODES + (LIVE,)
-# Golf is a Strict follow-up, not a mode you enter from home.
+# Golf and the casual proxy are Strict follow-ups, not modes you enter from home.
 HOME_MODES = GAME_MODES + (LIVE,)
 
 

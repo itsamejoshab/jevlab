@@ -18,7 +18,6 @@ from ..config import (
     LONG_TARGET,
     PLAN_MODEL,
     PLATEAU_LEADER_WORDS,
-    TRIAGE_K,
 )
 from ..db import DB
 from ..llm import LLM, LLMError
@@ -281,7 +280,7 @@ class Engine:
         board: str = HIGH_SCORES,
         target: str = "",
         win_extra: int = 0,
-        triage_k: int = TRIAGE_K,
+        triage_k: int | None = None,
         question: dict | None = None,
     ):
         """`target` aims a choice question's search at one answer: scores are P(target), the leader is the best
@@ -296,6 +295,10 @@ class Engine:
             raise ValueError("v1 searches strict_chain only")
         if board not in BOARDS:
             raise ValueError(f"unknown board {board!r}")
+        if triage_k is None:
+            from ..config import TRIAGE_K
+
+            triage_k = TRIAGE_K
         self.db = db
         self.slug = slug
         self.mode = mode

@@ -15,6 +15,44 @@ def test_editions_include_the_mirrors():
     assert EDITIONS == ("jev", "kev", "laya", "clef", "luna", "decider")
 
 
+def test_activate_switches_edition_in_this_process(tmp_path, monkeypatch):
+    from jevlab import config, vault
+    from jevlab.db import DB
+
+    saved_data = config.JEV_DATA
+    saved_edition = config.EDITION
+    overrides = (
+        "JEV_MODEL",
+        "JEV_ORACLE_BACKENDS",
+        "JEV_ORACLE_CONCURRENCY",
+        "JEV_ORACLE_MAX_CONCURRENCY",
+        "JEV_TRIAGE_K",
+        "JEV_ORACLE_TIMEOUT",
+    )
+    saved_env = {key: os.environ.get(key) for key in overrides}
+    for key in overrides:
+        monkeypatch.delenv(key, raising=False)
+    config.JEV_DATA = tmp_path
+    try:
+        config.activate("kev")
+        assert config.EDITION == "kev"
+        assert config.DB_PATH == tmp_path / "kev" / "jev.db"
+        assert config.VAULT == tmp_path / "kev" / "vault"
+        assert config.JEV_MODEL == "jaredpalmer/kev-4b"
+        assert config.ORACLE_BACKENDS == ["openrouter"]
+        assert config.TRIAGE_K == 40
+        assert DB().path == config.DB_PATH
+        assert vault.VAULT == config.VAULT
+    finally:
+        config.JEV_DATA = saved_data
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        config.activate(saved_edition)
+
+
 def test_referer_follows_edition(tmp_path):
     missing = tmp_path / "no-session.json"
     jev = SiteClient("jev", session_path=missing)._headers()["referer"]

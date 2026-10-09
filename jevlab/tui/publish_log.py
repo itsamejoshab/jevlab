@@ -2,7 +2,8 @@
 
 The publisher still speaks in the same plain lines the CLI prints. This only
 changes how the submit screen shows them: one block per phrase, with the
-result on its own line.
+result on its own line. Word-by-word chain edits share one line
+(`+exactly +more`), and each new word overwrites that line.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ _LEADER = re.compile(r"^\[(?P<where>.+)\] live leader (?P<rest>.*)$")
 _REROLL = re.compile(r"^re-roll (?P<n>\d+): (?P<p>[0-9.]+) \(best (?P<best>[0-9.]+)\)$")
 _POSTED = re.compile(r"^= (?P<units>\d+c) (?P<p>[0-9.]+)$")
 _CHAIN = re.compile(r"^(?P<op>[+-]) (?P<word>.+?) +(?P<p>[0-9.]+)$")
+_POP = re.compile(r"^- (?P<word>\S.*)$")
 _ORACLE = re.compile(r"^oracle re-check (?P<fresh>[0-9.]+) \(vault said (?P<vault>[0-9.]+)\)$")
 _RESCORE = re.compile(
     r"^(?P<how>re-scoring the phrase|re-rolling the last word) (?P<n>\d+) time\(s\); "
@@ -37,26 +39,55 @@ class PublishLog:
         self.total = 0
         self.best: float | None = None
         self.slug = ""
+        self.chain: Text | None = None
+        self.extends_chain = False
+        self._line_kind = "other"
 
     def render(self, message: str) -> Text:
-        rendered = Text()
-        first = True
+        was_open = self.chain is not None
+        parts: list[tuple[str, Text]] = []
         for raw in str(message).splitlines():
             piece = self._one(raw.strip())
             if piece is None:
                 continue
+            if self._line_kind == "chain" and self.chain is not None:
+                parts.append(("chain", self.chain.copy()))
+            else:
+                parts.append(("other", piece))
+        self.extends_chain = False
+        if not parts:
+            return Text("")
+        if all(kind == "chain" for kind, _ in parts):
+            self.extends_chain = was_open
+            return parts[-1][1]
+        latest_chain = next((piece for kind, piece in reversed(parts) if kind == "chain"), None)
+        rendered = Text()
+        first = True
+        emitted_chain = False
+        for kind, piece in parts:
+            if kind == "chain":
+                if emitted_chain or latest_chain is None:
+                    continue
+                piece = latest_chain
+                emitted_chain = True
             if not first:
                 rendered.append("\n")
             first = False
             rendered.append_text(piece)
+        self.extends_chain = was_open and parts[0][0] == "chain"
         return rendered
 
     def _one(self, line: str) -> Text | None:
+        self._line_kind = "other"
         if not line:
+            self.chain = None
             return Text("")
         matched = self._match(line)
         if matched is not None:
+            if self._line_kind != "chain":
+                self.chain = None
             return matched
+        self.chain = None
         text = Text("  " + line)
         if line.startswith("stopped") or "rate limited" in line or line.startswith("busy"):
             text.stylize("yellow")
@@ -99,10 +130,9 @@ class PublishLog:
         if found := _REROLL.match(line):
             return self._reroll(found)
         if found := _CHAIN.match(line):
-            self._note(float(found["p"]))
-            text = Text(f"  {found['op']} {found['word'].strip()}", style="cyan")
-            text.append(f"  {found['p']}", style="bold")
-            return text
+            return self._append_chain(found["op"], found["word"], found["p"])
+        if found := _POP.match(line):
+            return self._append_chain("-", found["word"], None)
         if found := _ORACLE.match(line):
             text = Text("  oracle  ", style="dim")
             text.append(found["fresh"], style="bold")
@@ -184,6 +214,18 @@ class PublishLog:
         if "dry run" in found["tail"]:
             text.append("  · nothing sent", style="yellow")
         return text
+
+    def _append_chain(self, op: str, word: str, score: str | None) -> Text:
+        if score is not None:
+            self._note(float(score))
+        self._line_kind = "chain"
+        style = "cyan" if op == "+" else "yellow"
+        if self.chain is None:
+            self.chain = Text("  ")
+        else:
+            self.chain.append(" ")
+        self.chain.append(f"{op}{word.strip()}", style=style)
+        return self.chain
 
     def _note(self, score: float) -> None:
         if self.best is None or score > self.best:

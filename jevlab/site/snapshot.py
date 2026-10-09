@@ -23,7 +23,7 @@ def take_snapshot(
     client: SiteClient | None = None,
     slugs: list[str] | None = None,
     modes: tuple[str, ...] = MODES,
-    workers: int = 6,
+    workers: int = 16,
     log=print,
 ) -> int:
     client = client or SiteClient()
@@ -70,6 +70,7 @@ def take_snapshot(
     realign_vault_goals(db, previous_goals, {q["slug"] for q in questions}, log)
 
     jobs = [(q, mode) for q in questions for mode in modes]
+    log(f"fetching {len(jobs)} questions, {workers} at a time")
 
     def fetch(job):
         question, mode = job
@@ -80,13 +81,15 @@ def take_snapshot(
             ("words", lambda: client.words(rev, mode)),
             ("attempt", lambda: client.attempt(rev, mode) if me else None),
         ):
-            for tries in range(3):
+            for tries in range(4):
                 try:
                     out[key] = fn()
                     break
                 except SiteError as error:
                     out[key + "_error"] = str(error)
-                    time.sleep(0.2)
+                    # A read burst can trip the site's limiter. Wait that out instead of dropping the board.
+                    pause = 0.8 * (tries + 1) if error.rate_limited or error.server_down else 0.2
+                    time.sleep(pause)
                 except Exception as error:  # network hiccups
                     out[key + "_error"] = repr(error)
                     time.sleep(0.2)

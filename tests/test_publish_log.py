@@ -14,11 +14,20 @@ from jevlab.tui.publish_log import PublishLog
 def test_every_edition_banner_has_glyphs():
     from jevlab.tui.pickers import BANNER_GLYPHS
 
-    for name in ("JEVLAB", "KEVLAB", "LAYALAB", "CLEFLAB", "LUNALAB", "DECIDERLAB"):
+    for name in ("JEVLAB", "KEVLAB", "LAYALAB", "CLEFLAB", "LUNALAB", "DECLAB"):
         for letter in name:
             rows = BANNER_GLYPHS[letter]
             assert len(rows) == 6
             assert len({len(row) for row in rows}) == 1
+
+
+def test_home_banner_stays_jevlab_and_names_the_theatre(monkeypatch):
+    from jevlab.tui import pickers
+
+    for edition in ("jev", "kev", "laya", "clef", "luna", "decider"):
+        monkeypatch.setattr(pickers, "EDITION", edition)
+        assert pickers._banner_word() == "JEVLAB"
+        assert pickers.edition_status() == f"{pickers._theatre()} Mode Activated"
 
 
 def test_publish_log_groups_a_phrase_and_marks_a_better_roll():
@@ -76,13 +85,73 @@ def test_publish_log_keeps_lines_it_does_not_recognize():
 def test_publish_log_chain_and_oracle_stay_on_one_phrase():
     log = PublishLog()
     log.render("\n== cereal [Strict Highest] 0.910/2w: exactly more")
-    chain = log.render("    + exactly           0.40").plain
-    assert chain == "  + exactly  0.40"
-    oracle = log.render("  oracle re-check 0.905 (vault said 0.910)").plain
-    assert oracle == "  oracle  0.905  vault 0.910"
+    chain = log.render("    + exactly           0.40")
+    assert chain.plain == "  +exactly"
+    assert any("cyan" in str(span.style) for span in chain.spans)
+    assert not log.extends_chain
+    more = log.render("    + more              0.55")
+    assert more.plain == "  +exactly +more"
+    assert log.extends_chain
+    popped = log.render("    - more")
+    assert popped.plain == "  +exactly +more -more"
+    assert any("yellow" in str(span.style) for span in popped.spans)
+    oracle = log.render("  oracle re-check 0.905 (vault said 0.910)")
+    assert oracle.plain == "  oracle  0.905  vault 0.910"
+    assert not log.extends_chain
+    fresh = log.render("    + again             0.20")
+    assert fresh.plain == "  +again"
     miss = log.render("  -> failed: oracle re-check 0.905 no longer beats empty board").plain
     assert miss.startswith("  ✗ failed:")
     assert miss.endswith("cereal")
+
+
+def test_publish_screen_chain_words_overwrite_one_line(monkeypatch, tmp_path):
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "t.db"))
+    monkeypatch.setattr("jevlab.tui.pickers.standings", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.crosspost.picks", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.activity.log", lambda *args, **kwargs: None)
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(PublishScreen(HIGHEST))
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            screen.note("== cereal [Strict Highest] 0.910/2w: exactly more")
+            screen.note("    + exactly           0.40")
+            screen.note("    + more              0.55")
+            screen.note("    + words             0.60")
+            await pilot.pause()
+            log = screen.query_one("#pub-log")
+            chain = [line.text.rstrip() for line in log.lines if "+exactly" in line.text]
+            assert chain == ["  +exactly +more +words"]
+            before = len(log.lines)
+            for index in range(40):
+                screen.note(f"    + w{index:<16} 0.60")
+            await pilot.pause()
+            assert len(log.lines) == before
+            chain = [line.text.rstrip() for line in log.lines if "+w" in line.text]
+            assert len(chain) == 1
+            assert chain[0].startswith("…")
+            assert "+w39" in chain[0]
+            assert "+w0" not in chain[0]
+            for index in range(30):
+                screen.note(f"  filler line {index} so the log can scroll")
+            await pilot.pause()
+            log.scroll_home(animate=False)
+            await pilot.pause()
+            assert log.scroll_y == 0
+            screen.note("    + still             0.70")
+            await pilot.pause()
+            assert log.scroll_y == 0
+
+    asyncio.run(check())
 
 
 def test_publish_screen_log_is_a_full_height_column(monkeypatch, tmp_path):
@@ -124,7 +193,7 @@ def _prompt(option) -> str:
     return prompt.plain if hasattr(prompt, "plain") else str(prompt)
 
 
-def test_exclude_me_leading_hides_boards_we_already_lead(monkeypatch, tmp_path):
+def test_include_me_leading_is_off_until_asked(monkeypatch, tmp_path):
     from jevlab.boards import Standing
     from jevlab.crosspost import Pick
     from jevlab.modes import GOLF_HIGHEST
@@ -163,6 +232,9 @@ def test_exclude_me_leading_hides_boards_we_already_lead(monkeypatch, tmp_path):
             await pilot.pause()
             screen = app.screen
             picker = screen.query_one("#pub-picker")
+            leading = screen.query_one("#leading")
+            assert leading.value is False
+            assert "Include me leading" in str(leading.label)
             shown = [_prompt(picker.get_option_at_index(i)) for i in range(picker.option_count)]
             assert any("should send" in line for line in shown)
             assert any("golf open" in line for line in shown)
@@ -173,6 +245,66 @@ def test_exclude_me_leading_hides_boards_we_already_lead(monkeypatch, tmp_path):
             shown = [_prompt(picker.get_option_at_index(i)) for i in range(picker.option_count)]
             assert any("already mine" in line for line in shown)
             assert any("golf mine" in line for line in shown)
+
+    asyncio.run(check())
+
+
+def test_casual_proxy_stays_hidden_until_asked(monkeypatch, tmp_path):
+    from jevlab.crosspost import Pick
+    from jevlab.modes import CASUAL_HIGHEST
+    from jevlab.objective import Leader
+
+    proxy = [
+        Pick(
+            "empty-board",
+            CASUAL_HIGHEST,
+            {"phrase": "strict highest answer", "p_mean": 0.91, "p_lcb": 0.9},
+            6,
+            None,
+            None,
+            "",
+        ),
+        Pick(
+            "already-casual",
+            CASUAL_HIGHEST,
+            {"phrase": "ours already", "p_mean": 0.88, "p_lcb": 0.88},
+            4,
+            None,
+            Leader(0.8, 5, "me", True),
+            "",
+        ),
+    ]
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "t.db"))
+    monkeypatch.setattr("jevlab.tui.pickers.standings", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.crosspost.picks", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.crosspost.casual_picks", lambda *args, **kwargs: proxy)
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(PublishScreen(HIGHEST))
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            casual = screen.query_one("#casual")
+            assert casual.value is False
+            assert "Include casual proxy" in str(casual.label)
+            picker = screen.query_one("#pub-picker")
+            assert picker.option_count == 0
+            await pilot.click("#casual")
+            await pilot.pause()
+            shown = [_prompt(picker.get_option_at_index(i)) for i in range(picker.option_count)]
+            assert any("strict highest answer" in line and "empty" in line for line in shown)
+            assert not any("ours already" in line for line in shown)
+            await pilot.click("#leading")
+            await pilot.pause()
+            shown = [_prompt(picker.get_option_at_index(i)) for i in range(picker.option_count)]
+            assert any("ours already" in line for line in shown)
 
     asyncio.run(check())
 
@@ -195,12 +327,57 @@ def test_snapshot_screen_toggles_are_one_line() -> None:
             other_name = next(edition for edition in EDITIONS if edition != EDITION)
             other = screen.query_one(f"#snap-ed-{other_name}")
             strict = screen.query_one("#snap-mode-strict_chain")
+            casual = screen.query_one("#snap-mode-word_chain")
             assert start.region.height <= 3
             assert current.region.height == 1
             assert strict.region.height == 1
+            assert casual.region.height == 1
+            assert casual.value is True
             assert current.region.y == other.region.y
-            assert other.disabled
+            assert casual.region.y == strict.region.y
+            assert current.value is True
+            assert other.value is True
+            assert not other.disabled
             assert strict.region.y > current.region.y
             assert start.region.y < current.region.y
+            mark = screen.query_one("EditionMark")
+            assert "mode" in str(mark.content)
 
     asyncio.run(check())
+
+
+def test_edition_caption_follows_the_open_edition(monkeypatch):
+    from jevlab.tui.chrome import edition_caption
+
+    monkeypatch.setattr("jevlab.config.EDITION", "luna")
+    assert edition_caption().plain == "Luna mode"
+    monkeypatch.setattr("jevlab.config.EDITION", "jev")
+    assert edition_caption().plain == "Jev mode"
+
+
+def test_snapshot_switches_each_edition_then_returns(monkeypatch):
+    from jevlab.tui import pickers
+
+    monkeypatch.setattr(pickers, "EDITION", "jev")
+    seen = []
+
+    def activate(edition):
+        pickers.EDITION = edition
+        seen.append(("on", edition))
+
+    def take(db, modes, log):
+        seen.append(("snap", pickers.EDITION, db, modes))
+
+    monkeypatch.setattr(pickers, "DB", lambda: "db")
+    monkeypatch.setattr("jevlab.config.activate", activate)
+    monkeypatch.setattr("jevlab.site.snapshot.take_snapshot", take)
+
+    pickers.run_snapshots(("kev", "laya"), ("strict_chain",), lambda message: seen.append(("log", message)))
+
+    assert [item for item in seen if item[0] != "log"] == [
+        ("on", "kev"),
+        ("snap", "kev", "db", ("strict_chain",)),
+        ("on", "laya"),
+        ("snap", "laya", "db", ("strict_chain",)),
+        ("on", "jev"),
+    ]

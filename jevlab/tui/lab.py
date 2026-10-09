@@ -27,6 +27,7 @@ from ..config import TIER_LEVEL
 from ..search.engine import LEVELS, Engine, Event
 from ..search.strategies import LLMGenerate
 from ..search.surrogate import Embedder
+from .chrome import EditionMark
 from .copyselect import SelectableDataTable, SelectableRichLog
 
 LEVEL_COLORS = ["green", "cyan", "blue", "magenta", "red"]  # ladder levels L0-L4: label, timeline, calls bar
@@ -240,6 +241,7 @@ class LabScreen(Screen):
         self.started_at = time.monotonic()
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         yield Static(id="lab-header")
         with Horizontal(id="body"):
             with VerticalScroll(id="queue-box"):

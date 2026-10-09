@@ -20,6 +20,7 @@ from ..db import DB
 from ..modes import HOME_MODES, GameMode, from_name
 from ..objective import site_round
 from ..search.engine import LEVELS
+from .chrome import EditionMark
 from .copyselect import SelectableRichLog
 from .lab import LabScreen
 from .publish_log import PublishLog
@@ -152,6 +153,7 @@ class HomeScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         with Vertical(id="home"):
             yield Static(banner(), id="home-banner")
             yield Static(dossier(), id="home-dossier")
@@ -342,6 +344,7 @@ class SnapshotScreen(Screen):
     BINDINGS = [Binding("escape", "back", "back")]
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         with Horizontal(id="snap-actions"):
             yield Button("Start", id="start", variant="success", compact=True)
             yield Button("Back", id="back", compact=True)
@@ -436,6 +439,7 @@ class LiveSetupScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         yield Static(id="live-help")
         with Vertical(id="live-question"):
             yield Static(id="live-now")
@@ -623,6 +627,7 @@ class SearchSetupScreen(Screen):
         )
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         yield Static(id="setup-help")
         yield SelectionList[str](*self.picker_options(), id="picker")
         with Vertical(id="run-panel"):
@@ -944,6 +949,7 @@ class PublishScreen(Screen):
         self._chain_lines = 0
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         with Horizontal(id="pub-body"):
             with Vertical(id="pub-side"):
                 with Horizontal(id="pub-actions"):
@@ -1048,7 +1054,7 @@ class PublishScreen(Screen):
         for index, pick in enumerate(self.golf_picks):
             entry = pick.entry
             prompt = Text()
-            prompt.append(f"GOLF {pick.mode.label} ", style="bold magenta")
+            prompt.append(f"{'GOLF ' + pick.mode.label:<18} ", style="bold magenta")
             prompt.append(
                 f"{entry['p_mean']:.3f}/{pick.units}c  ",
                 style="bold magenta",
@@ -1061,7 +1067,7 @@ class PublishScreen(Screen):
         for index, pick in enumerate(self.casual_picks):
             entry = pick.entry
             prompt = Text()
-            prompt.append(f"CASUAL {pick.mode.label} ", style="bold cyan")
+            prompt.append(f"{'CASUAL ' + pick.mode.label:<22} ", style="bold cyan")
             prompt.append(f"{entry['p_mean']:.3f}/{pick.units}w  ", style="bold cyan")
             lead = "empty" if pick.leader is None else f"{pick.leader.probability:.2f}/{pick.leader.units}w"
             prompt.append(f"vs {lead}  ", style="yellow")

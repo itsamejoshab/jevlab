@@ -340,8 +340,19 @@ def test_snapshot_screen_toggles_are_one_line() -> None:
             assert not other.disabled
             assert strict.region.y > current.region.y
             assert start.region.y < current.region.y
+            mark = screen.query_one("EditionMark")
+            assert "mode" in str(mark.content)
 
     asyncio.run(check())
+
+
+def test_edition_caption_follows_the_open_edition(monkeypatch):
+    from jevlab.tui.chrome import edition_caption
+
+    monkeypatch.setattr("jevlab.config.EDITION", "luna")
+    assert edition_caption().plain == "Luna mode"
+    monkeypatch.setattr("jevlab.config.EDITION", "jev")
+    assert edition_caption().plain == "Jev mode"
 
 
 def test_snapshot_switches_each_edition_then_returns(monkeypatch):

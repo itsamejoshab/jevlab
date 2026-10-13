@@ -479,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     argv, edition = pop_edition(sys.argv[1:] if argv is None else list(argv))
     if edition is not None:
         os.environ["JEV_EDITION"] = edition
-    from .config import EDITION, EDITIONS
+    from .config import EDITION, EDITIONS, default_rerolls, reroll_gap
 
     parser = argparse.ArgumentParser(prog="jevlab", description="Offline Jev search lab")
     parser.add_argument(
@@ -612,11 +612,19 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("publish", help="submit queued vault entries to the live site (separate batch loop)")
     p.add_argument("--q", nargs="*", help="only these slugs")
     p.add_argument("--dry-run", action="store_true", help="verify boards and oracle, but send no turns")
+    rolls = default_rerolls()
+    gap = reroll_gap()
+    if gap:
+        roll_note = f" (waits {gap:.0f}s between re-rolls; a quick repeat is cached)"
+    elif not rolls:
+        roll_note = " (0: this edition returns the same score every time)"
+    else:
+        roll_note = ""
     p.add_argument(
         "--rerolls",
         type=int,
-        default=3,
-        help="re-score the final word N times even after a win; the board keeps the best",
+        default=rolls,
+        help="re-score the final word N times even after a win; the board keeps the best" + roll_note,
     )
     p.add_argument("--no-verify", action="store_true", help="skip the oracle re-check")
     p.add_argument("--delay", type=float, default=0.01, help="seconds between site turns")

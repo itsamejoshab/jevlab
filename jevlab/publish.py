@@ -5,7 +5,9 @@ each queued entry it re-reads the live board, confirms we still win,
 re-scores once with the oracle, then builds the chain with TURN operations.
 The board keeps a player's best-ever phrase, so the requested re-rolls always
 run, even after a win: a later roll can score higher. A re-roll removes and
-re-adds the last word.
+re-adds the last word. Editions whose score does not move (config.DETERMINISTIC_EDITIONS)
+default to 0 and skip the automatic chase past that request. Microsoft waits before each
+re-roll, because an immediate repeat is a cached score.
 """
 
 from __future__ import annotations
@@ -201,13 +203,45 @@ def build_chain(
     return attempt, last_p
 
 
+def pause_for_fresh_score(log) -> None:
+    """Wait out Microsoft's cache. An immediate repeat of the same phrase comes back unchanged."""
+    from .config import reroll_gap
+
+    gap = reroll_gap()
+    if gap <= 0:
+        return
+    log(f"    waiting {gap:.0f}s so Microsoft does not return the cached score")
+    time.sleep(gap)
+
+
 def reroll(client: SiteClient, attempt: dict, log) -> tuple[dict, float]:
     """Remove and re-append the last word to get a fresh score for the same phrase."""
+    pause_for_fresh_score(log)
     tokens = [t for t in attempt.get("tokens") or [] if t.get("active", True)]
     last = tokens[-1]
     attempt, _ = turn_with_retry(client, attempt, {"kind": "remove", "tokenId": last["id"]}, log)
     attempt, turn = turn_with_retry(client, attempt, {"kind": "append", "text": last["text"]}, log)
     return attempt, float(turn["probability"])
+
+
+def reroll_limits(rerolls: int, long_rerolls: int, *, gamble: bool, long_shot: bool) -> tuple[int, int]:
+    """How many re-rolls were asked for, and how far to keep going while the line is still short.
+
+    A deterministic edition never spends the automatic chase. Repeating the phrase returns the
+    same score, so rolls past the request cannot move the board. The request itself stays, and
+    it defaults to 0 on those editions.
+    """
+    from .config import DETERMINISTIC_EDITIONS, EDITION
+
+    asked = max(0, rerolls)
+    if EDITION in DETERMINISTIC_EDITIONS:
+        return asked, asked
+    ceiling = asked
+    if gamble:
+        ceiling = max(asked, GAMBLE_REROLLS)
+    elif long_shot:
+        ceiling = max(asked, long_rerolls)
+    return asked, ceiling
 
 
 def should_reroll(done: int, asked: int, ceiling: int, ahead: bool) -> bool:
@@ -490,16 +524,13 @@ def publish_entry(
     estimated = entry.get("estimated_from")
     if estimated:
         log(f"  estimated from {estimated}: posting the borrowed score without an oracle check")
-    asked = max(0, rerolls)
-    ceiling = asked
+    asked, ceiling = reroll_limits(rerolls, long_rerolls, gamble=gamble, long_shot=bool(entry.get("long_shot")))
     if gamble:
-        ceiling = max(asked, GAMBLE_REROLLS)
         log(
             f"  gamble: {entry.get('hits')} oracle rolls cleared {objective.threshold:.2f} (mean {estimate:.3f}); "
             f"skipping the oracle re-check"
         )
     elif entry.get("long_shot"):
-        ceiling = max(asked, long_rerolls)
         log(f"  long shot: lower bound {entry['p_lcb']:.3f} does not beat {lead}; skipping the oracle re-check")
     elif verify and not estimated:
         fresh = asyncio.run(oracle_check(db, stored, phrase, target=target))
@@ -507,6 +538,11 @@ def publish_entry(
         fresh = settle_goal(db, stored, live, estimate, fresh, dry_run, log)
         if not objective.beats(fresh, units, leader):
             raise PublishError(f"oracle re-check {fresh:.3f} no longer beats {lead}")
+    if (gamble or entry.get("long_shot")) and ceiling == asked:
+        from .config import DETERMINISTIC_EDITIONS, EDITION
+
+        if EDITION in DETERMINISTIC_EDITIONS:
+            log("  no extra re-rolls: this model returns the same score for the same phrase")
     need = leader
     if dry_run:
         what = f"send {units} characters" if game_mode.golf else f"build {units} words"
@@ -533,6 +569,7 @@ def publish_entry(
     while should_reroll(tries, asked, ceiling, objective.beats(best, units, need)):
         tries += 1
         if game_mode.golf:
+            pause_for_fresh_score(log)
             p = golf_try(client, live, words[0], log, target)
         else:
             attempt, raw = reroll(client, attempt, log)
@@ -675,14 +712,14 @@ def golf_followups(db: DB, slug: str, log) -> list[dict]:
 
 def publish(
     dry_run: bool = False,
-    rerolls: int = 3,
+    rerolls: int | None = None,
     verify: bool = True,
     slugs: list[str] | None = None,
     delay: float = 0.01,
     log=print,
     entries: list[dict] | None = None,
     on_result=None,
-    long_rerolls: int = 5,
+    long_rerolls: int | None = None,
     board: str | None = None,
     mode: str | None = None,
     crosspost: bool = True,
@@ -692,6 +729,12 @@ def publish(
     is given. With `crosspost`, every Strict line that lands (or already holds) its board is followed by the
     question's Golf cross-posts, queued and published in the same run.
     on_result(entry, result_text) fires per entry."""
+    from .config import default_rerolls
+
+    if rerolls is None:
+        rerolls = default_rerolls()
+    if long_rerolls is None:
+        long_rerolls = 0 if default_rerolls() == 0 else 5
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_PATH, "w") as lock:
         try:

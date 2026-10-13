@@ -15,7 +15,7 @@ from textual.widgets.selection_list import Selection
 
 from .. import activity, vault
 from ..boards import Standing, standings
-from ..config import EDITION, EDITIONS
+from ..config import EDITION, EDITIONS, default_rerolls, reroll_gap
 from ..db import DB
 from ..modes import HOME_MODES, GameMode, from_name
 from ..objective import site_round
@@ -926,6 +926,7 @@ class PublishScreen(Screen):
     .opt Setting:focus, .opt Setting:hover { background: transparent; }
     .opt Label { width: 16; height: 1; text-style: bold; }
     .hint { width: 1fr; height: 1; margin-left: 1; color: $text-muted; }
+    .hint.warn { color: $warning; text-style: bold; }
     #rerolls { width: 6; height: 1; margin: 0; background: $boost; }
     #rerolls:focus { border: none; }
     #import-source { width: 16; height: 1; margin-right: 1; background: $boost; }
@@ -980,8 +981,15 @@ class PublishScreen(Screen):
                         yield Static("strict highest on casual boards", classes="hint")
                     with Horizontal(classes="opt"):
                         yield Label("Re-rolls")
-                        yield Input("3", id="rerolls", type="integer", compact=True)
-                        yield Static("board keeps the best", classes="hint")
+                        yield Input(str(default_rerolls()), id="rerolls", type="integer", compact=True)
+                        gap = reroll_gap()
+                        if gap:
+                            hint, hint_class = f"waits {gap:.0f}s; a quick repeat is cached", "hint warn"
+                        elif default_rerolls() == 0:
+                            hint, hint_class = "same score every time", "hint"
+                        else:
+                            hint, hint_class = "board keeps the best", "hint"
+                        yield Static(hint, classes=hint_class)
                     sources = [(edition.capitalize(), edition) for edition in EDITIONS if edition != EDITION]
                     with Horizontal(classes="opt"):
                         yield Label("Import")
@@ -1108,11 +1116,17 @@ class PublishScreen(Screen):
                 style="cyan",
             )
         if with_long:
+            if default_rerolls() == 0:
+                chase = "Submitted once: this model returns the same score every time, so a re-roll cannot help."
+            else:
+                chase = (
+                    f"Each skips the oracle re-check and is re-rolled the requested number of times, "
+                    f"up to {LONG_REROLLS} while still short. "
+                    "A miss costs only turns, since the board keeps our best."
+                )
             help_text.append(
                 f"\n{len(self.long_rows)} long shots: lines whose average, but not lower bound, beats "
-                f"the leader. Unselected; each skips the oracle re-check and is re-rolled "
-                f"the requested number of times, up to {LONG_REROLLS} while still short. "
-                "A miss costs only turns, since the board keeps our best.",
+                f"the leader. Unselected. {chase}",
                 style="magenta",
             )
         self.query_one("#pub-help", Static).update(help_text)
@@ -1236,10 +1250,11 @@ class PublishScreen(Screen):
         if not entries:
             self.notify("nothing selected", severity="warning")
             return
+        fallback = default_rerolls()
         try:
-            rerolls = int(self.query_one("#rerolls", Input).value or 3)
+            rerolls = int(self.query_one("#rerolls", Input).value or fallback)
         except ValueError:
-            rerolls = 3
+            rerolls = fallback
         dry = self.query_one("#dry", Checkbox).value
         self.busy = True
         self.stop_requested = False
@@ -1268,7 +1283,7 @@ class PublishScreen(Screen):
                 entries=entries,
                 log=write,
                 on_result=on_result,
-                long_rerolls=LONG_REROLLS,
+                long_rerolls=0 if default_rerolls() == 0 else LONG_REROLLS,
                 halt=lambda: self.stop_requested,
             )
         except Exception as error:

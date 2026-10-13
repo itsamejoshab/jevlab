@@ -27,6 +27,16 @@ EDITIONS = ("jev", "kev", "laya", "clef", "luna", "decider")
 # Trick Kev, Trick Laya, Trick Clef, Trick Luna, and Trick Decider are mirrors of the game, each with its own
 # question revisions, boards, and model. Each edition keeps its own database, vault, and snapshots. A mirror
 # reads Jev's (never writes them) to borrow estimates.
+# Golf submissions of one mid-range phrase on 2026-10-13: two immediate repeats, then two more
+# reads 20s apart. These editions returned one probability every time, so a re-roll cannot help.
+# Jev moved on back-to-back reads (0.32–0.34). Kev moved on back-to-back reads (0.8966–0.898).
+# Microsoft repeated a cached value when asked immediately, then moved after a 20s gap (0.32–0.38).
+DETERMINISTIC_EDITIONS = frozenset({"laya", "clef", "clef-flash", "clef-omni", "luna", "decider"})
+# Re-rolls to ask for on an edition whose score can move. Deterministic editions ask for none.
+NOISY_REROLLS = 5
+# Microsoft returns the previous score when the same phrase is submitted again immediately.
+# A 20s gap produced a new value. Jev and Kev move on the next call, so they do not wait.
+MICROSOFT_REROLL_GAP = 20.0
 JEV_DATA = Path(os.environ.get("JEVLAB_DATA", ROOT / "data"))
 JEV_DB_PATH = JEV_DATA / "jev.db"
 JEV_VAULT = JEV_DATA / "vault"
@@ -167,6 +177,18 @@ def _push_edition() -> None:
 
 
 activate()
+
+
+def default_rerolls(edition: str | None = None) -> int:
+    """Re-rolls to ask for when the caller did not choose. Zero where a repeat submission does not move."""
+    name = EDITION if edition is None else edition
+    return 0 if name in DETERMINISTIC_EDITIONS else NOISY_REROLLS
+
+
+def reroll_gap(edition: str | None = None) -> float:
+    """Seconds to wait before a re-roll. Only Microsoft, whose immediate repeat is a cached score."""
+    name = EDITION if edition is None else edition
+    return MICROSOFT_REROLL_GAP if name == "microsoft" else 0.0
 
 
 @dataclass(frozen=True)

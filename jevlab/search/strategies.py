@@ -19,6 +19,10 @@ FUNCTION_WORDS = [
 CLAUSE_BREAKS = {"and", "so", "which", "that", "because", "but", "then", "hereafter", "therefore", "where"}
 # Long-chain regime: at or below this many words, word-level strategies take over from chain compaction.
 WORD_STAGE = 60
+SYLLOGISM = "syllogism"
+# Opening core-tier batches reserve one tactic slot for a deduction, until a few of those lines are scored.
+SYLLOGISM_EARLY_ROUNDS = 3
+SYLLOGISM_EARLY_TRIES = 12
 
 
 class Strategy:
@@ -98,24 +102,37 @@ class LLMGenerate(Strategy):
         if self.pending is not None and not self.pending.done():
             self.pending.cancel()
 
+    def reserve_syllogism(self, ctx) -> bool:
+        """Highest is still looking for a high score: try a deduction before the mix settles."""
+        if self.tier != 0 or ctx.objective.shortest or ctx.engine.one_word_race:
+            return False
+        if self.round > SYLLOGISM_EARLY_ROUNDS:
+            return False
+        tries = ctx.archive.style_stats().get(SYLLOGISM, {}).get("tries", 0)
+        return tries < SYLLOGISM_EARLY_TRIES
+
     def pick_archetypes(self, ctx, fresh: bool = False) -> list[str]:
         names = [a for a in ARCHETYPES if a in prompts.ARCHETYPE_GUIDE]
         if ctx.focus:
             focus = [a for a in ctx.focus if a in names]
             others = [a for a in names if a not in focus]
-            return focus + ctx.rng.sample(others, min(1, len(others)))
-        if fresh:
-            tries = {a: s["tries"] for a, s in ctx.archive.style_stats().items()}
-            weights = [1.0 / (1.0 + tries.get(a, 0) / 50.0) for a in names]
+            chosen = focus + ctx.rng.sample(others, min(1, len(others)))
         else:
-            best = ctx.archetype_bests()
-            weights = [1.0 + 3.0 * max(best.get(a, 0.0), 0.0) for a in names]
-        chosen: list[str] = []
-        while len(chosen) < 3:
-            pick = ctx.rng.choices(names, weights)[0]
-            if pick not in chosen:
-                chosen.append(pick)
-        return chosen
+            if fresh:
+                tries = {a: s["tries"] for a, s in ctx.archive.style_stats().items()}
+                weights = [1.0 / (1.0 + tries.get(a, 0) / 50.0) for a in names]
+            else:
+                best = ctx.archetype_bests()
+                weights = [1.0 + 3.0 * max(best.get(a, 0.0), 0.0) for a in names]
+            chosen = []
+            while len(chosen) < 3:
+                pick = ctx.rng.choices(names, weights)[0]
+                if pick not in chosen:
+                    chosen.append(pick)
+        if SYLLOGISM not in names or SYLLOGISM in chosen or not self.reserve_syllogism(ctx):
+            return chosen
+        rest = [name for name in chosen if name != SYLLOGISM]
+        return [SYLLOGISM, *rest[:2]]
 
     async def _call(self, ctx, model: str, archetypes: list[str], variants: list[str],
                     fresh: bool = False) -> list[tuple[str, str]]:

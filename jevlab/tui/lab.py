@@ -44,8 +44,9 @@ def strategy_style(name: str) -> str:
 
 STRATEGY_INFO = {
     "llm": "Generator models write whole new lines from the question's archetypes, shown our best-scored lines so "
-    "far so they can build on what works. Each batch goes to the next model in this price tier; the pricier "
-    "tiers join as the ladder escalates (mid at L2, premium at L4).",
+    "far so they can build on what works. The first core batches also include a three-rule deduction until a few "
+    "of those lines are scored. Each batch goes to the next model in this price tier; the pricier tiers join as "
+    "the ladder escalates (mid at L2, premium at L4).",
     "chain": "Long chains: assembles very long lines out of fragments of our strong chains using the {recipe} "
     "recipe, screens them with a probe claim that tells apart lines rounding to the same score, and sends "
     "only the most promising to the oracle.",

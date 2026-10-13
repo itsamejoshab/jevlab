@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from ..objective import Objective
 from ..oracle import Score
 
-ARCHETYPES = ("rename", "speaker", "scene", "eager", "direct", "wild", "other")
+ARCHETYPES = ("rename", "speaker", "scene", "eager", "direct", "wild", "syllogism", "other")
 LENGTH_BUCKETS = (1, 3, 5, 8, 12, 17, 24, 33, 45, 60, 90, 130, 180, 240, 300)
 
 

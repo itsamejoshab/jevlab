@@ -23,6 +23,8 @@ SYLLOGISM = "syllogism"
 # Opening core-tier batches reserve one tactic slot for a deduction, until a few of those lines are scored.
 SYLLOGISM_EARLY_ROUNDS = 3
 SYLLOGISM_EARLY_TRIES = 12
+# Once a batch is entirely past this many scored lines, one slot moves to a tactic that is not.
+COVERAGE_TRIES = 8
 
 
 class Strategy:
@@ -129,10 +131,35 @@ class LLMGenerate(Strategy):
                 pick = ctx.rng.choices(names, weights)[0]
                 if pick not in chosen:
                     chosen.append(pick)
-        if SYLLOGISM not in names or SYLLOGISM in chosen or not self.reserve_syllogism(ctx):
+        protected: list[str] = []
+        if SYLLOGISM in names and SYLLOGISM not in chosen and self.reserve_syllogism(ctx):
+            rest = [name for name in chosen if name != SYLLOGISM]
+            chosen = [SYLLOGISM, *rest[:2]]
+            protected = [SYLLOGISM]
+        return self.cover_untried(ctx, chosen, names, protected)
+
+    def cover_untried(self, ctx, chosen: list[str], names: list[str], protected: list[str]) -> list[str]:
+        """Keep one slot on a tactic the archive has barely scored, without evicting a reserved one."""
+        stats = ctx.archive.style_stats()
+
+        def tries(name: str) -> int:
+            return int(stats.get(name, {}).get("tries", 0))
+
+        if any(tries(name) < COVERAGE_TRIES for name in chosen):
             return chosen
-        rest = [name for name in chosen if name != SYLLOGISM]
-        return [SYLLOGISM, *rest[:2]]
+        needy = [name for name in names if name not in chosen and tries(name) < COVERAGE_TRIES]
+        if not needy:
+            return chosen
+        floor = min(tries(name) for name in needy)
+        pick = ctx.rng.choice([name for name in needy if tries(name) == floor])
+        if len(chosen) < 3:
+            return [*chosen, pick]
+        held = set(protected)
+        droppable = [i for i, name in enumerate(chosen) if name not in held]
+        if not droppable:
+            return chosen
+        drop = max(droppable, key=lambda i: (tries(chosen[i]), i))
+        return [name for i, name in enumerate(chosen) if i != drop] + [pick]
 
     async def _call(self, ctx, model: str, archetypes: list[str], variants: list[str],
                     fresh: bool = False) -> list[tuple[str, str]]:

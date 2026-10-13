@@ -1,4 +1,4 @@
-"""jevlab TUI: home (game mode, Search / Publish), question pickers, and the live lab."""
+"""jevlab TUI: home (game mode, Search / Publish / Defense), question pickers, and the live lab."""
 
 from __future__ import annotations
 

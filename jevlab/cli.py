@@ -491,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command")
 
-    p = sub.add_parser("tui", help="home screen: choose Search or Publish (default when no command is given)")
+    p = sub.add_parser("tui", help="home screen: choose Search, Publish, or Defense (default when no command is given)")
     p.set_defaults(func=cmd_tui)
 
     p = sub.add_parser(

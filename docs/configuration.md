@@ -137,3 +137,4 @@ any other edition.
 | `JEV_PLATEAU_LEADER_WORDS` | 40 | Leader length that triggers plateau mode |
 | `JEV_LONG_PLAN_CALLS` | 2 | Planner calls per question in the long-chain regime |
 | `JEV_THREADS` | min(8, cores) | CPU threads for numpy, scikit-learn, and ONNX |
+| `JEV_DEFENSE_TOP` | 20 | Foreign words Defense posts on one board we lead |

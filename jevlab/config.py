@@ -82,6 +82,9 @@ ORACLE_CONCURRENCY = 24
 ORACLE_MAX_CONCURRENCY = 48
 TRIAGE_K = 0
 ORACLE_TIMEOUT = 20.0
+# How many foreign words Defense posts on one board. Drawn from other boards' word lists, then our own
+# winning words and words already on that board are removed.
+DEFENSE_TOP = int(os.environ.get("JEV_DEFENSE_TOP", "20"))
 
 
 def activate(edition: str | None = None) -> str:

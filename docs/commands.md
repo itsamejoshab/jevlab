@@ -15,7 +15,7 @@ Offline Jev search lab
 
 positional arguments:
   {tui,install-laya,install-clef,snapshot,calibrate,lab,search,triage,score,vault,publish,crosspost,errors,boosters,bench-embed,bench-proxy,train-global}
-    tui                 home screen: choose Search or Publish (default when no command is given)
+    tui                 home screen: choose Search, Publish, or Defense (default when no command is given)
     install-laya        download Laya weights from Hugging Face into ~/.cache/jevlab (outside the repo)
     install-clef        download Clef weights from Hugging Face into ~/.cache/jevlab (outside the repo)
     snapshot            pull questions, boards, word impacts, and our attempts into data/jev.db

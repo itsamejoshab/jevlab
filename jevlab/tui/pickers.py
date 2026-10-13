@@ -140,14 +140,15 @@ class HomeScreen(Screen):
     .card { width: 1fr; height: 4; margin: 0 1; border: round $primary-darken-1; content-align: center middle; text-align: center;
             border-title-color: $accent; border-title-style: bold; border-title-align: center; }
     #home-stats { width: 100%; margin: 1 0 0 0; text-align: center; }
-    #home-buttons { height: 5; align: center middle; }
-    #home-buttons Button { margin: 0 2; min-width: 20; }
+    #home-buttons { height: auto; min-height: 3; align: center middle; }
+    #home-buttons Button { margin: 0 1; min-width: 16; }
     #home-log { height: 12; border: round $secondary; display: none; }
     """
 
     BINDINGS = [
         Binding("s", "search", "Search"),
         Binding("p", "publish", "Publish"),
+        Binding("d", "defense", "Defense"),
         Binding("r", "refresh", "Refresh snapshot"),
         Binding("q", "app.quit", "Quit"),
     ]
@@ -177,6 +178,7 @@ class HomeScreen(Screen):
             with Horizontal(id="home-buttons"):
                 yield Button("Search", id="search", variant="primary")
                 yield Button("Publish", id="publish", variant="success")
+                yield Button("Defense", id="defense", variant="warning")
                 yield Button("Refresh snapshot", id="refresh")
                 yield Button("Quit", id="quit", variant="error")
             yield SelectableRichLog(id="home-log", wrap=True, markup=False)
@@ -272,9 +274,15 @@ class HomeScreen(Screen):
         {
             "search": self.action_search,
             "publish": self.action_publish,
+            "defense": self.action_defense,
             "refresh": self.action_refresh,
             "quit": self.app.exit,
         }[event.button.id]()
+
+    def action_defense(self) -> None:
+        from .defense import DefenseScreen
+
+        self.app.push_screen(DefenseScreen())
 
     def action_search(self) -> None:
         if not self.app.game_mode.publishable:

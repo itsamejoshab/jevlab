@@ -122,6 +122,13 @@ CREATE TABLE IF NOT EXISTS lab_meta (
     key TEXT PRIMARY KEY,
     n INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS defense_words (
+    slug TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    word TEXT NOT NULL,
+    at TEXT,
+    PRIMARY KEY (slug, mode, word)
+);
 """
 
 # Before game modes, lab_memory was keyed by qkey alone and every row was a Highest run.

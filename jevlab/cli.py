@@ -487,7 +487,8 @@ def main(argv: list[str] | None = None) -> int:
         choices=EDITIONS,
         default=EDITION,
         help="game edition: jev (data/), kev (data/kev/), laya (data/laya/), clef (data/clef/), "
-        "or luna (data/luna/), or decider (data/decider/); read before anything else loads",
+        "clef-flash (data/clef-flash/), clef-omni (data/clef-omni/), luna (data/luna/), "
+        "decider (data/decider/), or microsoft (data/microsoft/); read before anything else loads",
     )
     sub = parser.add_subparsers(dest="command")
 

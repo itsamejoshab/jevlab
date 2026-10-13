@@ -20,7 +20,7 @@ from ..db import DB
 from ..modes import HOME_MODES, GameMode, from_name
 from ..objective import site_round
 from ..search.engine import LEVELS
-from .chrome import EditionMark
+from .chrome import NAMES, EditionMark
 from .copyselect import SelectableRichLog
 from .lab import LabScreen
 from .publish_log import PublishLog
@@ -71,7 +71,7 @@ def _banner_word() -> str:
 
 
 def _theatre() -> str:
-    return {"kev": "Kev", "laya": "Laya", "clef": "Clef", "luna": "Luna", "decider": "Decider"}.get(EDITION, "Jev")
+    return NAMES.get(EDITION, "Jev")
 
 
 BANNER_FACE = ["#ffffff", "#e4eef8", "#c6d9ec", "#a8c4e0", "#8aafd4", "#6c9ac8"]
@@ -135,7 +135,7 @@ class HomeScreen(Screen):
     #home-mode Label { padding: 1 1 0 0; text-style: bold; color: $accent; }
     #game-mode { width: 40; }
     #edition-label { margin-left: 2; }
-    #edition { width: 16; }
+    #edition { width: 18; }
     #home-cards { height: 4; margin-top: 1; }
     .card { width: 1fr; height: 4; margin: 0 1; border: round $primary-darken-1; content-align: center middle; text-align: center;
             border-title-color: $accent; border-title-style: bold; border-title-align: center; }
@@ -343,7 +343,8 @@ class SnapshotScreen(Screen):
     #start:hover, #start:focus { color: $text; background: $success; }
     #back { color: $text-muted; }
     #snap-help { height: auto; padding: 0 1 1 1; color: $text-muted; }
-    #snap-editions, #snap-modes { height: 1; padding: 0 1; }
+    #snap-editions { height: auto; padding: 0 1; }
+    #snap-modes { height: 1; padding: 0 1; }
     #snap-editions Label, #snap-modes Label { width: 12; height: 1; text-style: bold; }
     #snap-editions Setting, #snap-modes Setting { margin-right: 2; }
     #snap-log { height: 1fr; border: round $secondary; margin-top: 1; }

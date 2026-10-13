@@ -346,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--modes", nargs="*", default=list(PLAY_MODES), help="play modes to scan")
     parser.add_argument(
         "--edition",
-        choices=["jev", "kev", "laya", "clef", "luna", "decider"],
+        choices=["jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "decider", "microsoft"],
         help="game edition (also accepted anywhere on the line)",
     )
     args = parser.parse_args(argv)

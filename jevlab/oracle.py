@@ -262,8 +262,8 @@ class BackendPool:
         if not specs:
             raise OracleError(
                 "no Jev backend key: set TYPESAFE_API_KEY and/or OPENROUTER_API_KEY in .env. "
-                "Laya and Clef score locally: `uv sync --extra laya` then `jevlab install-laya`, "
-                "or `uv sync --extra clef` then `jevlab install-clef`."
+                "Laya, Clef, and Clef-flash score locally: `uv sync --extra laya` then `jevlab install-laya`, "
+                "or `uv sync --extra clef` then `jevlab install-clef` (Clef and Clef-flash share that download)."
             )
         self.backends = [Backend(name, base, key, concurrency) for name, base, key in specs]
         self.cond = asyncio.Condition()
@@ -557,10 +557,10 @@ class Oracle:
         """A local checkpoint is deterministic, so one forward fills every sample a caller asked for."""
         from .config import EDITION
 
-        if EDITION == "clef":
+        if EDITION in ("clef", "clef-flash"):
             from .clef_local import ClefError as LocalError, predict_many
 
-            who = "Clef"
+            who = "Clef-flash" if EDITION == "clef-flash" else "Clef"
         else:
             from .laya_local import LayaError as LocalError, predict_many
 

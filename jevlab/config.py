@@ -23,10 +23,7 @@ def load_dotenv(path: Path = ROOT / ".env") -> None:
 load_dotenv()
 
 SITE_BASE = os.environ.get("JEV_SITE", "https://i-wanna-date-jev.begin-363.workers.dev")
-EDITIONS = ("jev", "kev", "laya", "clef", "luna", "decider")
-# Trick Kev, Trick Laya, Trick Clef, Trick Luna, and Trick Decider are mirrors of the game, each with its own
-# question revisions, boards, and model. Each edition keeps its own database, vault, and snapshots. A mirror
-# reads Jev's (never writes them) to borrow estimates.
+EDITIONS = ("jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "decider", "microsoft")
 # Golf submissions of one mid-range phrase on 2026-10-13: two immediate repeats, then two more
 # reads 20s apart. These editions returned one probability every time, so a re-roll cannot help.
 # Jev moved on back-to-back reads (0.32–0.34). Kev moved on back-to-back reads (0.8966–0.898).
@@ -37,6 +34,9 @@ NOISY_REROLLS = 5
 # Microsoft returns the previous score when the same phrase is submitted again immediately.
 # A 20s gap produced a new value. Jev and Kev move on the next call, so they do not wait.
 MICROSOFT_REROLL_GAP = 20.0
+# Trick Kev, Trick Laya, Trick Clef, Trick Clef-flash, Trick Clef-omni, Trick Luna, Trick Decider, and Trick
+# Microsoft are mirrors of the game, each with its own question revisions, boards, and model. Each edition
+# keeps its own database, vault, and snapshots. A mirror reads Jev's (never writes them) to borrow estimates.
 JEV_DATA = Path(os.environ.get("JEVLAB_DATA", ROOT / "data"))
 JEV_DB_PATH = JEV_DATA / "jev.db"
 JEV_VAULT = JEV_DATA / "vault"
@@ -50,15 +50,21 @@ TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1"
 # and OpenRouter maps that bare id onto `typesafe/gpt-6-luna`, which does not exist. The route that
 # answers is `openai/gpt-6-luna-decisions`. Decider's route is `perplexity/pplx-decider-v1-27b`. Kev, Luna, and
 # Decider are OpenRouter /systemone models.
-# Laya and Clef are scored in-process. Laya's id is its Hugging Face repo. The site asks for `clef` (27B);
-# local estimates use `clef-flash`, the smallest published checkpoint.
+# Laya, Clef, and Clef-flash are scored in-process. Laya's id is its Hugging Face repo. The Clef site asks
+# for the 27B model; local estimates use clef-flash, the smallest published checkpoint. Clef-flash on the
+# site is that same checkpoint, so it shares the local install. Clef-omni's weights are public (about 70 GB,
+# ~64 GB of GPU in bf16) and do not fit this machine, so it goes to OpenRouter. Microsoft has not published
+# weights; OpenRouter serves microsoft/microsoft-decision-1.
 EDITION_MODELS = {
     "jev": "jev-latest",
     "kev": "jaredpalmer/kev-4b",
     "laya": "convaiinnovations/laya",
     "clef": "clef-flash",
+    "clef-flash": "clef-flash",
+    "clef-omni": "cloudflare/clef-omni",
     "luna": "openai/gpt-6-luna-decisions",
     "decider": "perplexity/pplx-decider-v1-27b",
+    "microsoft": "microsoft/microsoft-decision-1",
 }
 JEV_MODEL = ""
 # Hugging Face repo for `jevlab install-laya`. Independent of the current edition's oracle model.
@@ -76,8 +82,9 @@ CLEF_CACHE = Path(os.environ.get("JEV_CLEF_CACHE", Path.home() / ".cache" / "jev
 CLEF_DEVICE = os.environ.get("JEV_CLEF_DEVICE", "").strip()
 # auto: bf16 on a ~28GB GPU, 4-bit on a GPU with about 8GB, otherwise the checkpoint split across GPU, RAM, and disk.
 CLEF_QUANT = os.environ.get("JEV_CLEF_QUANT", "auto").strip().lower() or "auto"
-# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev, Luna, and Decider are OpenRouter only.
-# Laya and Clef load a Hugging Face checkpoint locally (`huggingface`), one forward at a time.
+# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev, Clef-omni, Luna, Decider, and
+# Microsoft are OpenRouter only. Laya, Clef, and Clef-flash load a Hugging Face checkpoint locally
+# (`huggingface`), one forward at a time.
 # Mirror searches first score this many lines Jev already rates well (search/triage.py) before generating any.
 # Under load Jev's p99 is ~7s and p99.9 ~10s (2026-09-28), with a tail past 20s; slower calls give up and retry.
 # Kev's host is slower. A local forward has no HTTP timeout; the value only applies if a remote backend is added.
@@ -112,7 +119,7 @@ def activate(edition: str | None = None) -> str:
     SNAPSHOTS = DATA / "snapshots"
     VAULT = DATA / "vault"
     DATA.mkdir(parents=True, exist_ok=True)
-    local = EDITION in ("laya", "clef")
+    local = EDITION in ("laya", "clef", "clef-flash")
     JEV_MODEL = os.environ.get("JEV_MODEL", EDITION_MODELS[EDITION])
     default_backends = "huggingface" if local else ("openrouter" if MIRROR else "typesafe,openrouter")
     ORACLE_BACKENDS = [

@@ -24,7 +24,7 @@ def test_every_edition_banner_has_glyphs():
 def test_home_banner_stays_jevlab_and_names_the_theatre(monkeypatch):
     from jevlab.tui import pickers
 
-    for edition in ("jev", "kev", "laya", "clef", "luna", "decider"):
+    for edition in ("jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "decider", "microsoft"):
         monkeypatch.setattr(pickers, "EDITION", edition)
         assert pickers._banner_word() == "JEVLAB"
         assert pickers.edition_status() == f"{pickers._theatre()} Mode Activated"

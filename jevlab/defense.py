@@ -482,20 +482,26 @@ def _probe_until_ban(
     return attempt, rest
 
 
-def _post_words(client: SiteClient, attempt: dict, words: list[str], log, halt) -> tuple[dict, list[str]]:
+def _post_words(
+    client: SiteClient, attempt: dict, words: list[str], log, halt, *, word_by_word: bool = False
+) -> tuple[dict, list[str]]:
     """Append the decoys, skip anything banned, then clear. The score on the reply is ignored.
+
+    The site's words table is one row per append, so a sentence lands as a single row.
+    `word_by_word` sends each decoy alone, which is what splits that table into one row per word.
 
     A ban we already know is left out. A ban the server does not name is found by sending
     the sentence one word at a time, and that word is skipped.
     """
     pending = without_known_bans(words)
     posted: list[str] = []
+    step = 1 if word_by_word else SENTENCE_WORDS
     while pending:
         if halt and halt():
             log("  stopped")
             break
-        chunk = pending[:SENTENCE_WORDS]
-        rest = pending[SENTENCE_WORDS:]
+        chunk = pending[:step]
+        rest = pending[step:]
         text = " ".join(chunk)
         try:
             attempt, _turn = turn_with_retry(client, attempt, {"kind": "append", "text": text}, log)
@@ -509,6 +515,10 @@ def _post_words(client: SiteClient, attempt: dict, words: list[str], log, halt) 
                 if len(shorter) < len(chunk) + len(rest):
                     pending = shorter
                     continue
+            if word_by_word:
+                log(f"  skip {chunk[0]} ({error})")
+                pending = rest
+                continue
             log("  banned, span not named; submitting one word at a time")
             attempt, pending = _probe_until_ban(client, attempt, chunk, rest, posted, log, halt)
             continue
@@ -541,8 +551,12 @@ def defend(
     db: DB | None = None,
     client: SiteClient | None = None,
     lock_path=None,
+    word_by_word: bool = False,
 ) -> DefenseRun:
-    """Post one-word decoys for each (slug, play mode). Live words and the live lead are re-checked first."""
+    """Post decoys for each (slug, play mode). Live words and the live lead are re-checked first.
+
+    Decoys go up as a sentence unless `word_by_word` is set, which appends one word per turn.
+    """
     db = db or DB()
     path = lock_path or LOCK_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -626,10 +640,13 @@ def defend(
                 log(f"  {sentence}\n  dry run.")
                 planned += 1
                 continue
-            log(f"  {sentence}\n  submitting...")
+            how = " one word at a time" if word_by_word else ""
+            log(f"  {sentence}\n  submitting...{how}")
             attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
             try:
-                _attempt, planted = _post_words(client, attempt, list(decided.decoys), log, halt)
+                _attempt, planted = _post_words(
+                    client, attempt, list(decided.decoys), log, halt, word_by_word=word_by_word
+                )
             except SiteError as error:
                 log(f"  {error}")
                 skipped += 1

@@ -48,7 +48,8 @@ TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1"
 # `typesafe/jev-latest` is rejected; the bare id is what the site sends too, and Typesafe's own API takes it.
 # Each id is the `model` in that edition's site `jevRequest`, except Luna: the site says `gpt-6-luna`,
 # and OpenRouter maps that bare id onto `typesafe/gpt-6-luna`, which does not exist. The route that
-# answers is `openai/gpt-6-luna-decisions`. Decider's route is `perplexity/pplx-decider-v1-27b`. Kev, Luna, and
+# answers is `openai/gpt-6-luna-decisions`. Decider's route is `perplexity/pplx-decider-v1.1-27b`.
+# OpenRouter has no endpoints left for `perplexity/pplx-decider-v1-27b`. Kev, Luna, and
 # Decider are OpenRouter /systemone models.
 # Laya, Clef, and Clef-flash are scored in-process. Laya's id is its Hugging Face repo. The Clef site asks
 # for the 27B model; local estimates use clef-flash, the smallest published checkpoint. Clef-flash on the
@@ -63,7 +64,7 @@ EDITION_MODELS = {
     "clef-flash": "clef-flash",
     "clef-omni": "cloudflare/clef-omni",
     "luna": "openai/gpt-6-luna-decisions",
-    "decider": "perplexity/pplx-decider-v1-27b",
+    "decider": "perplexity/pplx-decider-v1.1-27b",
     "microsoft": "microsoft/microsoft-decision-1",
 }
 JEV_MODEL = ""

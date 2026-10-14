@@ -13,7 +13,7 @@ rest are tools the search uses to find phrases that score well on it.
 
 | Role | Variable | Default | What it does |
 | --- | --- | --- | --- |
-| Oracle | `JEV_MODEL` | `jev-latest` (Kev: `jaredpalmer/kev-4b`, Luna: `openai/gpt-6-luna-decisions`, Decider: `perplexity/pplx-decider-v1-27b`, Laya: `convaiinnovations/laya`, Clef: `clef-flash`) | The classifier the game scores with. Every candidate phrase is scored here. |
+| Oracle | `JEV_MODEL` | `jev-latest` (Kev: `jaredpalmer/kev-4b`, Luna: `openai/gpt-6-luna-decisions`, Decider: `perplexity/pplx-decider-v1.1-27b`, Laya: `convaiinnovations/laya`, Clef: `clef-flash`) | The classifier the game scores with. Every candidate phrase is scored here. |
 | Generators | `JEV_GEN_MODELS` | tiered table in `config.py` | Write candidate phrases. Each tier is one bandit arm. |
 | Rewrite model | `JEV_GEN_MODEL` | first table entry | Single-model jobs: rewrites and synonyms. |
 | Beam model | `JEV_GEN_MODEL_ALT` | `deepseek/deepseek-v4-flash` | High-volume next-word proposals. Should be fast and cheap. |
@@ -113,7 +113,7 @@ Decider keep the remote oracle on OpenRouter and lower concurrency. Laya and Cle
 | Setting | Jev | Kev | Luna | Decider | Laya | Clef |
 | --- | --- | --- | --- | --- | --- | --- |
 | Data directory | `data/` | `data/kev/` | `data/luna/` | `data/decider/` | `data/laya/` | `data/clef/` |
-| `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `openai/gpt-6-luna-decisions` | `perplexity/pplx-decider-v1-27b` | `convaiinnovations/laya` | `clef-flash` |
+| `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `openai/gpt-6-luna-decisions` | `perplexity/pplx-decider-v1.1-27b` | `convaiinnovations/laya` | `clef-flash` |
 | `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `openrouter` | `openrouter` | `huggingface` | `huggingface` |
 | `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 4 / 8 | 4 / 8 | 1 / 1 | 1 / 1 |
 | `JEV_ORACLE_TIMEOUT` | 20 s | 60 s | 60 s | 60 s | unused (local) | unused (local) |

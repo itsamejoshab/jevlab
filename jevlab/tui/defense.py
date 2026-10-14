@@ -109,8 +109,11 @@ class DefenseScreen(Screen):
                         yield Setting("Dry run", False, id="dry", compact=True)
                         yield Static("nothing is sent", classes="hint")
                     with Horizontal(classes="opt"):
-                        yield Setting("Include golf", False, id="golf", compact=True)
-                        yield Static("golf keeps its own word list", classes="hint")
+                        yield Setting("Word by word", False, id="by-word", compact=True)
+                        yield Static("one row per word on the words table", classes="hint")
+                    with Horizontal(classes="opt"):
+                        yield Setting("Include golf (no longer on website)", False, id="golf", compact=True)
+                        yield Static("leave this off", classes="hint")
                     with Horizontal(classes="opt"):
                         yield Setting("Include casual", False, id="casual", compact=True)
                         yield Static("casual keeps its own word list", classes="hint")
@@ -174,20 +177,21 @@ class DefenseScreen(Screen):
             self.notify("nothing selected", severity="warning")
             return
         dry = self.query_one("#dry", Checkbox).value
+        word_by_word = self.query_one("#by-word", Checkbox).value
         self.busy = True
         self.stop_requested = False
         self.query_one("#defend", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
         self.note(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
-        self.worker(jobs, dry)
+        self.worker(jobs, dry, word_by_word)
 
     @work(thread=True, exclusive=True)
-    def worker(self, jobs: list[tuple[str, str]], dry: bool) -> None:
+    def worker(self, jobs: list[tuple[str, str]], dry: bool, word_by_word: bool) -> None:
         def write(message: str) -> None:
             self.app.call_from_thread(self.note, message)
 
         try:
-            result = defend(jobs, dry_run=dry, log=write, halt=lambda: self.stop_requested)
+            result = defend(jobs, dry_run=dry, log=write, halt=lambda: self.stop_requested, word_by_word=word_by_word)
         except Exception as error:
             write(f"defense crashed: {error!r}")
             result = None
@@ -253,6 +257,8 @@ def _help(targets: list[DefenseTarget], snap, me: str) -> Text:
         "Words in our leading phrase, words already listed here, words already planted, and stop words are skipped. "
         "A board with 40 or more words is left unchecked when our answer is at most a quarter of the top, "
         "or at most a quarter of the whole list. "
-        "A decoy that takes a lead stays on the board. Golf and Casual each have their own list.",
+        "A decoy that takes a lead stays on the board. Casual has its own list. "
+        "Decoys go up as one sentence, so the words table keeps that sentence as a single row. "
+        "Word by word posts each decoy on its own row.",
     )
     return text

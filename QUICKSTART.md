@@ -98,7 +98,7 @@ to any command, or set `JEV_EDITION` in `.env`. Each mirror keeps its data in `d
 `data/decider/`, `data/laya/`, or `data/clef/` and reads (never writes) Jev's data to borrow estimates.
 
 Kev's classifier is `jaredpalmer/kev-4b` on OpenRouter, Luna's is `openai/gpt-6-luna-decisions`, and Decider's is
-`perplexity/pplx-decider-v1-27b`, also on OpenRouter, so the same API key scores them:
+`perplexity/pplx-decider-v1.1-27b`, also on OpenRouter, so the same API key scores them:
 
 ```bash
 uv run jevlab --edition kev snapshot

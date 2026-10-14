@@ -388,6 +388,24 @@ def test_defend_posts_the_whole_cover_in_one_pass(tmp_path):
     assert site.ops[-1] == "clear:"
 
 
+def test_defend_word_by_word_posts_each_decoy_alone(tmp_path):
+    db = _db(tmp_path)
+    _pool(db)
+    site = _Site()
+    lines: list[str] = []
+    result = defend(
+        [("q", "strict_chain")],
+        log=lines.append,
+        db=db,
+        client=site,
+        lock_path=tmp_path / "lock",
+        word_by_word=True,
+    )
+    assert result.posted == 2
+    assert site.ops == ["append:gamma", "append:delta", "clear:"]
+    assert any("one word at a time" in line for line in lines)
+
+
 def test_defend_posts_the_decoys_as_one_sentence_and_does_not_repeat_it(tmp_path):
     db = _db(tmp_path)
     _pool(db)
@@ -481,6 +499,30 @@ def test_home_opens_defense(monkeypatch, tmp_path):
             app.screen.action_defense()
             await pilot.pause()
             assert isinstance(app.screen, DefenseScreen)
+
+    asyncio.run(check())
+
+
+def test_defense_word_by_word_defaults_off_and_golf_is_marked_gone(monkeypatch, tmp_path):
+    monkeypatch.setattr("jevlab.tui.defense.DB", lambda: DB(tmp_path / "empty.db"))
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(DefenseScreen())
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            words = app.screen.query_one("#by-word")
+            golf = app.screen.query_one("#golf")
+            assert words.value is False
+            assert str(words.label) == "Word by word"
+            assert golf.value is False
+            assert str(golf.label) == "Include golf (no longer on website)"
 
     asyncio.run(check())
 

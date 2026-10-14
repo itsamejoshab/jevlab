@@ -218,17 +218,6 @@ def pick_decoys(
     return out
 
 
-def safe_to_clear(active: list[str], phrases: list[str]) -> bool:
-    """Empty, a single leftover word, or a prefix of a phrase already on our board."""
-    if len(active) <= 1:
-        return True
-    for phrase in phrases:
-        words = phrase.split()
-        if active == words[: len(active)]:
-            return True
-    return False
-
-
 def _hold(rows: list[dict], me: str, question: dict, board: str) -> tuple[bool, str]:
     """Whether our row leads `board`, and the phrase sitting on it."""
     if not me:
@@ -540,13 +529,6 @@ def defend(
                 planned += 1
                 continue
             attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
-            active = active_words(attempt)
-            if not safe_to_clear(active, phrases):
-                log(f"  active chain is {' '.join(active)!r}; leaving it alone")
-                skipped += 1
-                continue
-            if len(active) > 1:
-                log("  clearing the active chain; the board keeps our best row")
             try:
                 _attempt, planted = _post_words(client, attempt, list(decided.decoys), log, halt)
             except SiteError as error:

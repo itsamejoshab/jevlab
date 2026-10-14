@@ -8,7 +8,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Button
 
 from jevlab.db import DB
-from jevlab.defense import QUIET, READY, already_quiet, defend, lexicon, pick_decoys, safe_to_clear, scan
+from jevlab.defense import QUIET, READY, already_quiet, defend, lexicon, pick_decoys, scan
 from jevlab.modes import HIGHEST
 from jevlab.tui.defense import DefenseLog, DefenseScreen
 from jevlab.tui.pickers import HomeScreen
@@ -84,13 +84,6 @@ def test_already_quiet_only_when_the_board_is_crowded_and_our_words_are_buried()
     assert already_quiet(0, 20, 40)
     assert already_quiet(5, 20, 40)
     assert not already_quiet(6, 20, 40)
-
-
-def test_safe_to_clear_keeps_an_unrelated_chain():
-    assert safe_to_clear([], ["alpha beta"])
-    assert safe_to_clear(["left"], ["alpha beta"])
-    assert safe_to_clear(["alpha", "beta"], ["alpha beta"])
-    assert not safe_to_clear(["secret", "sauce"], ["alpha beta"])
 
 
 def test_decoys_open_with_the_question_and_its_synonyms(tmp_path):
@@ -223,13 +216,13 @@ def test_defend_posts_each_decoy_alone_and_does_not_repeat_it(tmp_path):
     assert site.ops == ["append:gamma", "clear:", "append:delta", "clear:"]
 
 
-def test_defend_skips_a_live_chain_that_is_not_our_phrase(tmp_path):
+def test_defend_clears_a_live_chain_and_posts(tmp_path):
     db = _db(tmp_path)
     _pool(db)
     site = _Site(chain=["secret", "sauce"])
     result = defend([("q", "strict_chain")], log=lambda _m: None, db=db, client=site, lock_path=tmp_path / "lock")
-    assert result.posted == 0
-    assert site.ops == []
+    assert result.posted == 2
+    assert site.ops == ["clear:", "append:gamma", "clear:", "append:delta", "clear:"]
 
 
 def test_defend_dry_run_sends_nothing(tmp_path):

@@ -152,11 +152,13 @@ class PublishLog:
 
     def _header(self, found: re.Match[str]) -> Text:
         self.count += 1
+        if self.total and self.count > self.total:
+            self.total = self.count
         self.best = None
         self.slug = found["slug"]
         label = found["label"]
         mode, _, target = label.partition(" -> ")
-        mark = f"{self.count}/{self.total}" if self.total and self.count <= self.total else str(self.count)
+        mark = f"{self.count}/{self.total}" if self.total else str(self.count)
         text = Text()
         text.append(f"▸ {mark}  ", style="bold cyan")
         text.append(mode, style="bold cyan")

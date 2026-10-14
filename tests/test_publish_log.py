@@ -68,6 +68,17 @@ def test_publish_log_groups_a_phrase_and_marks_a_better_roll():
     assert done.splitlines()[-1] == "1/2 on top  · nothing sent"
 
 
+def test_publish_log_grows_the_denominator_for_lines_past_the_batch():
+    log = PublishLog()
+    log.render("publishing 1 line(s), re-rolls 5")
+    first = log.render("\n== cereal [Strict Shortest] 0.910/2w: exactly more").plain
+    assert "▸ 1/1  " in first
+    extra = log.render("\n== cereal [Golf Highest] 0.910/12c: exactly more").plain
+    assert "▸ 2/2  " in extra
+    another = log.render("\n== pigeons [Golf Shortest] 0.779/5c: Books").plain
+    assert "▸ 3/3  " in another
+
+
 def test_publish_log_keeps_lines_it_does_not_recognize():
     shown = PublishLog().render("  publisher crashed: RuntimeError('nope')").plain
     assert "publisher crashed" in shown

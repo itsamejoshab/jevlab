@@ -1,6 +1,16 @@
 import jevlab.config as config
 from jevlab.objective import Objective
-from jevlab.publish import pause_for_fresh_score, reroll_limits, row_listed, should_reroll, wait_for_row
+from jevlab.publish import (
+    SENTENCE_WORDS,
+    append_texts,
+    build_chain,
+    pause_for_fresh_score,
+    reroll,
+    reroll_limits,
+    row_listed,
+    should_reroll,
+    wait_for_row,
+)
 
 
 def test_requested_rerolls_run_after_a_win():
@@ -119,3 +129,47 @@ def test_only_microsoft_waits_between_rerolls(monkeypatch):
     pause_for_fresh_score(lambda _message: None)
     assert slept == [config.MICROSOFT_REROLL_GAP]
     assert config.reroll_gap() == config.MICROSOFT_REROLL_GAP
+
+
+class _Chain:
+    def __init__(self):
+        self.ops: list[str] = []
+        self.attempt = {
+            "id": "a",
+            "revisionId": "r",
+            "playMode": "strict_chain",
+            "nextTurn": 1,
+            "tokens": [],
+            "turns": [],
+        }
+
+    def turn(self, attempt, operation):
+        self.ops.append(operation["kind"] + ":" + str(operation.get("text") or operation.get("tokenId") or ""))
+        tokens = [token for token in attempt.get("tokens") or [] if token.get("active", True)]
+        if operation["kind"] == "append":
+            tokens.append({"id": f"t{len(self.ops)}", "text": operation["text"], "active": True})
+        elif operation["kind"] == "remove":
+            tokens = [token for token in tokens if token["id"] != operation["tokenId"]]
+        elif operation["kind"] == "clear":
+            tokens = []
+        turn = {"id": f"n{len(self.ops)}", "probability": 0.5}
+        self.attempt = {**attempt, "tokens": tokens, "turns": [turn], "nextTurn": int(attempt.get("nextTurn") or 1) + 1}
+        return self.attempt, turn
+
+
+def test_publish_chain_sends_the_sentence_then_the_last_word():
+    words = [f"w{i}" for i in range(SENTENCE_WORDS + 2)]
+    pieces = append_texts(words, hold_last=True)
+    assert pieces == [" ".join(words[:SENTENCE_WORDS]), words[-2], words[-1]]
+    assert append_texts(["only"], hold_last=True) == ["only"]
+    assert append_texts(["pitch", "black", "sky"], hold_last=False) == ["pitch", "black", "sky"]
+
+    site = _Chain()
+    attempt, score = build_chain(site, site.attempt, ["alpha", "beta", "gamma"], lambda _message: None, hold_last=True)
+    assert score == 0.5
+    assert site.ops == ["append:alpha beta", "append:gamma"]
+    attempt, again = reroll(site, attempt, lambda _message: None)
+    assert again == 0.5
+    assert site.ops[-2].startswith("remove:")
+    assert site.ops[-1] == "append:gamma"
+    assert [token["text"] for token in attempt["tokens"]] == ["alpha beta", "gamma"]

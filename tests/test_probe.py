@@ -2,7 +2,8 @@
 
 The winner writes every later tactic. A flat search asks again: after eight of that model's
 batches and six rounds without a better line, or after four and four when half the tactics
-are already covered. A model that has gone cold, or a newly unlocked tier, asks immediately.
+are already covered. That stall locks a different model when another one scored. A model that
+has gone cold, or a newly unlocked tier, asks immediately and may keep the same writer.
 """
 
 import asyncio
@@ -159,6 +160,59 @@ def test_a_flat_search_on_a_covered_board_asks_again_and_can_switch(tmp_path):
     switch = writer.prompts[held:]
     assert switch and {model for model, _ in switch} == {"cheap"}
     assert all("Write 8 new" not in user for _, user in switch)
+
+
+def _stall_until_due(eng, gen):
+    asyncio.run(gen.run(eng.ctx))
+    _stop_prefetch(gen)
+    _cover(eng)
+    eng.stall = 4
+    for _ in range(4):
+        asyncio.run(gen.run(eng.ctx))
+        _stop_prefetch(gen)
+
+
+def test_a_stall_hands_the_question_to_the_best_other_model(tmp_path):
+    eng = engine(tmp_path, "swap")
+    writer = _Writer()
+    # dear stays well ahead of mid, and mid stays well ahead of cheap. A stall still has to leave dear.
+    scores = {"cheap": 0.40, "mid": 0.80, "dear": 0.91}
+    _install(eng, writer, scores)
+    gen = LLMGenerate(["cheap", "mid", "dear"])
+    eng.strategies = {gen.name: gen}
+
+    _stall_until_due(eng, gen)
+    assert eng.probe_lock.model == "dear"
+
+    asyncio.run(gen.run(eng.ctx))
+    _stop_prefetch(gen)
+    asked = [model for model, user in writer.prompts if "Write 8 new" in user]
+    assert set(asked) == {"cheap", "mid", "dear"}
+    assert len(asked) == 6
+    assert eng.probe_lock.model == "mid"
+
+    held = len(writer.prompts)
+    asyncio.run(gen.run(eng.ctx))
+    _stop_prefetch(gen)
+    follow = writer.prompts[held:]
+    assert follow and {model for model, _ in follow} == {"mid"}
+    assert all("Write 8 new" not in user for _, user in follow)
+
+
+def test_a_stall_keeps_the_model_when_nobody_else_scored(tmp_path):
+    eng = engine(tmp_path, "stay")
+    writer = _Writer()
+    scores = {"cheap": 0.0, "dear": 0.91}
+    _install(eng, writer, scores)
+    gen = LLMGenerate(["cheap", "dear"])
+    eng.strategies = {gen.name: gen}
+
+    _stall_until_due(eng, gen)
+    assert eng.probe_lock.model == "dear"
+
+    asyncio.run(gen.run(eng.ctx))
+    _stop_prefetch(gen)
+    assert eng.probe_lock.model == "dear"
 
 
 def test_a_cold_writer_asks_again_on_the_next_batch(tmp_path):

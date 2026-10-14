@@ -13,10 +13,37 @@ from . import netlog
 from .config import GEN_REASONING, LLM_TIMEOUT, OPENROUTER_BASE, OPENROUTER_KEY, PLAN_MODEL, PROVIDER_SORT, gen_model
 
 
+# A search that sees this end reason should stop, including the rest of a queue.
+KEY_LIMIT_STOP = "openrouter key limit"
+_halt: str | None = None
+
+
+def key_denied(message: str) -> bool:
+    """True when OpenRouter refused because the key's budget is used up (HTTP 402/403)."""
+    text = message.casefold()
+    if "openrouter" not in text and "key limit exceeded" not in text:
+        return False
+    return any(mark in text for mark in ("403", "402", "forbidden", "limit exceeded"))
+
+
+def note_halt(message: str) -> None:
+    """Remember the first key-limit refusal. Callers that swallow the error still stop the search."""
+    global _halt
+    if _halt is None and key_denied(message):
+        _halt = message
+
+
+def take_halt() -> str | None:
+    global _halt
+    reason, _halt = _halt, None
+    return reason
+
+
 class LLMError(RuntimeError):
     def __init__(self, message: str, transient: bool = False):
         super().__init__(message)
         self.transient = transient  # worth retrying: timeouts, network errors, 429/5xx, unparseable replies
+        note_halt(message)
 
 
 TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
@@ -66,8 +93,16 @@ class LLM:
             self.on_error(f"[net] {message}")
         return message
 
-    async def complete(self, model: str, system: str, user: str, temperature: float = 1.0,
-                       max_tokens: int = 4000, json_mode: bool = True, reasoning: str | None = None) -> str:
+    async def complete(
+        self,
+        model: str,
+        system: str,
+        user: str,
+        temperature: float = 1.0,
+        max_tokens: int = 4000,
+        json_mode: bool = True,
+        reasoning: str | None = None,
+    ) -> str:
         body = {
             "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -106,8 +141,13 @@ class LLM:
             raise LLMError(self.failed(model, type(error).__name__, str(error)), transient=True) from error
         if response.status_code != 200:
             self.failures += 1
-            raise LLMError(self.failed(model, response.status_code, response.text[:300]),
-                           transient=response.status_code in TRANSIENT_STATUS)
+            detail = response.text[:300]
+            if response.status_code in (402, 403):
+                detail = f"Forbidden {detail}"
+            raise LLMError(
+                self.failed(model, response.status_code, detail),
+                transient=response.status_code in TRANSIENT_STATUS,
+            )
         try:
             data = response.json()
         except ValueError as error:
@@ -123,8 +163,16 @@ class LLM:
         except (KeyError, IndexError, TypeError) as error:
             raise LLMError(f"{model} bad reply: {str(data)[:300]}", transient=True) from error
 
-    async def json(self, model: str, system: str, user: str, temperature: float = 1.0, max_tokens: int = 4000,
-                   attempts: int = 3, reasoning: str | None = None):
+    async def json(
+        self,
+        model: str,
+        system: str,
+        user: str,
+        temperature: float = 1.0,
+        max_tokens: int = 4000,
+        attempts: int = 3,
+        reasoning: str | None = None,
+    ):
         """complete() + extract_json(), retrying unparseable or empty replies and transient HTTP errors
         (timeouts, 429, 5xx). Other 4xx errors are real request problems and fail at once."""
         for attempt in range(attempts):

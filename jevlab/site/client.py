@@ -185,8 +185,10 @@ class SiteClient:
             "origin": SITE_BASE,
             "referer": SITE_BASE + ("/" if self.edition == "jev" else f"/{self.edition}/"),
         }
-        if self.cookies:
-            headers["cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+        with self._cookie_lock:
+            cookies = dict(self.cookies)
+        if cookies:
+            headers["cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
         return headers
 
     def call(self, name: str, data: dict, method: str = "GET"):

@@ -56,10 +56,11 @@ STRATEGY_INFO = {
     "fragments first, weakest first, then windows of 32, 16, 8, 4 and 2 words.",
     "local_edit": "Single edits around a top line: substitute, delete or insert a word, swap two words, or move a "
     "clause. Cheap and steady once a good line exists.",
-    "compress": "Removes each word of the best line in turn to measure how much it matters (the word colours "
-    "above), then deletes as many words as it can while the rounded score holds. Only runs when shorter "
-    "helps: level with the leader's score, or longer than their line. Against a one-word Shortest yes "
-    "leader it scores each word of a longer line on its own.",
+    "compress": "Shortens a top line while the rounded score holds. Each step tries dropping one word, two "
+    "neighboring words, or a whole clause (the clause marker goes with it). The word colours above are "
+    "single-word drops, measured for display; the cut is kept only after the remaining phrase is scored. "
+    "Only runs when shorter helps: level with the leader's score, or longer than their line. Against a "
+    "one-word Shortest yes leader it scores each word of a longer line on its own.",
     "genetic": "Genetic algorithm seeded from diverse good lines: picks parents by tournament, splices them at "
     "clause boundaries, mutates the children, and now and then has an LLM rewrite one.",
     "surrogate_bo": "Generates thousands of edits locally and asks the surrogate (a small model trained on our own "
@@ -331,6 +332,9 @@ class LabScreen(Screen):
             item.leader = f"{lead.probability:.2f}/{lead.units}w" if lead else "empty"
             self.log_line(f"== [{index + 1}/{len(self.queue)}] {item.title}  leader {item.leader}")
             await engine.run()
+            if engine.end_reason == "openrouter key limit":
+                self.cancelled = True
+                self.log_line("OpenRouter key limit reached; leaving the rest of the queue")
             self.update_item(item, engine)
             item.reason = engine.end_reason
             item.state = "done"
@@ -418,8 +422,7 @@ class LabScreen(Screen):
                 where = "live" if live_now else "between rounds"
                 how = f"{session.play_mode} sentence" if session.sentences else session.play_mode
                 self.log_line(
-                    f"== {where} [{how}] {question['title']}  "
-                    f"finish {session.threshold:.2f}  leader {item.leader}"
+                    f"== {where} [{how}] {question['title']}  finish {session.threshold:.2f}  leader {item.leader}"
                 )
                 try:
                     engine = Engine(
@@ -485,6 +488,9 @@ class LabScreen(Screen):
         except Exception as error:
             if gen == self.live_gen:
                 self.log_line(f"live engine stopped: {error!r}")
+        if engine.end_reason == "openrouter key limit":
+            self.cancelled = True
+            self.log_line("OpenRouter key limit reached; stopping")
 
     def arm_live_round(self) -> None:
         """Round just went live. Vault line first, then a line this search already found, then one word."""

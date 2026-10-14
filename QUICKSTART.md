@@ -175,7 +175,7 @@ and Clef weights never land in the repo; they stay in the cache above.
 
 ## Next
 
+- [README.md](README.md): what the search jobs do, and the board tools around them
+- [docs/how-it-works.md](docs/how-it-works.md): technical account of a search
 - [docs/commands.md](docs/commands.md): every command and flag
-- [docs/how-it-works.md](docs/how-it-works.md): short technical summary of the search
-- [docs/architecture.md](docs/architecture.md): full engine write-up, with the math
 - [docs/configuration.md](docs/configuration.md): models, costs, and tuning

@@ -1,71 +1,73 @@
 # jevlab
 
-**An offline search lab for playing [Trick Jev](https://trickjev.com).**
+**An offline search lab for [Trick Jev](https://trickjev.com).**
 
-Trick Jev poses a question. A player answers with a phrase, and Jev, a language model, reads that phrase and reports how sure it is of an answer. jevlab searches for the phrases that rank highest, on your own machine, and holds the winners until you choose to publish them on the public leaderboard.
+Search runs on this machine against a local copy of the model. Nothing hits the public board until a line is published. We search **Strict**, mainly **Strict Highest**, and also **Strict Shortest yes**. Casual and Golf are not searched. A Strict line that would take one of those boards is cross-posted, which is where the cheap wins come from.
 
 [![jevlab home screen](docs/screenshots/lab.png)](docs/screenshots/lab.png)
 [![jevlab search](docs/screenshots/search.png)](docs/screenshots/search.png)
 
-## Strict Highest
+## The search
 
-**Strict Highest** is the main board. Two rules decide the order, and they are applied in that order:
+A run scores phrases locally and remembers every score. A [scheduler](docs/how-it-works.md#who-gets-the-next-turn) spends the scoring budget on whichever job has been moving the best line. The jobs are the rows in the bottom right of the search screen.
 
-1. **Higher confidence wins.** Jev's confidence in the target answer is rounded to the nearest percentage point. A phrase at 99% always ranks above a phrase at 98%.
-2. **Fewer words breaks a tie.** When two phrases round to the same confidence, the shorter one ranks higher.
+**[Generators](docs/how-it-works.md#generators)** (`llm:core`, and later `llm:mid`, `llm:premium`). Language models write whole phrases. Each model is asked for the same few ways of speaking to Jev, and the one whose phrases score highest keeps writing until the best line stops improving. Pricier models join only after the search has already stalled.
 
-A shorter phrase never overtakes a higher score. Length matters only after the rounded confidence is equal.
+**[Local edit](docs/how-it-works.md#local-edit).** One-word changes around a line that already scores well: swap a word, drop a word, insert a word, or move a clause. Cheap, and useful once a good line exists.
 
-```mermaid
-flowchart TB
-    Q["The question"] --> J["Jev reads the phrase<br/>and answers"]
-    P["The phrase<br/>a chain of allowed words"] --> J
-    J --> C["Confidence in the target answer<br/>rounded to the nearest 1%"]
-    C --> RANK["Board order"]
-    W["Word count"] --> RANK
-    RANK --> R1["1. Higher confidence ranks first"]
-    RANK --> R2["2. Fewer words ranks first<br/>only when confidence is tied"]
-```
+**[Compress](docs/how-it-works.md#compress).** Shortens a strong line while the score holds. It tries dropping one word, two neighboring words, or a whole clause, and keeps a cut only after the remaining phrase is scored. The word colors on the search screen are a side measurement, not the order it cuts in.
 
-The same two facts decide whether a new phrase is worth keeping. The numbers below are an illustration, not a live board:
+**[Genetic](docs/how-it-works.md#genetic-search).** Builds children from lines that already score well. Two parents are spliced at a clause break, or one parent is edited a few times. A small learned model throws out the weak children before they spend a real score.
 
-| Phrase | Confidence | Words | Where it ranks |
-| --- | --- | --- | --- |
-| a long argument that cereal counts as soup | 99% | 40 | Second. Same confidence as the line below, but longer. |
-| soup | 99% | 1 | First. Same confidence, fewer words. |
-| breakfast | 98% | 1 | Third. One point lower, so the short length does not help. |
+**[Surrogate BO](docs/how-it-works.md#surrogate-guided-search).** Makes a large pile of local edits, asks that same learned model which ones look promising, and scores only the top of the pile. The model is trained on our own scores for this question, from [sentence embeddings](docs/how-it-works.md#embeddings).
 
-### What a search does
+**[GCG](docs/how-it-works.md#gcg).** Uses a second learned model, one that can say which single-word swap should help, then checks the best guesses with a real score.
 
-A search rehearses that ranking in private. It scores phrases against a local copy of Jev and does not touch the public board until you publish.
+When the best line goes quiet, the search steps up a [ladder](docs/how-it-works.md#the-ladder). Each rung is a heavier job, and any new best drops back to ordinary search.
 
-It remembers every phrase it scores. New phrases come from two kinds of work, and a scheduler spends the scoring budget on whichever kind is actually moving the best line.
+**[Precision](docs/how-it-works.md#precision)** (L1). Scores the same line several times. The model’s answers wobble, and the average of those wobbles separates lines that round to the same percent.
 
-**Writing.** Language models write whole phrases, each one in a chosen way of speaking to Jev: a scene, a deduction, a direct claim, a worked example, and others. At the start of a question every model in the pool writes the same few of those ways. The model whose phrases score highest keeps writing, in every way, until the best line stops improving. The pool is asked again then. On a question that has already been searched hard, it is asked again sooner, because one model stops covering every way of phrasing.
+**[Sweep](docs/how-it-works.md#sweep)** (L2). Tries a large vocabulary in every word slot and every gap, then pairs the best single edits.
 
-**Editing.** Other jobs start from a line that already scores well and change it: drop a word, swap a word, cross two lines, or grow a long one. A learned stand-in ranks the large piles of edits so only the promising ones spend a real score.
+**[Boosters](docs/how-it-works.md#boosters)** (L3). Short word sequences that have raised the score on other questions, stuck on as a prefix, a suffix, or a clause.
 
-A phrase is held for publishing only after several scores agree that it would outrank the current public leader. One lucky score is not enough. Putting that phrase on the live board is a separate step.
+**[Beam](docs/how-it-works.md#beam)** (L4). Builds a line from nothing, one word at a time, keeping the best few at each length. Mid-tier models join at the sweep, and the most expensive models join here.
 
-```mermaid
-flowchart TB
-    ASK["Ask every model for the same few ways of phrasing"] --> PICK["Keep the model whose phrases score highest"]
-    PICK --> WRITE["That model keeps writing,\nswitching among ways of phrasing"]
-    KNOWN["Lines that already score well"] --> EDIT["Change them: drop a word,<br/>swap a word, or join two lines"]
-    WRITE --> SCORE["Score the phrase privately"]
-    EDIT --> SCORE
-    SCORE --> REMEMBER["Remember the score"]
-    REMEMBER --> HOLD{"Repeated scores say it<br/>beats the public leader?"}
-    HOLD -- yes --> PUB["Hold it until you publish"]
-    REMEMBER --> QUIET{"Has the best line stopped moving?"}
-    QUIET -- "still moving" --> WRITE
-    QUIET -- "still moving" --> EDIT
-    QUIET -- "gone quiet" --> ASK
-```
+**[Single word](docs/how-it-works.md#single-word).** Strict Shortest yes only. Most of those boards are led by one word, so this scores single words and pairs directly: model ideas, other players’ words, then slices of a large vocabulary.
 
-The lab also plays **Strict Shortest yes**. There a phrase only has to convince Jev, just over 50%, and the shortest convincing phrase wins. The diagram above is Strict Highest.
+Some Highest boards are led by a very long line that already sits at the top score the model will report. Ordinary edits cannot see a difference there. These jobs run only in [that case](docs/how-it-works.md#plateau-jobs):
 
-The wording rules, the noise in Jev's answers, and the detail of the probe, the frames, and the scheduler are in [docs/how-it-works.md](docs/how-it-works.md).
+**[Extend](docs/how-it-works.md#extend)** and **[grow](docs/how-it-works.md#grow)** lengthen a line, a clause at a time or one appended word at a time, up toward the leader’s length.
+
+**[Probe climb](docs/how-it-works.md#probe-climb)** appends a short claim for the other answer, which pulls tied lines down into a range where they separate, then climbs on that hidden ranking.
+
+**[Scenario join](docs/how-it-works.md#scenario-join)** has a model write high-stakes scenes and joins each scene to our best tied lines.
+
+**[Drift](docs/how-it-works.md#drift)** walks toward the neighbor whose own edits most often keep the top score. Those lines have been the ones with an edit that scores one point higher.
+
+**[Long chains](docs/how-it-works.md#long-chains)** (`chain`, `chain_ablate`, `chain_compact`) assemble very long lines out of fragments. They are off unless `JEV_LONG_TARGET` is set.
+
+The technical account of each job, including how parents are chosen and how children are thrown out, is in [docs/how-it-works.md](docs/how-it-works.md).
+
+## Around the boards
+
+**[Publish](docs/how-it-works.md#the-vault)** plays a vault line on the live site. A line is vaulted only after several local scores agree that its lower bound would beat the current leader.
+
+**[Cross-post](docs/how-it-works.md#cross-post).** Golf is filled from the Strict vault on every publish: the same text, ranked by characters. Casual is optional on the publish screen (`Include casual proxy`). It takes the Strict Highest answer and offers it on a Casual board that answer would take, including an empty board. A Casual leader of one or two words usually keeps a tie.
+
+**[Import](docs/how-it-works.md#import).** The publish screen can copy another edition’s best measured Strict lines in as estimates (Jev, Kev, Luna, Decider, Laya, Clef). Borrowed lines are posted without a fresh local check. Lines this edition scored itself are re-checked before they go out.
+
+**[Defend](docs/how-it-works.md#defend).** On boards we already lead, the public word list is a copy of our winning phrase, and other players mine it. Defense posts the question’s own words, a few synonyms, then strong words from other boards, so that list stops pointing at the phrase. It skips a board whose top list is already crowded.
+
+**[Target a player](docs/how-it-works.md#target-a-player).** On the search setup screen, picking a name selects every board that player currently leads, so a run can chase one rival.
+
+**[Target an answer](docs/how-it-works.md#target-an-answer).** On a choice question, a run can aim at one option. The score is then that option’s probability, and the vault keeps those lines separate.
+
+**[Live mode](docs/how-it-works.md#live-mode).** Follows the site’s live round, searches it, and can post as it goes. Fast posts the first word immediately and then every gain. Slow posts only while we are not first. The chain can be Casual (the phrase as one turn) or Strict (one word at a time).
+
+**[Win mode](docs/how-it-works.md#win-mode).** After a line takes the lead, the run stops once it has spent a set number of further scores, instead of searching the rest of the budget.
+
+The same lab runs the mirror games. Add `--edition kev`, `luna`, `decider`, `laya`, or `clef`. Install and the first search are in [QUICKSTART.md](QUICKSTART.md).
 
 ## Get started
 
@@ -76,22 +78,20 @@ uv run jevlab snapshot
 uv run jevlab lab --q is-cereal-a-soup
 ```
 
-See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough: installation, the first search, the vault, publishing, and the Kev, Laya, and Clef editions.
+## More
 
-## Documentation
-
-| Doc | Contents |
+| Doc | What it is |
 | --- | --- |
-| [QUICKSTART.md](QUICKSTART.md) | Install, configure, and run everything |
-| [docs/how-it-works.md](docs/how-it-works.md) | How a search runs: the rules, the noise, the model probe, and the scheduler |
+| [docs/how-it-works.md](docs/how-it-works.md) | Technical account of each search job and the board tools |
+| [docs/techniques/](docs/how-it-works.md#the-math) | The formulas, one page per technique |
+| [QUICKSTART.md](QUICKSTART.md) | Install, the vault, publishing, and the other editions |
 | [docs/commands.md](docs/commands.md) | Every command and flag |
-| [docs/configuration.md](docs/configuration.md) | Model roles, swapping models, costs, Jev vs Kev vs Laya vs Clef |
-| [docs/architecture.md](docs/architecture.md) | Full engine write-up, with the math, plus a source map |
-| [scripts/README.md](scripts/README.md) | Research scripts and benchmarks |
+| [docs/configuration.md](docs/configuration.md) | Model roles, costs, and environment variables |
+| [scripts/README.md](scripts/README.md) | Research scripts |
 
 ## Be a good guest
 
-Trick Jev is someone's hobby project. jevlab does its searching offline precisely so it doesn't hammer the site, so keep it that way: snapshot occasionally, keep the default publish delays, and remember that `jevlab publish` plays real turns on a public leaderboard.
+Trick Jev is someone’s hobby project. Searching stays offline so the site is left alone. Snapshot occasionally, keep the default publish delays, and remember that `jevlab publish` plays real turns on a public leaderboard.
 
 ## License
 

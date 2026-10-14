@@ -23,6 +23,8 @@ SESSION_PATH = ROOT / "session.json"
 
 FN = {
     "menu": "21e5ff2a5575cc25835a6be236fe07a907bd73259540607b4c153abcc8937c15",
+    # The menu lists questions without jevRequest. Opening one still returns that body.
+    "question": "e89d69e78ab2af4ba344e00a172d20f105914fd252aee1df38d72c70eec98207",
     "viewer": "c9e14d2d213879054bf83931aea7abca20a36b3907b95a4ee71c8436a2752854",
     "board": "0f083c76e9ebaeb9f82b571245913fe8bc7d08790dc02e14545fb03786698129",
     "run": "4a3e733a8051282b1f805d385c0c2fa7799e5e4bc87375d17d72d0368b72e08a",
@@ -246,6 +248,10 @@ class SiteClient:
 
     def menu(self) -> dict:
         return self.call("menu", {"edition": self.edition})
+
+    def question(self, revision_id: str) -> dict:
+        """One question, including `jevRequest`. The menu no longer sends that body."""
+        return self.call("question", {"edition": self.edition, "revisionId": revision_id}) or {}
 
     def viewer(self) -> dict:
         return self.call("viewer", {"edition": self.edition})

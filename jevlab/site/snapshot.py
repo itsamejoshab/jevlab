@@ -18,6 +18,44 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, log) -> list[dict]:
+    """The menu lists questions without `jevRequest`. Opening one still returns that body."""
+    missing = [q for q in questions if not q.get("jevRequest") and q.get("revisionId")]
+    if not missing:
+        return questions
+    found: dict[str, dict] = {}
+
+    def fetch(question: dict):
+        revision = question["revisionId"]
+        try:
+            full = client.question(revision)
+        except SiteError as error:
+            log(f"  {question['slug']}: jevRequest fetch failed ({error})")
+            return revision, None
+        except Exception as error:
+            log(f"  {question['slug']}: jevRequest fetch failed ({error!r})")
+            return revision, None
+        return revision, full if isinstance(full, dict) else None
+
+    with ThreadPoolExecutor(workers) as pool:
+        for revision, full in pool.map(fetch, missing):
+            if full and full.get("jevRequest"):
+                found[revision] = full
+    filled = []
+    for question in questions:
+        full = found.get(question.get("revisionId") or "")
+        if not full:
+            filled.append(question)
+            continue
+        merged = dict(question)
+        for key in ("jevRequest", "instructions", "modelVersion", "askedBy"):
+            if full.get(key) is not None:
+                merged[key] = full[key]
+        filled.append(merged)
+    log(f"jevRequest filled for {len(found)}/{len(missing)} questions the menu omitted")
+    return filled
+
+
 def take_snapshot(
     db: DB,
     client: SiteClient | None = None,
@@ -49,6 +87,7 @@ def take_snapshot(
     snapshot_id = cursor.lastrowid
 
     questions = [q for q in menu.get("questions") or [] if not slugs or q["slug"] in slugs]
+    questions = fill_jev_requests(client, questions, workers, log)
     previous_goals = {row["slug"]: row["goal"] or "yes" for row in db.all("SELECT slug, goal FROM questions")}
     db.executemany(
         """INSERT OR REPLACE INTO questions

@@ -12,7 +12,7 @@ $$
 
 where $e(x)$ is a sentence embedding and $u(x)$ is the word count. The length coordinate is clipped at $1$ for the cross-question model. The regression target is $\mathrm{logit}(p)$ with the probability clipped into $[0.005,\, 0.995]$, so a phrase at $0.99$ and a phrase at $0.97$ stay far apart. See [Fitness](fitness.md) for why the logit is the scale.
 
-The fit is Bayesian ridge regression. An 80/20 holdout reports Spearman $\rho$. The model used for ranking is then refit on every row. Bayesian ridge also returns a predictive standard deviation $\sigma(x)$.
+The fit is Bayesian ridge regression. Five-fold cross-validation holds each phrase out once, and Spearman $\rho$ is one correlation on those out-of-fold predictions together. Each fold still trains on the other 80%. The model used for ranking is then refit on every row. Bayesian ridge also returns a predictive standard deviation $\sigma(x)$.
 
 The surrogate is trusted once $\rho \ge 0.2$. Below that, screening falls back to the logprob proxy or to a uniform draw.
 

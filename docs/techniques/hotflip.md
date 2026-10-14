@@ -12,7 +12,7 @@ $$
 w_i = \frac{i}{\sum_{j=1}^{L} j}.
 $$
 
-Later words weigh more in the second pool. A one-hidden-layer network (64 ReLU units) maps $\psi(x)$ to $\mathrm{logit}(p)$. It is trusted once its 80/20 holdout Spearman $\rho$ reaches $0.3$, which is stricter than the phrase surrogate’s $0.2$.
+Later words weigh more in the second pool. A one-hidden-layer network (64 ReLU units) maps $\psi(x)$ to $\mathrm{logit}(p)$. It is trusted once the Spearman $\rho$ of its pooled 5-fold out-of-fold predictions reaches $0.3$, which is stricter than the phrase surrogate’s $0.2$.
 
 ## The swap estimate
 

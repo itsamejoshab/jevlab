@@ -7,7 +7,7 @@ WordSurrogate: per-word embeddings pooled two ways (mean and position-weighted)
 -> small MLP. It is differentiable with respect to each word vector, which is
 what the GCG/HotFlip proposer needs, since Jev itself exposes no gradients.
 
-Both report a holdout Spearman rho; callers gate on it.
+Both report a Spearman rho on pooled 5-fold out-of-fold predictions; callers gate on it.
 """
 
 from __future__ import annotations
@@ -219,6 +219,21 @@ def _target(p: float) -> float:
     return logit(p, eps=0.005)
 
 
+def _oof_rho(X: np.ndarray, y: np.ndarray, seed: int, make, folds: int = 5) -> float:
+    """Spearman of every row predicted by a model that did not train on it.
+
+    Each fold trains on the other 80%. The score is one correlation over all of those predictions,
+    so a small archive still contributes every row.
+    """
+    order = np.random.default_rng(seed).permutation(len(y))
+    predicted = np.empty(len(y), dtype=float)
+    for fold in range(folds):
+        test = order[fold::folds]
+        train = np.setdiff1d(order, test)
+        predicted[test] = make().fit(X[train], y[train]).predict(X[test])
+    return spearman(predicted, y)
+
+
 class PhraseSurrogate:
     def __init__(self, embedder: Embedder, prior=None, question: tuple[str, str] = ("", "yes")):
         self.embedder = embedder
@@ -255,11 +270,7 @@ class PhraseSurrogate:
             return 0.0
         X = self.features(phrases)
         y = np.array([_target(data[p]) for p in phrases])
-        rng = np.random.default_rng(seed)
-        order = rng.permutation(len(phrases))
-        cut = int(len(order) * 0.8)
-        holdout = BayesianRidge().fit(X[order[:cut]], y[order[:cut]])
-        self.rho = spearman(holdout.predict(X[order[cut:]]), y[order[cut:]])
+        self.rho = _oof_rho(X, y, seed, BayesianRidge)
         self.model = BayesianRidge().fit(X, y)
         self.y_mean = float(y.mean())
         self.trained_on = len(phrases)
@@ -317,9 +328,6 @@ class WordSurrogate:
         self.embedder.embed(words)
         X = self.features(phrases)
         y = np.array([_target(data[p]) for p in phrases])
-        rng = np.random.default_rng(seed)
-        order = rng.permutation(len(phrases))
-        cut = int(len(order) * 0.8)
 
         def make():
             return MLPRegressor(
@@ -331,8 +339,7 @@ class WordSurrogate:
                 random_state=seed,
             )
 
-        holdout = make().fit(X[order[:cut]], y[order[:cut]])
-        self.rho = spearman(holdout.predict(X[order[cut:]]), y[order[cut:]])
+        self.rho = _oof_rho(X, y, seed, make)
         self.model = make().fit(X, y)
         self.trained_on = len(phrases)
         return self.rho

@@ -9,12 +9,42 @@ import time
 from ..config import EXPENSIVE_MODELS, TIER_LEVEL, TIER_NAMES
 from ..llm import LLMError
 from ..objective import site_round
+from ..rules import normalize
 from . import prompts
+from . import probe
 from .archive import ARCHETYPES
+from .routes import assign
 
 FUNCTION_WORDS = [
-    "the", "a", "our", "my", "this", "is", "are", "so", "and", "which", "that", "here", "means", "always",
-    "only", "every", "no", "not", "yes", "we", "i", "it", "of", "in", "at", "with", "for", "one", "all",
+    "the",
+    "a",
+    "our",
+    "my",
+    "this",
+    "is",
+    "are",
+    "so",
+    "and",
+    "which",
+    "that",
+    "here",
+    "means",
+    "always",
+    "only",
+    "every",
+    "no",
+    "not",
+    "yes",
+    "we",
+    "i",
+    "it",
+    "of",
+    "in",
+    "at",
+    "with",
+    "for",
+    "one",
+    "all",
 ]
 CLAUSE_BREAKS = {"and", "so", "which", "that", "because", "but", "then", "hereafter", "therefore", "where"}
 # Long-chain regime: at or below this many words, word-level strategies take over from chain compaction.
@@ -44,7 +74,11 @@ def short(model: str) -> str:
 
 class LLMGenerate(Strategy):
     """Generator models write whole phrases from the archetypes, seeing our scored lines (OPRO style).
-    One instance and bandit arm per price tier; each batch goes to the next model in the tier, round robin."""
+
+    One instance and bandit arm per price tier. Before the first batch, and again when the search
+    goes flat, every unlocked model writes the same five tactics. The winner then writes every tactic
+    until the next probe. Within a tier that has not been probed, models still take turns.
+    """
 
     needs_llm = True
     COLD_AFTER = 2  # consecutive empty batches before a model sits out
@@ -62,6 +96,7 @@ class LLMGenerate(Strategy):
         self.pending: asyncio.Future | None = None
         self.empty_streak = {m: 0 for m in self.models}
         self.cold_until = {m: 0.0 for m in self.models}
+        self.just_probed = False
 
     def unlocked(self, ctx) -> bool:
         """Pricier tiers join only once the ladder has escalated far enough."""
@@ -77,6 +112,12 @@ class LLMGenerate(Strategy):
         return warm
 
     def next_model(self, ctx=None) -> str | None:
+        if ctx is not None:
+            locked = ctx.engine.probe_lock.model
+            if locked:
+                if locked not in self.models or time.monotonic() < self.cold_until.get(locked, 0):
+                    return None
+                return locked
         warm = self.warm(ctx)
         if not warm:
             return None
@@ -85,8 +126,10 @@ class LLMGenerate(Strategy):
             pricey = [m for m in warm if m in EXPENSIVE_MODELS]
             if pricey:
                 ctx.engine.expensive_used += 1
-                ctx.log(f"[{self.name}] stall: one {short(pricey[0])} batch "
-                        f"({ctx.engine.expensive_used} used this question)")
+                ctx.log(
+                    f"[{self.name}] stall: one {short(pricey[0])} batch "
+                    f"({ctx.engine.expensive_used} used this question)"
+                )
                 return pricey[0]
         for _ in range(len(self.models)):
             candidate = self.models[self.turn % len(self.models)]
@@ -95,8 +138,27 @@ class LLMGenerate(Strategy):
                 return candidate
         return model
 
+    def _opening_arm(self, ctx) -> bool:
+        """Until a model is locked, only the cheapest unlocked tier runs the probe."""
+        arms = [
+            arm
+            for arm in ctx.engine.strategies.values()
+            if isinstance(arm, LLMGenerate) and arm.unlocked(ctx) and arm.warm(ctx)
+        ]
+        if not arms:
+            return True
+        lead = min(arms, key=lambda arm: (arm.tier, arm.name))
+        return lead is self
+
     def available(self, ctx) -> bool:
-        if ctx.llm is None or not self.warm(ctx) or not self.unlocked(ctx):
+        if ctx.llm is None or not self.unlocked(ctx):
+            return False
+        locked = ctx.engine.probe_lock.model
+        if locked:
+            ready = locked in self.models and time.monotonic() >= self.cold_until.get(locked, 0)
+        else:
+            ready = bool(self.warm(ctx)) and self._opening_arm(ctx)
+        if not ready:
             return False
         return self.pending is None or self.pending.done() or len(ctx.archive) < 20
 
@@ -161,15 +223,17 @@ class LLMGenerate(Strategy):
         drop = max(droppable, key=lambda i: (tries(chosen[i]), i))
         return [name for i, name in enumerate(chosen) if i != drop] + [pick]
 
-    async def _call(self, ctx, model: str, archetypes: list[str], variants: list[str],
-                    fresh: bool = False) -> list[tuple[str, str]]:
+    async def _call(
+        self, ctx, model: str, archetypes: list[str], variants: list[str], fresh: bool = False, count: int | None = None
+    ) -> list[tuple[str, str]]:
+        n = self.count if count is None else count
         max_tokens = 6000
         if ctx.objective.long:
             target = ctx.engine.long_target
-            user = prompts.long_chain_user(ctx, archetypes, min(self.count, max(4, 3600 // max(target, 1))), target)
+            user = prompts.long_chain_user(ctx, archetypes, min(n, max(4, 3600 // max(target, 1))), target)
             max_tokens = 9000
         else:
-            user = prompts.gen_user(ctx, archetypes, self.count, variants, fresh=fresh)
+            user = prompts.gen_user(ctx, archetypes, n, variants, fresh=fresh)
         try:
             data = await ctx.llm.json(model, prompts.gen_system(ctx), user, temperature=1.0, max_tokens=max_tokens)
         except (LLMError, Exception) as error:  # one bad model reply should not stop the lab
@@ -187,11 +251,123 @@ class LLMGenerate(Strategy):
             out.append((text, tactic if tactic in ARCHETYPES else "other"))
         return out
 
+    def route(self, ctx, model: str | None, archetypes: list[str]) -> tuple[str | None, list[str]]:
+        """Keep a dear model on tactics it wins. Otherwise hand the batch to the next model."""
+        if model is None:
+            return None, archetypes
+        routed = assign(model, archetypes)
+        if routed is not None:
+            return model, routed
+        skipped = short(model)
+        for _ in range(max(len(self.models) - 1, 0)):
+            model = self.next_model(ctx)
+            if model is None:
+                break
+            routed = assign(model, archetypes)
+            if routed is not None:
+                ctx.log(f"[{self.name}] {skipped} skipped; {short(model)} writes this batch")
+                return model, routed
+        ctx.log(f"[{self.name}] {skipped} skipped; no other model is warm")
+        return None, archetypes
+
+    def _arms(self, ctx) -> list[LLMGenerate]:
+        arms = [arm for arm in ctx.engine.strategies.values() if isinstance(arm, LLMGenerate) and arm.unlocked(ctx)]
+        if self.unlocked(ctx) and self not in arms:
+            arms.append(self)
+        return sorted(arms, key=lambda arm: (arm.tier, arm.name))
+
+    def probe_pool(self, ctx) -> list[str]:
+        """Unlocked models, cheapest tier first. A cold model stays in the pool so the probe can drop it."""
+        found: list[str] = []
+        pricey = ctx.engine.frugal() and not ctx.engine.expensive_ok()
+        for arm in self._arms(ctx):
+            for model in arm.models:
+                if pricey and model in EXPENSIVE_MODELS:
+                    continue
+                if model not in found:
+                    found.append(model)
+        return found
+
+    def _writer_cold(self, ctx) -> bool:
+        model = ctx.engine.probe_lock.model
+        if not model:
+            return False
+        for arm in self._arms(ctx):
+            if model in arm.cold_until and time.monotonic() < arm.cold_until[model]:
+                return True
+        return False
+
+    def _probe_due(self, ctx) -> bool:
+        stats = ctx.archive.style_stats()
+        tries = {name: int(row.get("tries", 0)) for name, row in stats.items()}
+        tactics = [name for name in ARCHETYPES if name in prompts.ARCHETYPE_GUIDE]
+        return probe.due(
+            ctx.engine.probe_lock,
+            stall=ctx.engine.stall,
+            exhausted=probe.searched_out(tries, tactics, COVERAGE_TRIES),
+            cold=self._writer_cold(ctx),
+            force=ctx.engine.probe_force,
+        )
+
+    def _release(self, ctx, model: str) -> None:
+        """A model the probe just picked gets to write, even if empty batches had sat it out."""
+        for arm in self._arms(ctx):
+            if model in arm.cold_until:
+                arm.cold_until[model] = 0.0
+                arm.empty_streak[model] = 0
+
+    async def _probe(self, ctx) -> str | None:
+        async with ctx.engine.probe_gate:
+            if not self._probe_due(ctx):
+                return ctx.engine.probe_lock.model
+            pool = self.probe_pool(ctx)
+            if not pool:
+                return None
+            ctx.log(f"[{self.name}] probing {', '.join(short(model) for model in pool)}")
+            tactics = list(probe.PROBE_TACTICS)
+            batches = await asyncio.gather(
+                *(self._call(ctx, model, tactics, [], count=probe.PROBE_COUNT) for model in pool)
+            )
+            owners: dict[str, str] = {}
+            items = []
+            for model, proposals in zip(pool, batches, strict=True):
+                kept = proposals
+                if ctx.engine.one_word_race:
+                    kept = [(text, tactic) for text, tactic in proposals if len(text.split()) == 1]
+                for text, tactic in kept:
+                    key = normalize(text)
+                    if key in owners:
+                        continue
+                    owners[key] = model
+                    items.append((text, self.name, "", tactic))
+            scored = await ctx.evaluate(items) if items else []
+            by_model: dict[str, list[float]] = {model: [] for model in pool}
+            for cand in scored:
+                owner = owners.get(cand.phrase) or owners.get(normalize(cand.phrase))
+                if owner in by_model:
+                    by_model[owner].append(cand.p)
+            scores = {model: probe.mean_top(values) for model, values in by_model.items()}
+            winner = probe.choose(scores, pool) or pool[0]
+            ctx.engine.probe_lock = probe.Lock(model=winner, batches=0)
+            ctx.engine.probe_force = False
+            self.just_probed = True
+            self._release(ctx, winner)
+            ranked = " ".join(f"{short(model)}={scores[model]:.3f}" for model in pool)
+            ctx.log(f"[{self.name}] probe locks {short(winner)} ({ranked})")
+            return winner
+
     async def _batch(self, ctx) -> tuple[str, list[str], list[tuple[str, str]], bool]:
         self.round += 1
+        if self._probe_due(ctx):
+            winner = await self._probe(ctx)
+            if self.just_probed:
+                return winner or "", list(probe.PROBE_TACTICS), [], False
+            if not winner or winner not in self.models:
+                return "", [], [], False
         model = self.next_model(ctx)
         fresh = ctx.fresh and self.round % 2 == 1
         archetypes = self.pick_archetypes(ctx, fresh)
+        model, archetypes = self.route(ctx, model, archetypes)
         if model is None:
             return "", archetypes, [], fresh
         variants = []
@@ -205,14 +381,27 @@ class LLMGenerate(Strategy):
         if self.pending is None:
             self.pending = asyncio.ensure_future(self._batch(ctx))
 
+    def _prefetch_next(self, ctx) -> None:
+        """A batch that is about to re-probe waits until this one is finished, so a flat run is not asked twice."""
+        if self.warm(ctx) and not self._probe_due(ctx):
+            self.prefetch(ctx)
+
     async def run(self, ctx) -> None:
         self.prefetch(ctx)
         task, self.pending = self.pending, None
         model, archetypes, proposals, fresh = await task
+        probed = self.just_probed
+        self.just_probed = False
         if ctx.engine.one_word_race:
             proposals = [(text, tactic) for text, tactic in proposals if len(text.split()) == 1]
+        if probed:
+            if model:
+                self.empty_streak[model] = 0
+            self._prefetch_next(ctx)
+            return
         if not model:
             return
+        ctx.engine.probe_lock.batches += 1
         if proposals:
             self.empty_streak[model] = 0
         else:
@@ -220,15 +409,18 @@ class LLMGenerate(Strategy):
             if self.empty_streak[model] >= self.COLD_AFTER:
                 self.cold_until[model] = time.monotonic() + self.COLD_SECONDS
                 self.empty_streak[model] = 0
-                ctx.log(f"[{self.name}] {short(model)}: {self.COLD_AFTER} empty batches in a row; sitting out "
-                        f"{self.COLD_SECONDS // 60} minutes")
-        if self.warm(ctx):
-            self.prefetch(ctx)
+                ctx.log(
+                    f"[{self.name}] {short(model)}: {self.COLD_AFTER} empty batches in a row; sitting out "
+                    f"{self.COLD_SECONDS // 60} minutes"
+                )
+        self._prefetch_next(ctx)
         if not proposals:
             return
         kind = "fresh-frame" if fresh else ""
-        ctx.log(f"[{self.name} {short(model)}] {len(proposals)} {kind + ' ' if kind else ''}phrases for "
-                f"{', '.join(archetypes)}")
+        ctx.log(
+            f"[{self.name} {short(model)}] {len(proposals)} {kind + ' ' if kind else ''}phrases for "
+            f"{', '.join(archetypes)}"
+        )
         await ctx.evaluate([(text, self.name, "", tactic) for text, tactic in proposals])
 
 
@@ -317,8 +509,9 @@ class Compress(Strategy):
             return ctx.objective.reachable(cand.score)
         if ctx.objective.long:
             # Longer lines belong to chain compaction; below the ceiling only a line level with the leader pays.
-            return cand.units <= WORD_STAGE and (ctx.objective.at_ceiling(cand.p) or lead is None
-                                                 or site_round(cand.p) >= site_round(lead.probability))
+            return cand.units <= WORD_STAGE and (
+                ctx.objective.at_ceiling(cand.p) or lead is None or site_round(cand.p) >= site_round(lead.probability)
+            )
         return lead is None or site_round(cand.p) >= site_round(lead.probability) or cand.units >= lead.units
 
     def available(self, ctx) -> bool:
@@ -330,8 +523,9 @@ class Compress(Strategy):
     async def run(self, ctx, roots: int = 3) -> None:
         self.stop_at = ctx.engine.oracle.calls + max(150, int(ctx.engine.remaining() * self.share))
         for _ in range(roots):
-            candidates = [c for c in ctx.archive.top_by_board(8)
-                          if c.phrase not in self.done and self.worth_cutting(ctx, c)]
+            candidates = [
+                c for c in ctx.archive.top_by_board(8) if c.phrase not in self.done and self.worth_cutting(ctx, c)
+            ]
             if not candidates or self.left(ctx) < 20:
                 return
             if await self.compress(ctx, candidates[0]):
@@ -405,9 +599,7 @@ class Compress(Strategy):
         deletions = [" ".join(w[:i] + w[i + 1 :]) for i in range(len(w))]
         scored = await ctx.evaluate([(p, "ablate", cand.phrase, cand.archetype) for p in deletions], n=2)
         by_phrase = {c.phrase: c for c in scored}
-        ctx.archive.ablation[cand.phrase] = [
-            (cand.p - by_phrase[p].p) if p in by_phrase else 0.0 for p in deletions
-        ]
+        ctx.archive.ablation[cand.phrase] = [(cand.p - by_phrase[p].p) if p in by_phrase else 0.0 for p in deletions]
 
 
 def mutate(words: list[str], pool: list[str], rng: random.Random, cap: int = 0) -> list[str]:

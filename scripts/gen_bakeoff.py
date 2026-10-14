@@ -22,7 +22,6 @@ MODELS = [
     "deepseek/deepseek-v4-pro",
     "deepseek/deepseek-v4.1-flash",
     "qwen/qwen3.5-flash-02-23",
-    "qwen/qwen3.8-max-0902",
     # short, spoken, slang
     "x-ai/grok-4.3",
     "x-ai/grok-4.7",

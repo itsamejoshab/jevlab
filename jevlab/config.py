@@ -215,6 +215,8 @@ class GenModel:
 # gemini-3.8-flash 1.25, glm-5.3-flash 3.25, deepseek-v4-flash 3.75, gemini-2.5-flash-lite 4.0. Gemini costs ~30x
 # DeepSeek per batch but a question uses only 5-20 batches (~1-2 cents). qwen3.5-flash, mistral-nemo and
 # command-r7b ranked 6.5-6.75 and moved to mid; command-r7b stays for variety (it hit 0.97 where most missed).
+# A question probes the unlocked models on five tactics and then stays with the winner (search/probe.py).
+# JEV_GEN_MODELS replaces this table; list that pool cheapest first.
 GEN_MODEL_TABLE = [
     GenModel("google/gemini-3.8-flash", 0, "minimal"),  # 0.75/3.75
     GenModel("z-ai/glm-5.3-flash", 0, "minimal"),  # 0.04/0.50

@@ -18,6 +18,7 @@ from ..config import (
     LONG_TARGET,
     PLAN_MODEL,
     PLATEAU_LEADER_WORDS,
+    TIER_LEVEL,
 )
 from ..db import DB
 from ..llm import LLM, LLMError
@@ -48,6 +49,7 @@ from .archive import ARCHETYPES, Archive, Candidate
 from .boosters import Boosters
 from .chains import PROBE_TOP, RECIPES, ChainAblate, ChainCompact, ChainLibrary, LongChain, Probe, observed_ceiling
 from .mechanical import BeamBuild, Drift, Extend, Grow, PrecisionClimb, ProbeClimb, ScenarioJoin, SingleWord, Sweep
+from .probe import Lock
 from .scheduler import Scheduler
 from .strategies import FUNCTION_WORDS, WORD_STAGE, Compress, LLMGenerate, LocalEdit
 from .surrogate import Embedder, PhraseSurrogate, WordSurrogate
@@ -458,6 +460,9 @@ class Engine:
         self.commands: asyncio.Queue = asyncio.Queue()
         self.rounds = 0
         self.stall = 0
+        self.probe_lock = Lock()
+        self.probe_force = False
+        self.probe_gate = asyncio.Lock()
         self.last_trained = 0
         self.training = False
         self.train_task: asyncio.Future | None = None
@@ -636,9 +641,15 @@ class Engine:
         return base if self.level == 0 else max(3, base // 2)
 
     def set_level(self, level: int, reason: str) -> None:
+        old = self.level
         self.level = level
         self.peak_level = max(self.peak_level, level)
         self.stall = 0
+        if any(
+            isinstance(strategy, LLMGenerate) and old < TIER_LEVEL.get(strategy.tier, 0) <= level
+            for strategy in self.strategies.values()
+        ):
+            self.probe_force = True
         name, lead, boosts = LEVELS[level]
         self.scheduler.level_boost = dict(boosts)
         if lead:

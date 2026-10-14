@@ -57,13 +57,14 @@ reasoning effort:
 - **Tier 1, mid**: joins at escalation level 2 (sweep), adding variety.
 - **Tier 2, premium**: joins at escalation level 4 (reframe), for the hardest boards.
 
-Within a tier, models take turns round robin, so no single model family has to prove itself first. Thinking is
-turned off wherever the endpoint allows it: it adds 5-50 s per batch without writing better phrases.
+Within a tier, before a question has picked a writer, models take turns round robin. Once the probe locks a model, that model writes every tactic. List the pool cheapest first: a model within 0.02 of the best probe score loses to the earlier entry. Thinking is turned off wherever the endpoint allows it: it adds 5-50 s per batch without writing better phrases.
+
+The probe runs at the start of a question and again when that writer has gone flat: eight of its batches and six rounds without a better line, or four and four when half the tactics already have eight scored lines. A cold model, or a tier that just joined the ladder, is included on the next batch. Put every model you want in that opening choice at tier 0. A higher tier is asked only after the ladder reaches it.
 
 To replace the table without editing code, set `JEV_GEN_MODELS` to a comma-separated list of `id:tier:reasoning`:
 
 ```bash
-JEV_GEN_MODELS=google/gemini-3.8-flash:0:minimal,deepseek/deepseek-v4-flash:0:none,x-ai/grok-4.3:2:none
+JEV_GEN_MODELS=deepseek/deepseek-v4-flash:0:none,z-ai/glm-5.3-flash:0:minimal,google/gemini-2.5-flash-lite:0:none,qwen/qwen3.6-flash:0:none,google/gemini-3.1-flash-lite:0:minimal,google/gemini-3.8-flash:0:minimal,anthropic/claude-haiku-4.5:0:none,anthropic/claude-sonnet-5.5:0:none
 ```
 
 The tier defaults to 0 and reasoning to `none`. Reasoning can be `none`, `minimal`, `low`, `medium`, `high`, or empty

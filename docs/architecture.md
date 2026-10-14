@@ -190,7 +190,7 @@ The archive offers two orderings. Operators choose between them deliberately:
 
 ## 6. The bandit scheduler
 
-Budget allocation is a non-stationary multi-armed bandit (`jevlab/search/scheduler.py`). Every operator is an arm. LLM writers are grouped into one arm per price tier (`llm:core`, `llm:mid`, `llm:premium`), and each arm rotates through its models round robin.
+Budget allocation is a non-stationary multi-armed bandit (`jevlab/search/scheduler.py`). Every operator is an arm. LLM writers are grouped into one arm per price tier (`llm:core`, `llm:mid`, `llm:premium`). At the start of a question the unlocked models each write the same five tactics, and the winner writes every later tactic until the search goes flat or a higher tier unlocks.
 
 An arm's reward for a round is normalized by what the round cost:
 
@@ -258,7 +258,7 @@ flowchart LR
 
 Batches are **prefetched**: the next batch is being written while the oracle scores the current one, so the oracle never waits on an LLM. A model that returns two empty batches in a row sits out for five minutes.
 
-Models are tiered by price, and pricier tiers join only as the ladder escalates: core from L0, mid from L2, premium from L4. The core tier was selected by a controlled bake-off (`scripts/gen_bakeoff.py`: identical prompts on four questions, ranked by the top-5 oracle scores each model produced).
+Models are tiered by price, and pricier tiers join only as the ladder escalates: core from L0, mid from L2, premium from L4. The first generator batch, and any batch after a flat stretch, asks every unlocked model for eight phrases on rename, scene, syllogism, direct, and wild. The best mean of the top three lines wins; a model within 0.02 of that mean loses to whichever is listed earlier in the pool, so list the cheaper models first. That model then writes every tactic. A fresh board holds it for eight of its batches and six rounds without a better line. A board where half the tactics already have eight scored lines asks again after four and four. A model that goes cold, or a tier that just unlocked, asks on the next batch.
 
 ### 7.2 Local edit
 

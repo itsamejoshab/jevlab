@@ -1121,8 +1121,7 @@ class PublishScreen(Screen):
                 chase = "Submitted once: this model returns the same score every time, so a re-roll cannot help."
             else:
                 chase = (
-                    f"Each skips the oracle re-check and is re-rolled the requested number of times, "
-                    f"up to {LONG_REROLLS} while still short. "
+                    f"Each is re-rolled the requested number of times, up to {LONG_REROLLS} while still short. "
                     "A miss costs only turns, since the board keeps our best."
                 )
             help_text.append(

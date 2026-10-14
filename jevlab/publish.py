@@ -1,13 +1,18 @@
 """Publish queued vault winners to the live site, one at a time.
 
 Separate from the lab on purpose: it never imports the search engine. For
-each queued entry it re-reads the live board, confirms we still win,
-re-scores once with the oracle, then builds the chain with TURN operations.
-The board keeps a player's best-ever phrase, so the requested re-rolls always
-run, even after a win: a later roll can score higher. A re-roll removes and
-re-adds the last word. Editions whose score does not move (config.DETERMINISTIC_EDITIONS)
-default to 0 and skip the automatic chase past that request. Microsoft waits before each
-re-roll, because an immediate repeat is a cached score.
+each queued entry it re-reads the live board, confirms the vault estimate
+still wins, then builds the chain with TURN operations. The board keeps a
+player's best-ever phrase, so the requested re-rolls always run, even after
+a win: a later roll can score higher. A re-roll removes and re-adds the last
+word. Editions whose score does not move (config.DETERMINISTIC_EDITIONS)
+default to 0 and skip the automatic chase past that request. Microsoft waits
+before each re-roll, because an immediate repeat is a cached score.
+
+The local oracle is not asked before those rolls. A win is the site's score.
+A loss is recorded from that score, so the vault estimate is not left looking
+like a win, and only then does the oracle run, to catch a line scored against
+the opposite goal.
 """
 
 from __future__ import annotations
@@ -32,8 +37,10 @@ from .site import SiteClient, SiteError, active_words
 LOCK_PATH = DATA / "publish.lock"
 # A Shortest-yes gamble that lands 1 roll in 5 still hits within 13 rolls (build + 12 re-rolls) ~95% of the time.
 GAMBLE_REROLLS = 12
-# The Golf board lists a new row a few seconds after its turn is scored.
-GOLF_BOARD_LAG = 5.0
+# How long to keep reading a board that has not listed the score we just posted.
+BOARD_WAIT = 20.0
+# Gaps between those reads. The first read is immediate; these are the pauses after a miss.
+BOARD_POLLS = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0)
 # Vault lines tried on one board after Jev rejects a word, before leaving the rest for the next run.
 MAX_FALLBACKS = 5
 # A line estimated from the other edition gets one oracle sample; it is skipped only when that sample plus this
@@ -260,18 +267,108 @@ def golf_try(client: SiteClient, live: dict, text: str, log, target: str = "") -
     return credited(turn, target)
 
 
-def refresh_board(db: DB, client: SiteClient, live: dict, mode: str) -> None:
-    """Write the live boards for one question back into the snapshot tables."""
-    try:
-        boards = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
-    except SiteError:
-        return
+def row_listed(rows: list[dict], me: str, score: float, units: int | None, objective: Objective) -> bool:
+    """True when a row of ours is already at least the posting.
+
+    A better row we already hold counts. The site keeps the best, so a lower post will not replace it.
+    ``units`` is None when only the rounded score matters.
+    """
+    if not me:
+        return True
+    ours = [row for row in rows if row.get("userId") == me]
+
+    def rank(row: dict):
+        shown = Leader(float(row.get("probability") or 0), int(row.get("wordCount") or 0))
+        if units is None:
+            return site_round(shown.probability)
+        return objective.leader_key(shown)
+
+    if not ours:
+        return False
+    best = max(ours, key=rank)
+    if units is None:
+        return site_round(float(best.get("probability") or 0)) + 1e-9 >= site_round(score)
+    posted = Leader(site_round(score), units)
+    shown = Leader(float(best.get("probability") or 0), int(best.get("wordCount") or 0))
+    return objective.leader_key(shown) >= objective.leader_key(posted)
+
+
+def _board_rows(boards: dict, board: str, target: str) -> list[dict]:
+    """Rows for one board, or every board when ``board`` is empty."""
+    if board:
+        return target_rows(boards, board, target) if target else list(boards.get(board) or [])
+    rows: list[dict] = []
+    for value in boards.values():
+        if isinstance(value, list):
+            rows.extend(row for row in value if isinstance(row, dict))
+    return rows
+
+
+def store_boards(db: DB, live: dict, mode: str, boards: dict) -> None:
+    """Write one question's live boards into the snapshot tables."""
     row = db.latest_snapshot()
     snapshot_id = row["id"] if row else 0
     db.executemany(
         "INSERT OR REPLACE INTO boards VALUES (?, ?, ?, ?, ?)",
         [(live["slug"], mode, key, snapshot_id, json.dumps(value)) for key, value in boards.items()],
     )
+
+
+def refresh_board(db: DB, client: SiteClient, live: dict, mode: str) -> None:
+    """Write the live boards for one question back into the snapshot tables."""
+    try:
+        boards = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
+    except SiteError:
+        return
+    store_boards(db, live, mode, boards)
+
+
+def wait_for_row(
+    db: DB | None,
+    client: SiteClient,
+    live: dict,
+    mode: str,
+    me: str,
+    score: float,
+    units: int | None,
+    objective: Objective,
+    log,
+    board: str = "",
+    target: str = "",
+) -> None:
+    """Read the live board until our row shows this posting, then store it.
+
+    The first read is immediate. Later reads back off, and the wait stops at ``BOARD_WAIT``.
+    The last board we did see is still stored, so a slow board does not leave an older snapshot behind.
+    """
+    started = time.monotonic()
+    gaps = iter(BOARD_POLLS)
+    last: dict | None = None
+    while True:
+        try:
+            last = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
+        except SiteError:
+            last = None
+        if last is not None and row_listed(_board_rows(last, board, target), me, score, units, objective):
+            waited = time.monotonic() - started
+            if waited >= 0.4:
+                log(f"  board listed {site_round(score):.2f} after {waited:.1f}s")
+            if db is not None:
+                store_boards(db, live, mode, last)
+            return
+        elapsed = time.monotonic() - started
+        if elapsed >= BOARD_WAIT:
+            log(
+                f"  board had not listed {site_round(score):.2f} after {elapsed:.0f}s; keeping the snapshot as it stands"
+            )
+            if db is not None and last is not None:
+                store_boards(db, live, mode, last)
+            return
+        try:
+            gap = next(gaps)
+        except StopIteration:
+            gap = BOARD_POLLS[-1]
+        time.sleep(min(gap, BOARD_WAIT - elapsed))
 
 
 def credited(turn: dict | None, target: str) -> float:
@@ -526,18 +623,9 @@ def publish_entry(
         log(f"  estimated from {estimated}: posting the borrowed score without an oracle check")
     asked, ceiling = reroll_limits(rerolls, long_rerolls, gamble=gamble, long_shot=bool(entry.get("long_shot")))
     if gamble:
-        log(
-            f"  gamble: {entry.get('hits')} oracle rolls cleared {objective.threshold:.2f} (mean {estimate:.3f}); "
-            f"skipping the oracle re-check"
-        )
+        log(f"  gamble: {entry.get('hits')} oracle rolls cleared {objective.threshold:.2f} (mean {estimate:.3f})")
     elif entry.get("long_shot"):
-        log(f"  long shot: lower bound {entry['p_lcb']:.3f} does not beat {lead}; skipping the oracle re-check")
-    elif verify and not estimated:
-        fresh = asyncio.run(oracle_check(db, stored, phrase, target=target))
-        log(f"  oracle re-check {fresh:.3f} (vault said {estimate:.3f})")
-        fresh = settle_goal(db, stored, live, estimate, fresh, dry_run, log)
-        if not objective.beats(fresh, units, leader):
-            raise PublishError(f"oracle re-check {fresh:.3f} no longer beats {lead}")
+        log(f"  long shot: lower bound {entry['p_lcb']:.3f} does not beat {lead}")
     if (gamble or entry.get("long_shot")) and ceiling == asked:
         from .config import DETERMINISTIC_EDITIONS, EDITION
 
@@ -586,6 +674,16 @@ def publish_entry(
             f"  Jev picked {picked!r} ({shown_p:.2f}), not {target!r}; "
             "the row lands on that answer, so this board stays empty"
         )
+    # The site score decides the win. On a loss the oracle looks only for a goal scored the other way,
+    # using the vault estimate before that estimate is replaced. The site loss is recorded either way.
+    check_error: PublishError | None = None
+    if not won and verify:
+        try:
+            fresh = asyncio.run(oracle_check(db, stored, phrase, target=target))
+            log(f"  oracle re-check {fresh:.3f} (vault said {estimate:.3f})")
+            settle_goal(db, stored, live, estimate, fresh, dry_run, log)
+        except PublishError as error:
+            check_error = error
     db.execute(
         "INSERT INTO publishes (slug, mode, phrase, estimate, server, status, detail, at, board) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -607,9 +705,7 @@ def publish_entry(
             "INSERT OR REPLACE INTO site_scores VALUES (?, ?, ?, ?, ?, ?)",
             (slug, mode, phrase, best, "publish", now_iso()),
         )
-    if game_mode.golf:
-        time.sleep(GOLF_BOARD_LAG)
-    refresh_board(db, client, live, mode)
+    wait_for_row(db, client, live, mode, me, best, units, objective, log, board=board, target=target)
     if won:
         detail = f"rerolls={tries}"
     elif missed and shown_p is not None:
@@ -618,6 +714,8 @@ def publish_entry(
         detail = f"server {best:.2f} after {tries} re-rolls did not beat {lead}"
     # The site score replaces the local estimate, so a later submit does not treat the estimate as still best.
     vault.apply_site_score(slug, mode, phrase, best, "published" if won else "failed", board, target, detail)
+    if check_error is not None:
+        raise check_error
     if won:
         return f"won {site_round(best):.2f}/{units}{u}"
     if missed and shown_p is not None:

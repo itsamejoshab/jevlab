@@ -587,9 +587,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "action", nargs="?", default="list", choices=["list", "queue", "unqueue", "drop", "import-jev", "import-from"]
     )
-    p.add_argument(
-        "--from-edition", choices=EDITIONS, help="import-from: edition whose vault to read"
-    )
+    p.add_argument("--from-edition", choices=EDITIONS, help="import-from: edition whose vault to read")
     p.add_argument("--q", help="question slug or play URL")
     p.add_argument("--phrase", help="exact phrase to queue/drop (default: the best candidate)")
     p.add_argument("--all", action="store_true", help="queue every winning candidate for the question")
@@ -612,7 +610,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("publish", help="submit queued vault entries to the live site (separate batch loop)")
     p.add_argument("--q", nargs="*", help="only these slugs")
-    p.add_argument("--dry-run", action="store_true", help="verify boards and oracle, but send no turns")
+    p.add_argument("--dry-run", action="store_true", help="read the live boards, but send no turns")
     rolls = default_rerolls()
     gap = reroll_gap()
     if gap:
@@ -627,7 +625,7 @@ def main(argv: list[str] | None = None) -> int:
         default=rolls,
         help="re-score the final word N times even after a win; the board keeps the best" + roll_note,
     )
-    p.add_argument("--no-verify", action="store_true", help="skip the oracle re-check")
+    p.add_argument("--no-verify", action="store_true", help="skip the oracle check after a loss")
     p.add_argument("--delay", type=float, default=0.01, help="seconds between site turns")
     p.add_argument("--board", choices=board_names, help="only this game mode board (default every board)")
     p.add_argument("--mode", choices=["strict", "golf"], help="only this play mode (default every mode)")

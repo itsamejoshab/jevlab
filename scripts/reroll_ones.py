@@ -185,12 +185,10 @@ def record(db, target: dict, word: str, best: float) -> None:
 
 
 def run(args) -> int:
-    import time
-
     from jevlab.config import EDITION
     from jevlab.db import DB
-    from jevlab.objective import site_round
-    from jevlab.publish import GOLF_BOARD_LAG, LOCK_PATH, WordRejected, refresh_board
+    from jevlab.objective import Objective, site_round
+    from jevlab.publish import LOCK_PATH, WordRejected, wait_for_row
     from jevlab.rules.banned import BannedPhrase
     from jevlab.site import SiteClient, SiteError
 
@@ -222,9 +220,7 @@ def run(args) -> int:
             log("no 1-word rows of ours on the live boards")
             return 0
         for target in targets:
-            boards = ", ".join(
-                f"{b} {p:.2f}" + (f"/{c}" if c else "") for b, p, c in target["boards"]
-            )
+            boards = ", ".join(f"{b} {p:.2f}" + (f"/{c}" if c else "") for b, p, c in target["boards"])
             word = target["word"] or "?"
             extra = ""
             if target["word"]:
@@ -234,10 +230,7 @@ def run(args) -> int:
             log(f"  {target['p']:.2f} {target['mode']:<12} {target['slug']} [{boards}] {word}{extra}")
         if args.dry_run:
             n = sum(len(casings(t["word"])) if t["word"] else 2 for t in targets)
-            log(
-                f"dry run: would re-roll {len(targets)} 1-word row(s) "
-                f"({n} casing(s)) up to {args.rerolls} times each"
-            )
+            log(f"dry run: would re-roll {len(targets)} 1-word row(s) ({n} casing(s)) up to {args.rerolls} times each")
             return 0
 
         db = DB()
@@ -289,14 +282,10 @@ def run(args) -> int:
                     rolled = True
                     best_board = max(best_board, best)
                     record(db, target, variant, best)
-                    log(
-                        f"  -> {variant} best {best:.2f}  rolls {[round(r, 2) for r in rolls]}"
-                    )
+                    log(f"  -> {variant} best {best:.2f}  rolls {[round(r, 2) for r in rolls]}")
                 if not rolled:
                     continue
-                if target["golf"]:
-                    time.sleep(GOLF_BOARD_LAG)
-                refresh_board(db, client, target["live"], target["mode"])
+                wait_for_row(db, client, target["live"], target["mode"], me, best_board, None, Objective("yes"), log)
                 delta = best_board - start
                 if site_round(best_board) > site_round(start):
                     improved += 1
@@ -307,9 +296,7 @@ def run(args) -> int:
                     log(f"  -> held {start:.2f} (best {best_board:.2f})")
         except KeyboardInterrupt:
             log("\ninterrupted")
-        log(
-            f"\ndone: {len(targets)} target(s), {improved} improved, {skipped} skipped, {failed} failed"
-        )
+        log(f"\ndone: {len(targets)} target(s), {improved} improved, {skipped} skipped, {failed} failed")
         for delta, slug, word in sorted(gains, reverse=True):
             log(f"  +{delta:.2f}  {slug}  {word}")
         client.save_session()

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from .db import DB
 from .modes import CASUAL, HIGH_SCORES, SHORTEST_YES, STRICT
 from .objective import Leader, board_leader, objective_for
-from .publish import LOCK_PATH, WordRejected, turn_with_retry
+from .publish import LOCK_PATH, SENTENCE_WORDS, WordRejected, turn_with_retry
 from .rules import RuleError, check_word, drop_clashing, option_clash
 from .rules.banned import BannedPhrase
 from .site import SiteClient, SiteError, active_words
@@ -396,31 +396,31 @@ def _live_question(raw: dict) -> dict:
 
 
 def _post_words(client: SiteClient, attempt: dict, words: list[str], log, halt) -> tuple[dict, list[str]]:
+    """Append the decoys as one sentence, then clear. The score on the reply is ignored."""
     posted: list[str] = []
-    for word in words:
+    for start in range(0, len(words), SENTENCE_WORDS):
         if halt and halt():
             log("  stopped")
             break
-        if active_words(attempt):
-            attempt, _turn = turn_with_retry(client, attempt, {"kind": "clear"}, log)
+        chunk = words[start : start + SENTENCE_WORDS]
+        text = " ".join(chunk)
         try:
-            attempt, turn = turn_with_retry(client, attempt, {"kind": "append", "text": word}, log)
+            attempt, _turn = turn_with_retry(client, attempt, {"kind": "append", "text": text}, log)
         except WordRejected as error:
-            log(f"    {word} rejected ({error})")
-            continue
-        except BannedPhrase as error:
-            log(f"    {word} banned ({error})")
-            continue
-        except SiteError as error:
-            log(f"    {word} failed ({error})")
+            log(f"  rejected ({error})")
             break
-        log(f"    + {word:<16} {float(turn.get('probability') or 0):.2f}")
-        posted.append(word)
-    if active_words(attempt):
+        except BannedPhrase as error:
+            log(f"  banned ({error})")
+            break
+        except SiteError as error:
+            log(f"  {error}")
+            break
+        posted.extend(chunk)
+    if posted and active_words(attempt):
         try:
             attempt, _turn = turn_with_retry(client, attempt, {"kind": "clear"}, log)
         except SiteError as error:
-            log(f"    clear failed ({error})")
+            log(f"  clear failed ({error})")
     return attempt, posted
 
 
@@ -522,12 +522,12 @@ def defend(
                 log(
                     f"  crowded ({decided.word_count} words, {decided.ours_in_top}/{decided.top_len} ours in the top); posting anyway"
                 )
-            preview = " ".join(decided.decoys[:12])
-            extra = f" +{len(decided.decoys) - 12}" if len(decided.decoys) > 12 else ""
+            sentence = " ".join(decided.decoys)
             if dry_run:
-                log(f"  dry run: would post {len(decided.decoys)}: {preview}{extra}")
+                log(f"  {sentence}\n  dry run.")
                 planned += 1
                 continue
+            log(f"  {sentence}\n  submitting...")
             attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
             try:
                 _attempt, planted = _post_words(client, attempt, list(decided.decoys), log, halt)
@@ -540,7 +540,7 @@ def defend(
             if planted:
                 touched += 1
                 posted_words += len(planted)
-                log(f"  posted {len(planted)}")
+                log("  done.")
             else:
                 skipped += 1
         return DefenseRun(touched, posted_words, skipped, planned)

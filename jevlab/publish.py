@@ -139,6 +139,30 @@ def _chain_matches(current: list[str], words: list[str]) -> bool:
     return " ".join(current) == " ".join(words)
 
 
+# Sentence mode takes this many words in one append, on Strict and Casual.
+SENTENCE_WORDS = 25
+
+
+def append_texts(words: list[str], *, hold_last: bool, group: int = 1) -> list[str]:
+    """One string per append.
+
+    `hold_last` sends every word but the last as sentences of at most 25, then the last word
+    alone, so a re-roll only has to take that word off and put it back.
+    """
+    if not words:
+        return []
+    step = max(1, group)
+    if hold_last and step == 1 and len(words) > 1:
+        body = words[:-1]
+        pieces = [" ".join(body[start : start + SENTENCE_WORDS]) for start in range(0, len(body), SENTENCE_WORDS)]
+        pieces.append(words[-1])
+        return pieces
+    return [
+        words[start] if step == 1 else " ".join(words[start : start + step])
+        for start in range(0, len(words), step)
+    ]
+
+
 def build_chain(
     client: SiteClient,
     attempt: dict,
@@ -146,14 +170,16 @@ def build_chain(
     log,
     stop_at: float | None = None,
     group: int = 1,
+    hold_last: bool = False,
 ) -> tuple[dict, float | None]:
     """Make the attempt's active words equal `words` with as few turns as possible.
 
     `stop_at` is the live round's finish line. Crossing it holds the chain: the words already
-    accepted stay, and the rest are not sent.
+    accepted stay, and the rest are not sent. That path stays one word at a time so the hold
+    can land on the word that crossed.
 
-    `group` is how many words go in one append. Word-by-word play uses 1. A sentence round
-    sends the phrase as one append.
+    `hold_last` is for publishing. The words ahead of the last one go up as a sentence, and
+    the last word is its own turn. A re-roll then removes that word and appends it again.
     """
     current = active_words(attempt)
     last_p: float | None = None
@@ -186,9 +212,7 @@ def build_chain(
         log(f"    keeping {len(current)} words already on the chain")
     rest = words[len(current) :]
     step = max(1, group)
-    for start in range(0, len(rest), step):
-        chunk = rest[start : start + step]
-        text = chunk[0] if step == 1 else " ".join(chunk)
+    for text in append_texts(rest, hold_last=hold_last, group=step):
         try:
             attempt, turn = turn_with_retry(client, attempt, {"kind": "append", "text": text}, log)
         except SiteError as error:
@@ -199,7 +223,7 @@ def build_chain(
                 return attempt, last_p
             raise
         last_p = float(turn["probability"])
-        shown = text if step == 1 else f"{text} ({len(chunk)}w)"
+        shown = text if " " not in text else f"{text} ({len(text.split())}w)"
         log(f"    + {shown:<16} {last_p:.2f}")
         if crossed_finish(turn, stop_at):
             placed = len(active_words(attempt))
@@ -644,7 +668,7 @@ def publish_entry(
         log(f"    = {units}c {best:.2f}")
     else:
         attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
-        attempt, server_p = build_chain(client, attempt, words, log)
+        attempt, server_p = build_chain(client, attempt, words, log, hold_last=True)
         turn = last_turn(attempt)
         picked = str((turn or {}).get("choice") or "")
         shown_p = server_p

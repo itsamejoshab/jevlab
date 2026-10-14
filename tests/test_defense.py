@@ -1,4 +1,4 @@
-"""Defense picks decoys from other boards and posts each one by itself."""
+"""Defense picks decoys from other boards and posts them as one sentence."""
 
 import asyncio
 import json
@@ -200,29 +200,35 @@ def _pool(db: DB) -> None:
     _impacts(db, "other", [{"word": "gamma", "averageImpact": 0.8}, {"word": "delta", "averageImpact": 0.5}])
 
 
-def test_defend_posts_each_decoy_alone_and_does_not_repeat_it(tmp_path):
+def test_defend_posts_the_decoys_as_one_sentence_and_does_not_repeat_it(tmp_path):
     db = _db(tmp_path)
     _pool(db)
     site = _Site()
+    lines: list[str] = []
     result = defend(
-        [("q", "strict_chain")], top_n=20, log=lambda _m: None, db=db, client=site, lock_path=tmp_path / "lock"
+        [("q", "strict_chain")], top_n=20, log=lines.append, db=db, client=site, lock_path=tmp_path / "lock"
     )
     assert result.posted == 2
-    assert site.ops == ["append:gamma", "clear:", "append:delta", "clear:"]
+    assert site.ops == ["append:gamma delta", "clear:"]
+    text = "\n".join(lines)
+    assert "gamma delta" in text
+    assert "submitting..." in text
+    assert "done." in text
+    assert "0.22" not in text
     again = defend(
         [("q", "strict_chain")], top_n=20, log=lambda _m: None, db=db, client=site, lock_path=tmp_path / "lock"
     )
     assert again.posted == 0
-    assert site.ops == ["append:gamma", "clear:", "append:delta", "clear:"]
+    assert site.ops == ["append:gamma delta", "clear:"]
 
 
-def test_defend_clears_a_live_chain_and_posts(tmp_path):
+def test_defend_appends_onto_a_live_chain_and_clears_after(tmp_path):
     db = _db(tmp_path)
     _pool(db)
     site = _Site(chain=["secret", "sauce"])
     result = defend([("q", "strict_chain")], log=lambda _m: None, db=db, client=site, lock_path=tmp_path / "lock")
     assert result.posted == 2
-    assert site.ops == ["clear:", "append:gamma", "clear:", "append:delta", "clear:"]
+    assert site.ops == ["append:gamma delta", "clear:"]
 
 
 def test_defend_dry_run_sends_nothing(tmp_path):

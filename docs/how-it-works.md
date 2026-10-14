@@ -81,10 +81,12 @@ There is also one model trained across every question. It sees the text `Q: <tit
 
 Almost every job proposes more phrases than it can afford to score. `screen(pile, k)` is the cut:
 
-1. Drop anything that fails the Strict rules, the length cap, or, in a one-word Shortest race, anything longer than one word.
+1. Drop anything that fails the Strict rules or the length cap. Also drop anything longer than one word, but only when the current Shortest yes leader is already one word. A longer leader does not trigger that drop.
 2. If the phrase surrogate is trusted, rank the survivors by its upper confidence bound.
 3. Otherwise, if the logprob proxy is available, rank a sample of the pile by that.
 4. Otherwise draw uniformly.
+
+Growth is a separate cap from that screen. On Shortest yes, new lines may run two words past the leader, and at least to 8 words when the leader is shorter than that, so a line can score high and then be compressed back down. A one-word leader is the exception: nothing is grown past one word, because nothing longer can place. With no leader, growth stops at 8.
 
 The trusted ranker does not get the whole budget. Eighty percent of the `k` slots are its top picks. The other twenty percent are drawn from what it ranked lower. That slice is what keeps a blind spot in the model from starving the search, and it is also what keeps the next training set from being only the model’s own favorites.
 

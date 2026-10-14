@@ -16,17 +16,21 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .db import DB
-from .modes import CASUAL, HIGH_SCORES, SHORTEST_YES, STRICT
+from .modes import CASUAL, GOLF, HIGH_SCORES, SHORTEST_YES, STRICT
 from .objective import Leader, board_leader, objective_for
 from .publish import LOCK_PATH, SENTENCE_WORDS, WordRejected, turn_with_retry
 from .rules import RuleError, check_word, drop_clashing, option_clash
-from .rules.banned import BannedPhrase
+from .rules.banned import BannedPhrase, hit, tokens
 from .site import SiteClient, SiteError, active_words
 
-# A board this full, whose headline is mostly other people's words, is already noisy.
+# A board this full is long enough to judge.
 CROWD_WORDS = 40
-# ours_in_top * QUIET_SHARE <= headline length means our words are at most a quarter of the top list.
+# answer words * QUIET_SHARE <= length means our answer is at most a quarter of that slice.
 QUIET_SHARE = 4
+# How many words of the public list count as the headline rivals read first.
+HEADLINE_WORDS = 20
+# Extra decoys so skipping a banned word still leaves the list quiet.
+BAN_SPARE = 5
 
 READY = "ready"
 QUIET = "quiet"
@@ -184,11 +188,30 @@ def headline(impacts: list[dict], top_n: int) -> list[str]:
     return top
 
 
-def already_quiet(ours_in_top: int, top_len: int, word_count: int) -> bool:
-    """True when the public list is long and our winning words are already a minority of the headline."""
-    if word_count < CROWD_WORDS or top_len == 0:
+def already_quiet(ours_in_top: int, top_len: int, word_count: int, answer_words: int | None = None) -> bool:
+    """True when a long public list no longer gives the winning phrase away.
+
+    The headline test catches a top slice that is already mostly other words.
+    The whole-list test is what stops a solo board: decoys score low, so they never
+    enter that top slice, but a list that is at least four times the answer is enough cover.
+    """
+    if word_count < CROWD_WORDS:
         return False
-    return ours_in_top * QUIET_SHARE <= top_len
+    if top_len and ours_in_top * QUIET_SHARE <= top_len:
+        return True
+    if answer_words is None:
+        return False
+    return answer_words * QUIET_SHARE <= word_count
+
+
+def decoys_needed(answer_words: int, word_count: int) -> int:
+    """New words that bring this list up to the quiet line in one pass, plus a few spares.
+
+    A banned word is left out of the submission. The spares are what still lets that
+    one pass take the board off the list.
+    """
+    cover = max(CROWD_WORDS, answer_words * QUIET_SHARE)
+    return max(0, cover - word_count) + BAN_SPARE
 
 
 def pick_decoys(
@@ -203,7 +226,7 @@ def pick_decoys(
     seen: set[str] = set()
     for word in ranked:
         key = fold(word)
-        if not key or key in seen or key in present or key in protected or key in STOPWORDS:
+        if not key or key in seen or key in present or key in protected or key in STOPWORDS or hit(key):
             continue
         try:
             clean = check_word(word)
@@ -247,6 +270,8 @@ class Plan:
     top_len: int
     word_count: int
     phrases: tuple[str, ...]
+    answer_words: int = 0
+    need: int = 0
 
 
 def plan_board(
@@ -254,31 +279,33 @@ def plan_board(
     ranked: list[str],
     phrases: list[str],
     posted: set[str],
-    top_n: int,
     choices: list | None,
     question: str = "",
 ) -> Plan:
     protected = words_of(phrases)
     public = present_words(impacts)
-    top = headline(impacts, top_n)
+    top = headline(impacts, HEADLINE_WORDS)
     ours_in_top = sum(1 for word in top if word in protected)
+    answer_words = sum(1 for word in public if word in protected)
+    quiet = already_quiet(ours_in_top, len(top), len(public), answer_words)
+    need = 0 if quiet else decoys_needed(answer_words, len(public))
     decoys = pick_decoys(
         topic_decoys(question) + ranked,
         public | {fold(word) for word in posted},
         protected,
-        top_n,
+        need,
         choices,
     )
     kept = [phrase for phrase in phrases if phrase.split()]
     if not kept:
         status = BLIND
-    elif already_quiet(ours_in_top, len(top), len(public)):
+    elif quiet:
         status = QUIET
     elif not decoys:
         status = BARE
     else:
         status = READY
-    return Plan(status, tuple(decoys), ours_in_top, len(top), len(public), tuple(kept))
+    return Plan(status, tuple(decoys), ours_in_top, len(top), len(public), tuple(kept), answer_words, need)
 
 
 @dataclass(frozen=True)
@@ -321,11 +348,15 @@ def _posted(db: DB, mode: str) -> dict[str, set[str]]:
     return out
 
 
-def scan(db: DB, top_n: int = 20, include_casual: bool = False) -> list[DefenseTarget]:
+def scan(db: DB, include_casual: bool = False, include_golf: bool = False) -> list[DefenseTarget]:
     """Boards we lead, from the snapshot. Ready rows are the ones worth posting on."""
     me = db.me()
     questions = db.questions()
-    modes = (STRICT, CASUAL) if include_casual else (STRICT,)
+    modes = [STRICT]
+    if include_golf:
+        modes.append(GOLF)
+    if include_casual:
+        modes.append(CASUAL)
     found: list[DefenseTarget] = []
     for mode in modes:
         impacts = _impacts(db, mode)
@@ -348,7 +379,6 @@ def scan(db: DB, top_n: int = 20, include_casual: bool = False) -> list[DefenseT
                 ranked,
                 phrases,
                 posted.get(slug, set()),
-                top_n,
                 choices,
                 question.get("title") or question.get("instructions") or "",
             )
@@ -395,14 +425,77 @@ def _live_question(raw: dict) -> dict:
     }
 
 
+def _drop_span(words: list[str], span: str) -> list[str]:
+    """Remove the first occurrence of a banned span. Its other words stay."""
+    needle = tokens(span)
+    if not needle:
+        return list(words)
+    kept = list(words)
+    width = len(needle)
+    for index in range(len(kept) - width + 1):
+        if tokens(" ".join(kept[index : index + width])) == needle:
+            del kept[index : index + width]
+            return kept
+    return kept
+
+
+def without_known_bans(words: list[str]) -> list[str]:
+    """Drop every stored banned word or phrase. Single words of a longer ban stay."""
+    kept = list(words)
+    while kept:
+        span = hit(" ".join(kept))
+        if not span:
+            return kept
+        shorter = _drop_span(kept, span)
+        if len(shorter) == len(kept):
+            return kept
+        kept = shorter
+    return kept
+
+
+def _probe_until_ban(
+    client: SiteClient,
+    attempt: dict,
+    chunk: list[str],
+    rest: list[str],
+    posted: list[str],
+    log,
+    halt,
+) -> tuple[dict, list[str]]:
+    """Send `chunk` one word at a time until a ban, skip that word, and hand back the rest."""
+    for index, word in enumerate(chunk):
+        if halt and halt():
+            log("  stopped")
+            return attempt, []
+        try:
+            attempt, _turn = turn_with_retry(client, attempt, {"kind": "append", "text": word}, log)
+        except BannedPhrase as error:
+            log(f"  skip {word} ({error})")
+            return attempt, chunk[index + 1 :] + rest
+        except WordRejected as error:
+            log(f"  rejected ({error})")
+            return attempt, []
+        except SiteError as error:
+            log(f"  {error}")
+            return attempt, []
+        posted.append(word)
+    return attempt, rest
+
+
 def _post_words(client: SiteClient, attempt: dict, words: list[str], log, halt) -> tuple[dict, list[str]]:
-    """Append the decoys as one sentence, then clear. The score on the reply is ignored."""
+    """Append the decoys, skip anything banned, then clear. The score on the reply is ignored.
+
+    A ban we already know is left out. A ban the server does not name is found by sending
+    the sentence one word at a time, and that word is skipped.
+    """
+    pending = without_known_bans(words)
     posted: list[str] = []
-    for start in range(0, len(words), SENTENCE_WORDS):
+    while pending:
         if halt and halt():
             log("  stopped")
             break
-        chunk = words[start : start + SENTENCE_WORDS]
+        chunk = pending[:SENTENCE_WORDS]
+        rest = pending[SENTENCE_WORDS:]
         text = " ".join(chunk)
         try:
             attempt, _turn = turn_with_retry(client, attempt, {"kind": "append", "text": text}, log)
@@ -410,12 +503,20 @@ def _post_words(client: SiteClient, attempt: dict, words: list[str], log, halt) 
             log(f"  rejected ({error})")
             break
         except BannedPhrase as error:
-            log(f"  banned ({error})")
-            break
+            if error.named:
+                log(f"  banned {error.named!r}; omitting it")
+                shorter = without_known_bans(_drop_span(chunk + rest, error.named))
+                if len(shorter) < len(chunk) + len(rest):
+                    pending = shorter
+                    continue
+            log("  banned, span not named; submitting one word at a time")
+            attempt, pending = _probe_until_ban(client, attempt, chunk, rest, posted, log, halt)
+            continue
         except SiteError as error:
             log(f"  {error}")
             break
         posted.extend(chunk)
+        pending = rest
     if posted and active_words(attempt):
         try:
             attempt, _turn = turn_with_retry(client, attempt, {"kind": "clear"}, log)
@@ -434,7 +535,6 @@ class DefenseRun:
 
 def defend(
     jobs: list[tuple[str, str]],
-    top_n: int = 20,
     dry_run: bool = False,
     log=print,
     halt=None,
@@ -506,7 +606,6 @@ def defend(
                 ranked_by_mode[mode],
                 phrases,
                 _posted(db, mode).get(slug, set()),
-                top_n,
                 choices,
                 live.get("title") or live.get("instructions") or "",
             )
@@ -519,9 +618,9 @@ def defend(
                 skipped += 1
                 continue
             if decided.status == QUIET:
-                log(
-                    f"  crowded ({decided.word_count} words, {decided.ours_in_top}/{decided.top_len} ours in the top); posting anyway"
-                )
+                log(f"  crowded ({decided.answer_words} of {decided.word_count} listed words are our answer); skipping")
+                skipped += 1
+                continue
             sentence = " ".join(decided.decoys)
             if dry_run:
                 log(f"  {sentence}\n  dry run.")

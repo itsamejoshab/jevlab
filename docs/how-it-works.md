@@ -286,7 +286,7 @@ Shortest memory is kept separately, so a Shortest run does not resume a Highest 
 
 ### Defend
 
-`jevlab/defense.py` posts decoy words on boards we already lead. The site’s word list is public, shared by Highest and Shortest inside a play mode, and rivals mine the top of it. Defense posts the question’s own content words, then a few WordNet synonyms of each, then words that have helped on other boards, skipping function words and words already on the list. A board whose headline is long and already mostly other people’s words is left alone. The board keeps every row, so a decoy that takes the lead stays there.
+`jevlab/defense.py` posts decoy words on boards we already lead. The site’s word list is public, shared by Highest and Shortest inside a play mode, and rivals mine the top of it. Defense posts the question’s own content words, then a few WordNet synonyms of each, then words that have helped on other boards, skipping function words and words already on the list. Each board gets as many of those words as it needs so one pass leaves the winning phrase at most a quarter of a list of at least 40 words. A board already that quiet is left alone. The board keeps every row, so a decoy that takes the lead stays there.
 
 ### Target a player
 

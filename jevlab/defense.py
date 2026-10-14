@@ -1,15 +1,17 @@
 """Plant decoy words on boards we already lead.
 
 The site's words list is public, per play mode, and shared by Highest and Shortest.
-Rivals mine the top of it. Defense posts other boards' strongest words, one at a
-time, skipping function words, so that list stops being a copy of our winning phrase.
-The board keeps every row we post, so a decoy that takes a lead stays there.
+Rivals mine the top of it. Defense posts the question's own words and a few local
+synonyms first, then other boards' strongest words, skipping function words, so
+that list stops being a copy of our winning phrase. The board keeps every row we
+post, so a decoy that takes a lead stays there.
 """
 
 from __future__ import annotations
 
 import fcntl
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -31,6 +33,11 @@ QUIET = "quiet"
 BARE = "bare"
 BLIND = "blind"
 _ORDER = {READY: 0, QUIET: 1, BARE: 2, BLIND: 3}
+
+# Synonyms kept per question word. WordNet's long tail is mostly other senses.
+SYNONYMS_PER_WORD = 3
+_TOKEN = re.compile(r"[A-Za-z0-9]+")
+_wordnet = None
 
 # Function words. They rank at the top of almost every board, so planting them does not hide our phrase.
 STOPWORDS = frozenset(
@@ -58,6 +65,72 @@ def _now() -> str:
 
 def fold(word: str) -> str:
     return word.strip().casefold()
+
+
+def sentence_words(text: str) -> list[str]:
+    """Content words of the question, in order. An apostrophe splits, so grandpa's stays grandpa."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in _TOKEN.findall(text):
+        word = part.lower()
+        if len(word) < 3 or word in STOPWORDS or word in seen:
+            continue
+        seen.add(word)
+        out.append(word)
+    return out
+
+
+def _thesaurus():
+    """WordNet, downloaded once into the usual NLTK directory. Missing data means no synonyms."""
+    global _wordnet
+    if _wordnet is not None:
+        return _wordnet
+    from nltk.corpus import wordnet as wn
+
+    try:
+        wn.synsets("word")
+    except LookupError:
+        import nltk
+
+        nltk.download("wordnet", quiet=True)
+        try:
+            wn.synsets("word")
+        except LookupError:
+            return None
+    _wordnet = wn
+    return wn
+
+
+def synonyms(word: str, limit: int = SYNONYMS_PER_WORD) -> list[str]:
+    """Up to `limit` single-word WordNet synonyms, common senses first."""
+    wn = _thesaurus()
+    if wn is None:
+        return []
+    scored: dict[str, int] = {}
+    for syn in wn.synsets(word):
+        for lemma in syn.lemmas():
+            name = lemma.name()
+            if "_" in name or not name.isalpha():
+                continue
+            key = name.lower()
+            if key == word or key in STOPWORDS or len(key) < 3 or len(key) > 16:
+                continue
+            scored[key] = max(scored.get(key, 0), lemma.count())
+    return sorted(scored, key=lambda key: (-scored[key], key))[:limit]
+
+
+def topic_decoys(text: str) -> list[str]:
+    """The question's words, then a few synonyms of each."""
+    words = sentence_words(text)
+    out = list(words)
+    seen = set(words)
+    for word in words:
+        for syn in synonyms(word):
+            if syn in seen:
+                continue
+            seen.add(syn)
+            out.append(syn)
+    return out
 
 
 def words_of(phrases: list[str]) -> set[str]:
@@ -194,12 +267,19 @@ def plan_board(
     posted: set[str],
     top_n: int,
     choices: list | None,
+    question: str = "",
 ) -> Plan:
     protected = words_of(phrases)
     public = present_words(impacts)
     top = headline(impacts, top_n)
     ours_in_top = sum(1 for word in top if word in protected)
-    decoys = pick_decoys(ranked, public | {fold(word) for word in posted}, protected, top_n, choices)
+    decoys = pick_decoys(
+        topic_decoys(question) + ranked,
+        public | {fold(word) for word in posted},
+        protected,
+        top_n,
+        choices,
+    )
     kept = [phrase for phrase in phrases if phrase.split()]
     if not kept:
         status = BLIND
@@ -281,6 +361,7 @@ def scan(db: DB, top_n: int = 20, include_casual: bool = False) -> list[DefenseT
                 posted.get(slug, set()),
                 top_n,
                 choices,
+                question.get("title") or question.get("instructions") or "",
             )
             held = tuple(name for lead, name in ((high_lead, "Highest"), (short_lead, "Shortest")) if lead)
             found.append(
@@ -438,6 +519,7 @@ def defend(
                 _posted(db, mode).get(slug, set()),
                 top_n,
                 choices,
+                live.get("title") or live.get("instructions") or "",
             )
             if decided.status == BLIND:
                 log("  leading phrase is missing; skipping so we do not repost our own words")

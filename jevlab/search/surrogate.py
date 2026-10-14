@@ -106,6 +106,10 @@ class OpenRouterEmbeddings:
                 response = self.http.post("/embeddings", json={"model": self.model, "input": chunk})
                 if response.status_code == 200:
                     break
+                if response.status_code in (402, 403):
+                    from ..llm import LLMError
+
+                    raise LLMError(f"openrouter HTTP {response.status_code} Forbidden {response.text[:200]}")
                 limit = re.search(r"at most (\d+)", response.text)
                 if response.status_code == 400 and limit and int(limit.group(1)) < len(chunk):
                     self.batch = int(limit.group(1))  # e.g. Gemini takes at most 100 texts per request

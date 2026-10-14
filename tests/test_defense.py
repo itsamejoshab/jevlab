@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 
 from textual.app import App, ComposeResult
 from textual.widgets import Button
@@ -9,7 +10,7 @@ from textual.widgets import Button
 from jevlab.db import DB
 from jevlab.defense import QUIET, READY, already_quiet, defend, lexicon, pick_decoys, safe_to_clear, scan
 from jevlab.modes import HIGHEST
-from jevlab.tui.defense import DefenseScreen
+from jevlab.tui.defense import DefenseLog, DefenseScreen
 from jevlab.tui.pickers import HomeScreen
 
 
@@ -92,12 +93,31 @@ def test_safe_to_clear_keeps_an_unrelated_chain():
     assert not safe_to_clear(["secret", "sauce"], ["alpha beta"])
 
 
+def test_decoys_open_with_the_question_and_its_synonyms(tmp_path):
+    db = _db(tmp_path)
+    _question(db, "steak", "Is it okay to season your steak with grandpa's ashes")
+    _lead(db, "steak", "highScores", "alpha beta")
+    _impacts(db, "steak", [{"word": "alpha", "averageImpact": 0.9}])
+    _impacts(db, "pool", [{"word": "database", "averageImpact": 0.99}, {"word": "gamma", "averageImpact": 0.2}])
+
+    decoys = next(target.decoys for target in scan(db, top_n=20) if target.slug == "steak")
+    assert list(decoys[:5]) == ["okay", "season", "steak", "grandpa", "ashes"]
+    assert "flavor" in decoys
+    assert "grandfather" in decoys
+    assert "ash" in decoys
+    assert decoys.index("flavor") < decoys.index("database")
+    assert decoys.index("grandfather") < decoys.index("database")
+    assert decoys.index("ash") < decoys.index("database")
+    assert "alpha" not in decoys
+    assert "beta" not in decoys
+
+
 def test_scan_preselects_a_leaking_board_and_holds_back_the_rest(tmp_path):
     db = _db(tmp_path)
-    _question(db, "q", "Ready")
-    _question(db, "crowd", "Crowd")
-    _question(db, "short", "Short")
-    _question(db, "casual", "Casual")
+    _question(db, "q", "The")
+    _question(db, "crowd", "The")
+    _question(db, "short", "The")
+    _question(db, "casual", "The")
     _lead(db, "q", "highScores", "alpha beta")
     _lead(db, "crowd", "highScores", "alpha beta")
     _lead(db, "short", "shortestYes", "one two three")
@@ -232,6 +252,27 @@ def test_defend_skips_a_board_we_no_longer_lead(tmp_path):
     assert result.posted == 0
     assert result.skipped == 1
     assert site.ops == []
+
+
+def test_defense_log_marks_each_board_with_a_cyan_counter():
+    dry = DefenseLog()
+    opening = dry.render("DRY RUN: defending 54 board(s), top 20")
+    assert "[1/" not in opening.plain
+    first = dry.render("\n== steak [strict_chain] Highest")
+    assert "[1/54]" in first.plain
+    assert "steak" in first.plain and "Highest" in first.plain
+    counter = next(span for span in first.spans if "[1/54]" in first.plain[span.start : span.end])
+    assert "cyan" in str(counter.style)
+
+    live = DefenseLog()
+    live.render("defending 2 board(s), top 20")
+    shown = live.render("\n== other [word_chain] not leading")
+    assert "[1/2]" in shown.plain
+    word = live.render("    + database 0.04")
+    assert re.search(r"\[\d+/\d+\]", word.plain) is None
+    assert "+ database" in word.plain
+    again = live.render("\n== third [strict_chain] Shortest")
+    assert "[2/2]" in again.plain
 
 
 def test_home_opens_defense(monkeypatch, tmp_path):

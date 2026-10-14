@@ -129,6 +129,8 @@ def cmd_search(args) -> int:
             engine.force(args.force)
         asyncio.run(engine.run())
         print("\n".join(engine.summary(15)))
+        if engine.end_reason == "openrouter key limit":
+            return 0
         print(
             f"{engine.oracle.calls} oracle calls, {engine.llm.calls if engine.llm else 0} LLM calls, "
             f"ended at L{engine.level} {LEVELS[engine.level][0]}"

@@ -21,7 +21,7 @@ from ..config import (
     TIER_LEVEL,
 )
 from ..db import DB
-from ..llm import LLM, LLMError
+from ..llm import KEY_LIMIT_STOP, LLM, LLMError, key_denied, take_halt
 from ..modes import BOARDS, HIGH_SCORES, from_board, is_searchable
 from ..objective import (
     CEILING_MIN_N,
@@ -1251,6 +1251,19 @@ class Engine:
             return f"win mode: led at {self.won_at:,} calls, stopped {self.win_extra:,} later"
         return "budget"
 
+    def _credit_halt(self, error: BaseException | None = None) -> bool:
+        """Stop the search when OpenRouter has refused the key. A swallowed writer error is remembered too."""
+        reason = take_halt()
+        if error is not None and key_denied(str(error)):
+            reason = reason or str(error)
+        if not reason:
+            return False
+        self.stopping = True
+        self.end_reason = KEY_LIMIT_STOP
+        detail = " ".join(str(reason).split())[:240]
+        self.emit("log", message=f"OpenRouter key limit reached; stopping the search. {detail}")
+        return True
+
     async def run(self) -> None:
         await self.start()
         self.status = "running"
@@ -1259,6 +1272,8 @@ class Engine:
             idle_noted = False
             solved: Candidate | None = None
             while not self.stopping:
+                if self._credit_halt():
+                    break
                 await self.run_commands()
                 if solved is None and (solved := self.unbeatable()) is not None:
                     self.emit(
@@ -1335,7 +1350,11 @@ class Engine:
                         self.end_reason = self.end_reason or ("stopped" if self.stopping else self.budget_reason())
                         break
                 except Exception as error:
+                    if self._credit_halt(error):
+                        break
                     self.emit("log", message=f"[{name}] failed: {error!r}")
+                if self._credit_halt():
+                    break
                 self.rounds += 1
                 best_after = self.archive.best().fitness if len(self.archive) else best_before
                 gain = best_after - best_before if best_before != float("-inf") else 0.0

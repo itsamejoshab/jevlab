@@ -453,6 +453,10 @@ class Oracle:
                     raise OracleError(f"refused to answer {state[:60]!r}")
                 if response.status_code == 400:
                     raise OracleError(self.failed(backend, response.status_code, response.text))
+                if response.status_code in (402, 403) and "openrouter" in backend.base:
+                    from .llm import LLMError
+
+                    raise LLMError(f"openrouter HTTP {response.status_code} Forbidden {response.text[:200]}")
                 if response.status_code in (401, 402, 403):
                     # Bad key or no credit: this backend is out for good; the others can still serve.
                     message = self.failed(backend, response.status_code, response.text)
@@ -635,6 +639,11 @@ class Oracle:
             tasks.extend(self._one(state, qkey) for _ in range(max(need, 0)))
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            from .llm import key_denied
+
+            denied = [r for r in results if isinstance(r, Exception) and key_denied(str(r))]
+            if denied:
+                raise denied[0]
             fatal = [r for r in results if isinstance(r, OracleError) and "HTTP 4" in str(r)]
             if fatal:
                 raise fatal[0]

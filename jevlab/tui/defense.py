@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
@@ -23,6 +25,43 @@ from .pickers import Setting
 
 def _mode_name(play_mode: str) -> str:
     return "Casual" if play_mode == CASUAL else "Strict"
+
+
+_OPENING = re.compile(r"^(?:DRY RUN: )?defending (\d+) board")
+
+
+class DefenseLog:
+    """Plain defense lines, with a cyan [1/54] counter on each board header."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.total = 0
+
+    def render(self, message: str) -> Text:
+        lines = str(message).splitlines()
+        if not lines:
+            return Text("")
+        out = Text()
+        for index, raw in enumerate(lines):
+            if index:
+                out.append("\n")
+            out.append_text(self._line(raw))
+        return out
+
+    def _line(self, raw: str) -> Text:
+        line = raw.strip()
+        if match := _OPENING.match(line):
+            self.total = int(match.group(1))
+            self.count = 0
+            return Text(raw)
+        if line.startswith("== "):
+            self.count += 1
+            mark = f"[{self.count}/{self.total}]" if self.total else f"[{self.count}]"
+            text = Text()
+            text.append(f"{mark} ", style="bold cyan")
+            text.append(raw)
+            return text
+        return Text(raw)
 
 
 class DefenseScreen(Screen):
@@ -55,6 +94,7 @@ class DefenseScreen(Screen):
         self.top_n = DEFENSE_TOP
         self.busy = False
         self.stop_requested = False
+        self.transcript = DefenseLog()
 
     def compose(self) -> ComposeResult:
         yield EditionMark()
@@ -134,7 +174,7 @@ class DefenseScreen(Screen):
                 activity.log("defense", line)
         log = self.query_one("#def-log", SelectableRichLog)
         follow = log.is_vertical_scroll_end
-        log.write(Text(message), scroll_end=follow)
+        log.write(self.transcript.render(message), scroll_end=follow)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":

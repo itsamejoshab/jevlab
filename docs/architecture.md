@@ -174,16 +174,7 @@ $$
 
 ## 5. The archive and MAP-Elites diversity
 
-`Archive` (`jevlab/search/archive.py`) holds every phrase ever scored for the question, with its full sample list, origin operator, parent, and **archetype**: the rhetorical tactic it uses. The archetypes come from the LLM writers:
-
-| Archetype | Tactic |
-| --- | --- |
-| `rename` | Redefine the contested noun so the answer is already true ("hereafter cereal denotes that soup") |
-| `speaker` | Become the speaker who would answer that way ("I am a frail newborn baby ant") |
-| `scene` | Build a small world where the answer is a plain fact |
-| `eager` | A grammatical run of enthusiastic commitment toward the target |
-| `direct` | A plain sentence stating the answer with reasons |
-| `wild` | An unrelated neighborhood (other languages, myth, machines) that still pulls the lean |
+`Archive` (`jevlab/search/archive.py`) holds every phrase ever scored for the question, with its full sample list, origin operator, parent, and **archetype**: the rhetorical tactic it uses. The catalog is `ARCHETYPE_GUIDE` in `jevlab/search/prompts.py` (the archive's `ARCHETYPES` tuple is that set plus `other`). Besides the original frames (`rename`, `speaker`, `scene`, `eager`, `direct`, `wild`, `syllogism`) it covers the other ways a prefix steers this kind of classifier: presupposed facts, witness reports, documents, stated measurements, scale anchors, elimination, neighbour boundaries, a single literal ban, worked examples, accepted dialogue, loanword glosses, precedent, analogy, authority, consensus, a quoted policy, reductio, checklists, causal mechanisms, material composition, identity, timeline, stakes, and an ALL-CAPS payoff marker. A batch shows three of them. Once every tactic in the batch already has scored lines, one slot moves to a tactic that does not, so a hot frame cannot starve the rest. Opening Highest batches still reserve a slot for `syllogism`.
 
 On top of the flat archive sits a **MAP-Elites grid** keyed by (length bucket × archetype), with 15 length buckets from 1 to 300 words. Each cell keeps only its fittest phrase. The grid does two things:
 
@@ -199,7 +190,7 @@ The archive offers two orderings. Operators choose between them deliberately:
 
 ## 6. The bandit scheduler
 
-Budget allocation is a non-stationary multi-armed bandit (`jevlab/search/scheduler.py`). Every operator is an arm. LLM writers are grouped into one arm per price tier (`llm:core`, `llm:mid`, `llm:premium`), and each arm rotates through its models round robin.
+Budget allocation is a non-stationary multi-armed bandit (`jevlab/search/scheduler.py`). Every operator is an arm. LLM writers are grouped into one arm per price tier (`llm:core`, `llm:mid`, `llm:premium`). At the start of a question the unlocked models each write the same five tactics, and the winner writes every later tactic until the search goes flat or a higher tier unlocks.
 
 An arm's reward for a round is normalized by what the round cost:
 
@@ -267,7 +258,7 @@ flowchart LR
 
 Batches are **prefetched**: the next batch is being written while the oracle scores the current one, so the oracle never waits on an LLM. A model that returns two empty batches in a row sits out for five minutes.
 
-Models are tiered by price, and pricier tiers join only as the ladder escalates: core from L0, mid from L2, premium from L4. The core tier was selected by a controlled bake-off (`scripts/gen_bakeoff.py`: identical prompts on four questions, ranked by the top-5 oracle scores each model produced).
+Models are tiered by price, and pricier tiers join only as the ladder escalates: core from L0, mid from L2, premium from L4. The first generator batch, and any batch after a flat stretch, asks every unlocked model for eight phrases on rename, scene, syllogism, direct, and wild. The best mean of the top three lines wins; a model within 0.02 of that mean loses to whichever is listed earlier in the pool, so list the cheaper models first. That model then writes every tactic. A fresh board holds it for eight of its batches and six rounds without a better line. A board where half the tactics already have eight scored lines asks again after four and four. A model that goes cold, or a tier that just unlocked, asks on the next batch.
 
 ### 7.2 Local edit
 

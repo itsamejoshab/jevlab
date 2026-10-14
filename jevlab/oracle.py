@@ -22,7 +22,6 @@ from .config import (
     OPENROUTER_BASE,
     OPENROUTER_KEY,
     ORACLE_BACKENDS,
-    ORACLE_CONCURRENCY,
     ORACLE_MAX_CONCURRENCY,
     ORACLE_TIMEOUT,
     TYPESAFE_BASE,
@@ -39,17 +38,34 @@ class OracleError(RuntimeError):
 class Score:
     state: str
     samples: list[float] = field(default_factory=list)
+    moment_n: int | None = None
+    moment_mean: float | None = None
+    moment_spread: float | None = None
+
+    @classmethod
+    def moments(cls, state: str, n: int, total: float, sumsq: float) -> "Score":
+        """Mean and sample spread from stored sums, without the raw rolls."""
+        mean = total / n if n else float("nan")
+        if n < 2:
+            spread = 0.0
+        else:
+            spread = math.sqrt(max((sumsq - total * total / n) / (n - 1), 0.0))
+        return cls(state, [], n, mean, spread)
 
     @property
     def n(self) -> int:
-        return len(self.samples)
+        return len(self.samples) if self.moment_n is None else self.moment_n
 
     @property
     def mean(self) -> float:
+        if self.moment_mean is not None:
+            return self.moment_mean
         return sum(self.samples) / len(self.samples) if self.samples else float("nan")
 
     @property
     def spread(self) -> float:
+        if self.moment_spread is not None:
+            return self.moment_spread
         if len(self.samples) < 2:
             return 0.0
         m = self.mean
@@ -246,8 +262,8 @@ class BackendPool:
         if not specs:
             raise OracleError(
                 "no Jev backend key: set TYPESAFE_API_KEY and/or OPENROUTER_API_KEY in .env. "
-                "Laya and Clef score locally: `uv sync --extra laya` then `jevlab install-laya`, "
-                "or `uv sync --extra clef` then `jevlab install-clef`."
+                "Laya, Clef, and Clef-flash score locally: `uv sync --extra laya` then `jevlab install-laya`, "
+                "or `uv sync --extra clef` then `jevlab install-clef` (Clef and Clef-flash share that download)."
             )
         self.backends = [Backend(name, base, key, concurrency) for name, base, key in specs]
         self.cond = asyncio.Condition()
@@ -321,7 +337,11 @@ class Oracle:
     Jev's top-option probability; samples are stored the same way either way. Remote calls are pooled over
     Typesafe and OpenRouter. Laya and Clef use a local Hugging Face checkpoint instead, one forward per phrase."""
 
-    def __init__(self, db: DB, question_request: dict, concurrency: int = ORACLE_CONCURRENCY, target: str = ""):
+    def __init__(self, db: DB, question_request: dict, concurrency: int | None = None, target: str = ""):
+        if concurrency is None:
+            from .config import ORACLE_CONCURRENCY
+
+            concurrency = ORACLE_CONCURRENCY
         self.db = db
         self.question_request = question_request
         self.target = target
@@ -406,20 +426,20 @@ class Oracle:
                     self.cost += cost
                     self.latencies.append(latency)
                     filed = qkey or self.qkey
-                    self.db.execute(
-                        "INSERT INTO oracle_samples (request_hash, model, state, noul, answer, latency_ms, cost, at, qkey)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            key,
-                            body.get("model"),
-                            state,
-                            value,
-                            json.dumps(answer),
-                            int(latency * 1000),
-                            cost,
-                            time.time(),
-                            filed,
-                        ),
+                    self.db.add_oracle_samples(
+                        [
+                            (
+                                key,
+                                body.get("model"),
+                                state,
+                                value,
+                                json.dumps(answer),
+                                int(latency * 1000),
+                                cost,
+                                time.time(),
+                                filed,
+                            )
+                        ]
                     )
                     self.db.execute("DELETE FROM oracle_refusals WHERE qkey = ? AND state = ?", (filed, state))
                     if self.target:
@@ -525,11 +545,7 @@ class Oracle:
         qk = qkey or self.qkey
         payload = json.dumps(answer)
         ms = int(latency * 1000)
-        self.db.executemany(
-            "INSERT INTO oracle_samples (request_hash, model, state, noul, answer, latency_ms, cost, at, qkey)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [(key, model, state, stored, payload, ms, 0.0, now, qk)] * copies,
-        )
+        self.db.add_oracle_samples([(key, model, state, stored, payload, ms, 0.0, now, qk)] * copies)
         self._cached(key).extend([shown] * copies)
 
     def _shown(self, answer: dict, stored: float) -> float:
@@ -541,10 +557,10 @@ class Oracle:
         """A local checkpoint is deterministic, so one forward fills every sample a caller asked for."""
         from .config import EDITION
 
-        if EDITION == "clef":
+        if EDITION in ("clef", "clef-flash"):
             from .clef_local import ClefError as LocalError, predict_many
 
-            who = "Clef"
+            who = "Clef-flash" if EDITION == "clef-flash" else "Clef"
         else:
             from .laya_local import LayaError as LocalError, predict_many
 
@@ -599,11 +615,9 @@ class Oracle:
         if row is None or copies <= 0:
             return
         now = time.time()
-        self.db.executemany(
-            "INSERT INTO oracle_samples (request_hash, model, state, noul, answer, latency_ms, cost, at, qkey)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        self.db.add_oracle_samples(
             [(key, row["model"], row["state"], row["noul"], row["answer"], row["latency_ms"], 0.0, now, row["qkey"])]
-            * copies,
+            * copies
         )
         shown = self._cached(key)[-1]
         self._cached(key).extend([shown] * copies)

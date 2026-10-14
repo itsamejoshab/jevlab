@@ -479,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     argv, edition = pop_edition(sys.argv[1:] if argv is None else list(argv))
     if edition is not None:
         os.environ["JEV_EDITION"] = edition
-    from .config import EDITION, EDITIONS
+    from .config import EDITION, EDITIONS, default_rerolls, reroll_gap
 
     parser = argparse.ArgumentParser(prog="jevlab", description="Offline Jev search lab")
     parser.add_argument(
@@ -487,11 +487,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=EDITIONS,
         default=EDITION,
         help="game edition: jev (data/), kev (data/kev/), laya (data/laya/), clef (data/clef/), "
-        "or luna (data/luna/), or decider (data/decider/); read before anything else loads",
+        "clef-flash (data/clef-flash/), clef-omni (data/clef-omni/), luna (data/luna/), "
+        "decider (data/decider/), or microsoft (data/microsoft/); read before anything else loads",
     )
     sub = parser.add_subparsers(dest="command")
 
-    p = sub.add_parser("tui", help="home screen: choose Search or Publish (default when no command is given)")
+    p = sub.add_parser("tui", help="home screen: choose Search, Publish, or Defense (default when no command is given)")
     p.set_defaults(func=cmd_tui)
 
     p = sub.add_parser(
@@ -509,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("snapshot", help="pull questions, boards, word impacts, and our attempts into data/jev.db")
     p.add_argument("--q", nargs="*", help="limit to these slugs or play URLs")
     p.add_argument("--modes", nargs="*", help="strict casual golf emoji (default all)")
-    p.add_argument("--workers", type=int, default=6)
+    p.add_argument("--workers", type=int, default=16)
     p.set_defaults(func=cmd_snapshot)
 
     p = sub.add_parser("calibrate", help="replay site-scored phrases through the oracle and report parity")
@@ -586,9 +587,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "action", nargs="?", default="list", choices=["list", "queue", "unqueue", "drop", "import-jev", "import-from"]
     )
-    p.add_argument(
-        "--from-edition", choices=EDITIONS, help="import-from: edition whose vault to read"
-    )
+    p.add_argument("--from-edition", choices=EDITIONS, help="import-from: edition whose vault to read")
     p.add_argument("--q", help="question slug or play URL")
     p.add_argument("--phrase", help="exact phrase to queue/drop (default: the best candidate)")
     p.add_argument("--all", action="store_true", help="queue every winning candidate for the question")
@@ -611,14 +610,22 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("publish", help="submit queued vault entries to the live site (separate batch loop)")
     p.add_argument("--q", nargs="*", help="only these slugs")
-    p.add_argument("--dry-run", action="store_true", help="verify boards and oracle, but send no turns")
+    p.add_argument("--dry-run", action="store_true", help="read the live boards, but send no turns")
+    rolls = default_rerolls()
+    gap = reroll_gap()
+    if gap:
+        roll_note = f" (waits {gap:.0f}s between re-rolls; a quick repeat is cached)"
+    elif not rolls:
+        roll_note = " (0: this edition returns the same score every time)"
+    else:
+        roll_note = ""
     p.add_argument(
         "--rerolls",
         type=int,
-        default=3,
-        help="re-score the final word N times even after a win; the board keeps the best",
+        default=rolls,
+        help="re-score the final word N times even after a win; the board keeps the best" + roll_note,
     )
-    p.add_argument("--no-verify", action="store_true", help="skip the oracle re-check")
+    p.add_argument("--no-verify", action="store_true", help="skip the oracle check after a loss")
     p.add_argument("--delay", type=float, default=0.01, help="seconds between site turns")
     p.add_argument("--board", choices=board_names, help="only this game mode board (default every board)")
     p.add_argument("--mode", choices=["strict", "golf"], help="only this play mode (default every mode)")

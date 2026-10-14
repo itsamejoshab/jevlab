@@ -37,21 +37,35 @@ The same two facts decide whether a new phrase is worth keeping. The numbers bel
 
 ### What a search does
 
-A Strict Highest search rehearses that ranking in private. jevlab starts from phrases it already knows, writes new ones, and asks a local copy of Jev how confident it is. A phrase is saved only when it would outrank the current public leader. Publishing that phrase onto the live board is a separate step.
+A search rehearses that ranking in private. It scores phrases against a local copy of Jev and does not touch the public board until you publish.
+
+It remembers every phrase it scores. New phrases come from two kinds of work, and a scheduler spends the scoring budget on whichever kind is actually moving the best line.
+
+**Writing.** Language models write whole phrases, each one in a chosen way of speaking to Jev: a scene, a deduction, a direct claim, a worked example, and others. At the start of a question every model in the pool writes the same few of those ways. The model whose phrases score highest keeps writing, in every way, until the best line stops improving. The pool is asked again then. On a question that has already been searched hard, it is asked again sooner, because one model stops covering every way of phrasing.
+
+**Editing.** Other jobs start from a line that already scores well and change it: drop a word, swap a word, cross two lines, or grow a long one. A learned stand-in ranks the large piles of edits so only the promising ones spend a real score.
+
+A phrase is held for publishing only after several scores agree that it would outrank the current public leader. One lucky score is not enough. Putting that phrase on the live board is a separate step.
 
 ```mermaid
-flowchart LR
-    SEED["Phrases we already know,<br/>including the public leader"] --> TRY["Write a new phrase"]
-    TRY --> SCORE["Score it privately<br/>against a local copy of Jev"]
-    SCORE --> KEEP{"Higher confidence,<br/>or the same confidence<br/>in fewer words?"}
-    KEEP -- "yes, and it beats<br/>the public leader" --> VAULT["Save the winner"]
-    KEEP -- "no" --> TRY
-    VAULT --> PUB["Publish to the live board<br/>when you choose"]
+flowchart TB
+    ASK["Ask every model for the same few ways of phrasing"] --> PICK["Keep the model whose phrases score highest"]
+    PICK --> WRITE["That model keeps writing,\nswitching among ways of phrasing"]
+    KNOWN["Lines that already score well"] --> EDIT["Change them: drop a word,<br/>swap a word, or join two lines"]
+    WRITE --> SCORE["Score the phrase privately"]
+    EDIT --> SCORE
+    SCORE --> REMEMBER["Remember the score"]
+    REMEMBER --> HOLD{"Repeated scores say it<br/>beats the public leader?"}
+    HOLD -- yes --> PUB["Hold it until you publish"]
+    REMEMBER --> QUIET{"Has the best line stopped moving?"}
+    QUIET -- "still moving" --> WRITE
+    QUIET -- "still moving" --> EDIT
+    QUIET -- "gone quiet" --> ASK
 ```
 
-The lab also plays **Strict Shortest yes**, a different board: a phrase only has to convince Jev, just over 50%, and the shortest convincing phrase wins. The diagram above is Strict Highest.
+The lab also plays **Strict Shortest yes**. There a phrase only has to convince Jev, just over 50%, and the shortest convincing phrase wins. The diagram above is Strict Highest.
 
-The wording rules, the noise in Jev's answers, and how the search proposes and checks phrases are in [docs/how-it-works.md](docs/how-it-works.md).
+The wording rules, the noise in Jev's answers, and the detail of the probe, the frames, and the scheduler are in [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Get started
 
@@ -69,7 +83,7 @@ See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough: installation, the f
 | Doc | Contents |
 | --- | --- |
 | [QUICKSTART.md](QUICKSTART.md) | Install, configure, and run everything |
-| [docs/how-it-works.md](docs/how-it-works.md) | Technical summary: why Jev is hard to read, and how the search is built |
+| [docs/how-it-works.md](docs/how-it-works.md) | How a search runs: the rules, the noise, the model probe, and the scheduler |
 | [docs/commands.md](docs/commands.md) | Every command and flag |
 | [docs/configuration.md](docs/configuration.md) | Model roles, swapping models, costs, Jev vs Kev vs Laya vs Clef |
 | [docs/architecture.md](docs/architecture.md) | Full engine write-up, with the math, plus a source map |

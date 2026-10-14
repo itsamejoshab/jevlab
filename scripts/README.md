@@ -16,6 +16,19 @@ by the oracle. The default generator tiers in `jevlab/config.py` come from this 
 uv run python scripts/gen_bakeoff.py [slug ...]
 ```
 
+## `route_bakeoff.py`
+
+The same kind of head-to-head, split by archetype, with the dollar cost and the latency of each call. It asks
+which model gets within 0.02 of the best top-3 the fastest, which is the speed-to-leader pick. Qwen3.8 Max is
+not included. Two faster stand-ins are: `qwen3.6-flash` and `gemini-3.1-flash-lite`. `--set next` is the
+unsampled boards, the boards whose leader is still ahead, and Point Break. Rows append to `data/route_bakeoff.jsonl`.
+
+```bash
+uv run python scripts/route_bakeoff.py
+uv run python scripts/route_bakeoff.py --set tough
+uv run python scripts/route_bakeoff.py --summarize
+```
+
 ## `experiments/`
 
 Arguments are positional. `SLUG` is a question slug and `LEAD` is the board leader's word count.

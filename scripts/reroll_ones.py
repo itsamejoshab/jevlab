@@ -1,9 +1,11 @@
-"""One-shot: re-roll every live 1-word row of ours, up to 15 times each.
+"""One-shot: re-roll every live 1-word row of ours.
 
 The site keeps a player's best-ever phrase on each board, so a noisy score can
 only improve. Same move as publish's re-roll (remove the last word, append it
 again); Golf starts a fresh attempt each try. After the original casing, the
-same word is tried in ALL CAPS for another 15 re-rolls. Not wired into the CLI.
+same word is tried in ALL CAPS. Not wired into the CLI. The count is the edition
+default: 5 where the score can move, 0 where it cannot. Microsoft waits 20s
+between re-rolls, because an immediate repeat is the cached score.
 
   uv run python scripts/reroll_ones.py --dry-run
   uv run python scripts/reroll_ones.py
@@ -17,7 +19,6 @@ import fcntl
 import os
 import sys
 
-REROLLS = 15
 PLAY_MODES = ("strict_chain", "golf", "word_chain")
 BOARD_KEYS = ("highScores", "shortestYes", "champions")
 CEILING = 0.99
@@ -156,7 +157,7 @@ def reroll_chain(client, target: dict, word: str, n: int, log) -> tuple[float, l
 
 def reroll_golf(client, target: dict, word: str, n: int, start: float, log) -> tuple[float, list[float]]:
     from jevlab.objective import site_round
-    from jevlab.publish import golf_try
+    from jevlab.publish import golf_try, pause_for_fresh_score
 
     best = start
     rolls = [best] if start else []
@@ -166,6 +167,7 @@ def reroll_golf(client, target: dict, word: str, n: int, start: float, log) -> t
         if site_round(best) >= CEILING:
             log(f"    ceiling {best:.2f}; stopping")
             break
+        pause_for_fresh_score(log)
         p = golf_try(client, target["live"], word, log)
         rolls.append(p)
         best = max(best, p)
@@ -183,17 +185,19 @@ def record(db, target: dict, word: str, best: float) -> None:
 
 
 def run(args) -> int:
-    import time
-
     from jevlab.config import EDITION
     from jevlab.db import DB
-    from jevlab.objective import site_round
-    from jevlab.publish import GOLF_BOARD_LAG, LOCK_PATH, WordRejected, refresh_board
+    from jevlab.objective import Objective, site_round
+    from jevlab.publish import LOCK_PATH, WordRejected, wait_for_row
     from jevlab.rules.banned import BannedPhrase
     from jevlab.site import SiteClient, SiteError
 
     def log(message: str) -> None:
         print(message, flush=True)
+
+    if args.rerolls <= 0:
+        log(f"re-rolls are {args.rerolls} on {EDITION}; nothing to send")
+        return 0
 
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_PATH, "w") as lock:
@@ -216,9 +220,7 @@ def run(args) -> int:
             log("no 1-word rows of ours on the live boards")
             return 0
         for target in targets:
-            boards = ", ".join(
-                f"{b} {p:.2f}" + (f"/{c}" if c else "") for b, p, c in target["boards"]
-            )
+            boards = ", ".join(f"{b} {p:.2f}" + (f"/{c}" if c else "") for b, p, c in target["boards"])
             word = target["word"] or "?"
             extra = ""
             if target["word"]:
@@ -228,10 +230,7 @@ def run(args) -> int:
             log(f"  {target['p']:.2f} {target['mode']:<12} {target['slug']} [{boards}] {word}{extra}")
         if args.dry_run:
             n = sum(len(casings(t["word"])) if t["word"] else 2 for t in targets)
-            log(
-                f"dry run: would re-roll {len(targets)} 1-word row(s) "
-                f"({n} casing(s)) up to {args.rerolls} times each"
-            )
+            log(f"dry run: would re-roll {len(targets)} 1-word row(s) ({n} casing(s)) up to {args.rerolls} times each")
             return 0
 
         db = DB()
@@ -283,14 +282,10 @@ def run(args) -> int:
                     rolled = True
                     best_board = max(best_board, best)
                     record(db, target, variant, best)
-                    log(
-                        f"  -> {variant} best {best:.2f}  rolls {[round(r, 2) for r in rolls]}"
-                    )
+                    log(f"  -> {variant} best {best:.2f}  rolls {[round(r, 2) for r in rolls]}")
                 if not rolled:
                     continue
-                if target["golf"]:
-                    time.sleep(GOLF_BOARD_LAG)
-                refresh_board(db, client, target["live"], target["mode"])
+                wait_for_row(db, client, target["live"], target["mode"], me, best_board, None, Objective("yes"), log)
                 delta = best_board - start
                 if site_round(best_board) > site_round(start):
                     improved += 1
@@ -301,9 +296,7 @@ def run(args) -> int:
                     log(f"  -> held {start:.2f} (best {best_board:.2f})")
         except KeyboardInterrupt:
             log("\ninterrupted")
-        log(
-            f"\ndone: {len(targets)} target(s), {improved} improved, {skipped} skipped, {failed} failed"
-        )
+        log(f"\ndone: {len(targets)} target(s), {improved} improved, {skipped} skipped, {failed} failed")
         for delta, slug, word in sorted(gains, reverse=True):
             log(f"  +{delta:.2f}  {slug}  {word}")
         client.save_session()
@@ -315,16 +308,32 @@ def main(argv: list[str] | None = None) -> int:
     argv, edition = pop_edition(argv)
     if edition is not None:
         os.environ["JEV_EDITION"] = edition
+    from jevlab.config import activate, default_rerolls, reroll_gap
+
+    activate(edition)
+    rolls = default_rerolls()
+    gap = reroll_gap()
+    if gap:
+        same = f" Microsoft waits {gap:.0f}s between re-rolls; a quick repeat is cached."
+    elif rolls == 0:
+        same = " This edition returns the same score every time."
+    else:
+        same = ""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="list 1-word rows, send nothing")
-    parser.add_argument("--rerolls", type=int, default=REROLLS, help=f"remove-and-reappend this many times (default {REROLLS})")
+    parser.add_argument(
+        "--rerolls",
+        type=int,
+        default=rolls,
+        help=f"remove-and-reappend this many times (default {rolls}).{same}",
+    )
     parser.add_argument("--delay", type=float, default=0.01, help="seconds between site turns")
     parser.add_argument("--q", nargs="*", default=[], help="limit to these slugs")
     parser.add_argument("--limit", type=int, default=0, help="cap how many attempts to re-roll (0 = all)")
     parser.add_argument("--modes", nargs="*", default=list(PLAY_MODES), help="play modes to scan")
     parser.add_argument(
         "--edition",
-        choices=["jev", "kev", "laya", "clef", "luna", "decider"],
+        choices=["jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "decider", "microsoft"],
         help="game edition (also accepted anywhere on the line)",
     )
     args = parser.parse_args(argv)

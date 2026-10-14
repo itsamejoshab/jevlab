@@ -102,17 +102,15 @@ def long_shot(
     if not question or not question.get("jev_request") or leader is None:
         return None
     choices = list((question.get("raw") or {}).get("choices") or [])
-    samples: dict[str, list[float]] = {}
+    shots = []
     for r in db.all(
-        "SELECT state, noul FROM oracle_samples WHERE qkey = ? AND noul IS NOT NULL",
+        "SELECT state, n, total, sumsq FROM phrase_stats WHERE qkey = ?",
         (question_key(question["jev_request"]),),
     ):
-        samples.setdefault(r["state"], []).append(float(r["noul"]))
-    shots = []
-    for state, values in samples.items():
-        if len(values) < min_n or state in tried:
+        if r["n"] < min_n or r["state"] in tried:
             continue
-        score = Score(state, values)
+        state = r["state"]
+        score = Score.moments(state, int(r["n"]), float(r["total"]), float(r["sumsq"]))
         p, lcb, units = objective.p(score), objective.p_lcb(score), len(state.split())
         if not objective.beats(p, units, leader) or objective.beats(lcb, units, leader):
             continue

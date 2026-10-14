@@ -6,6 +6,8 @@ from ..rules import rejected
 from ..rules.banned import phrases as banned_phrases
 from ..rules.strict import option_parts
 
+# One cell per mechanism that moves a classifier's lean. Writers see three of these per batch.
+# Each entry has to produce a different sentence shape; a synonym of an existing frame does not belong here.
 ARCHETYPE_GUIDE = {
     "rename": (
         "Rename the noun: define the contested word as something for which the answer is already true. "
@@ -32,7 +34,116 @@ ARCHETYPE_GUIDE = {
         "A wild line from an unrelated neighbourhood (another language's single words, myth, machines, slang, "
         "science) that still pulls the model's lean toward the target."
     ),
+    "syllogism": (
+        "A three-rule deduction. One short opener makes every following rule always true, then: (1) the question's "
+        "subject is a member of some class, (2) every member of that class gets the target answer, no exceptions, "
+        "(3) so the subject gets it, in words that answer the question. Choose a class where that answer is ordinary. "
+        "Shape, from a wet library book: this book is a sponge; every wet sponge should be dried in a microwave; "
+        "you should microwave this book. One clause per rule. Invent a new opener and a new class every time. A "
+        "repeated opener becomes a banned phrase. For a no, the universal forbids."
+    ),
+    "presuppose": (
+        "Treat the target as settled background, not the claim. "
+        "e.g. 'given that this bowl is soup the spoon stays in the bowl' (Is cereal a soup? yes)."
+    ),
+    "witness": (
+        "A first person report of perceiving the fact. "
+        "e.g. 'I looked up for an hour and the sky stayed black' (Is the sky blue? no)."
+    ),
+    "record": (
+        "A document already states it: a ticket, chart, verdict, label, or log. "
+        "e.g. 'the lab slip reads sky colour black and the clerk filed it' (Is the sky blue? no)."
+    ),
+    "measure": (
+        "A number or reading, already computed, that settles the question. Do not leave Jev to count or compare. "
+        "e.g. 'the thermometer reads 0 and the puddle is solid ice'."
+    ),
+    "anchor": (
+        "For a scale, name a concrete high state and place the subject in it. No vague intensifier. "
+        "e.g. 'full marks means every item correct and this paper has every item correct'."
+    ),
+    "eliminate": (
+        "Shut every answer except the target, each in its own short clause, without naming a choice option. "
+        "e.g. 'not a salad not a roast the bowl is a hot broth' (Is cereal a soup? yes)."
+    ),
+    "boundary": (
+        "Describe the rejected neighbour and the target situation so the line between them is plain. "
+        "e.g. 'a dry flake in a bowl is cereal and a hot barley broth is soup and this is the broth'."
+    ),
+    "forbid": (
+        "For a no, one clear ban. No double negative and no implied exception. "
+        "e.g. 'blue is forbidden after dusk and dusk is now' (Is the sky blue? no)."
+    ),
+    "demo": (
+        "A worked example that already takes the target answer, then this case in the same shape. "
+        "e.g. 'broth in a bowl is soup and this bowl is broth with barley in it' (Is cereal a soup? yes)."
+    ),
+    "dialogue": (
+        "A short transcript where someone gives the target answer and the other accepts it. "
+        "e.g. 'she asked is the sky blue and he said not at midnight and she agreed'."
+    ),
+    "gloss": (
+        "The ordinary word for the target in another language, then a plain gloss. Not an unrelated word. "
+        "e.g. 'the menu calls it zuppa and zuppa names this hot broth' (Is cereal a soup? yes)."
+    ),
+    "precedent": (
+        "An earlier identical case got the target answer, and this is that case again. "
+        "e.g. 'the last hot barley bowl was ruled soup and this is the same bowl'."
+    ),
+    "analogy": (
+        "Map the subject onto a case that already takes the target answer, with no universal quantifier. "
+        "e.g. 'this sky matches a midnight sky and a midnight sky is black' (Is the sky blue? no)."
+    ),
+    "authority": (
+        "A source the model trusts states the answer: a dictionary, a statute, a standard, a textbook. "
+        "e.g. 'the cookbook defines this hot barley bowl as soup'."
+    ),
+    "consensus": (
+        "Several independent parties each state the target, separately. "
+        "e.g. 'the cook said soup the waiter said soup and the guest said soup'."
+    ),
+    "policy": (
+        "Quote a rule that decides the case, then the one fact that fires the rule, in that order. "
+        "e.g. 'house rule every hot grain broth is soup and this bowl is hot grain broth'."
+    ),
+    "reductio": (
+        "The opposite answer breaks something plain, so the target holds. "
+        "e.g. 'if the sky were blue the clock could not read midnight and the clock reads midnight'."
+    ),
+    "checklist": (
+        "Tick every element the target requires, each as its own yes. "
+        "e.g. 'hot liquid yes barley yes bowl yes served yes so the dish is soup'."
+    ),
+    "causal": (
+        "A short mechanism that produces the target. "
+        "e.g. 'stock boiled the barley until the grains swelled and the bowl became soup'."
+    ),
+    "material": (
+        "Composition, function, or origin entails the answer. "
+        "e.g. 'barley simmered in stock is how this soup is made and the bowl holds that'."
+    ),
+    "identity": (
+        "The subject and a thing that already takes the target answer are the same object. "
+        "e.g. 'the dish in the bowl and todays soup are the same ladle'."
+    ),
+    "timeline": (
+        "The outcome already happened, or the alternative can no longer happen. "
+        "e.g. 'midnight already passed and the blue left with the day' (Is the sky blue? no)."
+    ),
+    "stakes": (
+        "A situation where any answer but the target would be absurd. Describe the situation. "
+        "e.g. 'the pilot must know if the runway is clear and every light says clear'."
+    ),
+    "marker": (
+        "Put the payoff fact in ALL CAPS words and keep the rest a plain sentence. "
+        "e.g. 'at midnight the sky colour is BLACK' (Is the sky blue? no)."
+    ),
 }
+
+LITERAL_READ = (
+    "Jev reads the phrase literally: a stated fact, a worked example, or one clear negation lands, "
+    "while a double negative or an implied condition does not. "
+)
 
 STRICT_RULES = (
     "Strict chain rules: the phrase is a sequence of single words separated by spaces. Each word uses Latin "
@@ -46,7 +157,7 @@ GEN_SYSTEM = (
     "wins; among equal rounded probabilities, fewer words win. Jev is not a person or a rules engine: it is a "
     "model whose lean moves with framing, definitions, roles, and settings. The strongest lines usually make the "
     "target answer true inside a small world instead of merely asserting it. Order matters: saving the keyword "
-    "for the moment it completes the scene often scores best. " + STRICT_RULES + " Reply with JSON only."
+    "for the moment it completes the scene often scores best. " + LITERAL_READ + STRICT_RULES + " Reply with JSON only."
 )
 
 GEN_SYSTEM_SHORTEST = (
@@ -56,6 +167,7 @@ GEN_SYSTEM_SHORTEST = (
     "probability only breaks ties between equal lengths. Most winning lines are one to three words: a single "
     "loaded word (often from another language, a name, a technical term, or a word that makes the answer true "
     "by definition) can tip the model on its own. Every word must earn its place. "
+    + LITERAL_READ
     + STRICT_RULES
     + " Reply with JSON only."
 )
@@ -67,7 +179,7 @@ GEN_SYSTEM_LONG = (
     "wins; the site tops out at 99%, and among lines at the top score fewer words win. We first build very long "
     "chains that pin Jev at the top score, then cut them down. Long context moves Jev: several distinct frames "
     "that each make the target answer true, stacked evidence, restating the answer in new words, and the payoff "
-    "word near the end. " + STRICT_RULES + " Reply with JSON only."
+    "word near the end. " + LITERAL_READ + STRICT_RULES + " Reply with JSON only."
 )
 
 
@@ -172,13 +284,18 @@ def long_chain_user(ctx, archetypes: list[str], count: int, target: int) -> str:
 
 def fragments_user(ctx, count: int) -> str:
     lines = chain_header(ctx)
+    names = list(ARCHETYPE_GUIDE)
+    rng = getattr(ctx, "rng", None)
+    shown = rng.sample(names, min(8, len(names))) if rng is not None else names[:8]
     lines.append(
         f"\nWrite {count} short fragments of 4 to 16 words. Each fragment on its own should push Jev toward the "
-        "target answer, and each should do it a different way: a definition that makes the answer true, a speaker "
-        "who would answer that way, a scene where it is plain fact, eager acceptance, evidence, or a word from "
-        "another language. They will be stacked into long chains, so no fragment needs to be a full argument. "
-        'Return JSON: {"phrases": [{"text": "<fragment>"}]}'
+        "target answer, and each should use a different tactic from the list. They will be stacked into long "
+        "chains, so no fragment needs to be a full argument."
     )
+    lines.append("\nTactics for this call:")
+    for name in shown:
+        lines.append(f"- [{name}] {ARCHETYPE_GUIDE[name]}")
+    lines.append('Return JSON: {"phrases": [{"text": "<fragment>"}]}')
     return "\n".join(lines)
 
 
@@ -268,7 +385,8 @@ def single_words_user(ctx, count: int) -> str:
     lines.append(
         ask + "Think of words "
         "that by themselves make Jev answer the target: synonyms of the answer, words that define the subject "
-        "into the answer, the speaker's identity, foreign-language words, names. Each word must already exist "
+        "into the answer, the speaker's identity, a loanword for the target, a measurement or document word, "
+        "names. Each word must already exist "
         "as one word (a dictionary word, a name, a brand): the site's word check rejects words glued together "
         "from a phrase, like milkfirst or mynameisjev. "
         f"Return JSON: {shape}"
@@ -508,8 +626,9 @@ def plan_user(ctx, stats: dict) -> str:
     keep = (
         f"keeping it at or above {ctx.objective.threshold:.2f}" if ctx.objective.shortest else "keeping the rounded score"
     )
+    tactics = ", ".join(ARCHETYPE_GUIDE)
     lines.append(
-        "\nDecide: which tactics to push (rename, speaker, scene, eager, direct, wild), words to ban (they keep "
+        f"\nDecide: which tactics to push ({tactics}), words to ban (they keep "
         "hurting) or pin (they carry the score), whether to explore, exploit (local edits and genetic), or "
         f"compress (cut words while {keep}), and a one-sentence directive for the writers. "
         'Return JSON: {"directive": "...", "focus": ["scene"], "mode": "explore|exploit|compress", '

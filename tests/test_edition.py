@@ -12,7 +12,45 @@ from jevlab.transfer import import_from_jev
 
 
 def test_editions_include_the_mirrors():
-    assert EDITIONS == ("jev", "kev", "laya", "clef", "luna", "decider")
+    assert EDITIONS == ("jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "decider", "microsoft")
+
+
+def test_activate_switches_edition_in_this_process(tmp_path, monkeypatch):
+    from jevlab import config, vault
+    from jevlab.db import DB
+
+    saved_data = config.JEV_DATA
+    saved_edition = config.EDITION
+    overrides = (
+        "JEV_MODEL",
+        "JEV_ORACLE_BACKENDS",
+        "JEV_ORACLE_CONCURRENCY",
+        "JEV_ORACLE_MAX_CONCURRENCY",
+        "JEV_TRIAGE_K",
+        "JEV_ORACLE_TIMEOUT",
+    )
+    saved_env = {key: os.environ.get(key) for key in overrides}
+    for key in overrides:
+        monkeypatch.delenv(key, raising=False)
+    config.JEV_DATA = tmp_path
+    try:
+        config.activate("kev")
+        assert config.EDITION == "kev"
+        assert config.DB_PATH == tmp_path / "kev" / "jev.db"
+        assert config.VAULT == tmp_path / "kev" / "vault"
+        assert config.JEV_MODEL == "jaredpalmer/kev-4b"
+        assert config.ORACLE_BACKENDS == ["openrouter"]
+        assert config.TRIAGE_K == 40
+        assert DB().path == config.DB_PATH
+        assert vault.VAULT == config.VAULT
+    finally:
+        config.JEV_DATA = saved_data
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        config.activate(saved_edition)
 
 
 def test_referer_follows_edition(tmp_path):
@@ -23,12 +61,18 @@ def test_referer_follows_edition(tmp_path):
     clef = SiteClient("clef", session_path=missing)._headers()["referer"]
     luna = SiteClient("luna", session_path=missing)._headers()["referer"]
     decider = SiteClient("decider", session_path=missing)._headers()["referer"]
+    flash = SiteClient("clef-flash", session_path=missing)._headers()["referer"]
+    omni = SiteClient("clef-omni", session_path=missing)._headers()["referer"]
+    microsoft = SiteClient("microsoft", session_path=missing)._headers()["referer"]
     assert jev.endswith("/") and not jev.endswith("/jev/")
     assert kev.endswith("/kev/")
     assert laya.endswith("/laya/")
     assert clef.endswith("/clef/")
     assert luna.endswith("/luna/")
     assert decider.endswith("/decider/")
+    assert flash.endswith("/clef-flash/")
+    assert omni.endswith("/clef-omni/")
+    assert microsoft.endswith("/microsoft/")
 
 
 def test_import_jev_refuses_the_jev_edition(monkeypatch):
@@ -155,3 +199,43 @@ def test_decider_edition_defaults(tmp_path):
         "assert TRIAGE_K == 40\n"
     )
     subprocess.check_call([sys.executable, "-c", script], env=env)
+
+
+def test_new_editions_pick_local_flash_and_openrouter_for_the_rest(tmp_path, monkeypatch):
+    from jevlab import config
+
+    saved_data = config.JEV_DATA
+    saved_edition = config.EDITION
+    overrides = (
+        "JEV_MODEL",
+        "JEV_ORACLE_BACKENDS",
+        "JEV_ORACLE_CONCURRENCY",
+        "JEV_ORACLE_MAX_CONCURRENCY",
+        "JEV_TRIAGE_K",
+        "JEV_ORACLE_TIMEOUT",
+    )
+    saved_env = {key: os.environ.get(key) for key in overrides}
+    for key in overrides:
+        monkeypatch.delenv(key, raising=False)
+    config.JEV_DATA = tmp_path
+    try:
+        config.activate("clef-flash")
+        assert config.JEV_MODEL == "clef-flash"
+        assert config.ORACLE_BACKENDS == ["huggingface"]
+        assert config.DB_PATH == tmp_path / "clef-flash" / "jev.db"
+        config.activate("clef-omni")
+        assert config.JEV_MODEL == "cloudflare/clef-omni"
+        assert config.ORACLE_BACKENDS == ["openrouter"]
+        assert config.DB_PATH == tmp_path / "clef-omni" / "jev.db"
+        config.activate("microsoft")
+        assert config.JEV_MODEL == "microsoft/microsoft-decision-1"
+        assert config.ORACLE_BACKENDS == ["openrouter"]
+        assert config.DB_PATH == tmp_path / "microsoft" / "jev.db"
+    finally:
+        config.JEV_DATA = saved_data
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        config.activate(saved_edition)

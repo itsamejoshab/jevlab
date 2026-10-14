@@ -27,6 +27,7 @@ from ..config import TIER_LEVEL
 from ..search.engine import LEVELS, Engine, Event
 from ..search.strategies import LLMGenerate
 from ..search.surrogate import Embedder
+from .chrome import EditionMark
 from .copyselect import SelectableDataTable, SelectableRichLog
 
 LEVEL_COLORS = ["green", "cyan", "blue", "magenta", "red"]  # ladder levels L0-L4: label, timeline, calls bar
@@ -43,8 +44,9 @@ def strategy_style(name: str) -> str:
 
 STRATEGY_INFO = {
     "llm": "Generator models write whole new lines from the question's archetypes, shown our best-scored lines so "
-    "far so they can build on what works. Each batch goes to the next model in this price tier; the pricier "
-    "tiers join as the ladder escalates (mid at L2, premium at L4).",
+    "far so they can build on what works. The first core batches also include a three-rule deduction until a few "
+    "of those lines are scored. Each batch goes to the next model in this price tier; the pricier tiers join as "
+    "the ladder escalates (mid at L2, premium at L4).",
     "chain": "Long chains: assembles very long lines out of fragments of our strong chains using the {recipe} "
     "recipe, screens them with a probe claim that tells apart lines rounding to the same score, and sends "
     "only the most promising to the oracle.",
@@ -240,6 +242,7 @@ class LabScreen(Screen):
         self.started_at = time.monotonic()
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         yield Static(id="lab-header")
         with Horizontal(id="body"):
             with VerticalScroll(id="queue-box"):

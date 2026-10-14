@@ -8,7 +8,41 @@ from dataclasses import dataclass, field
 from ..objective import Objective
 from ..oracle import Score
 
-ARCHETYPES = ("rename", "speaker", "scene", "eager", "direct", "wild", "other")
+# Same names as prompts.ARCHETYPE_GUIDE, plus "other" for a label the writer did not match.
+ARCHETYPES = (
+    "rename",
+    "speaker",
+    "scene",
+    "eager",
+    "direct",
+    "wild",
+    "syllogism",
+    "presuppose",
+    "witness",
+    "record",
+    "measure",
+    "anchor",
+    "eliminate",
+    "boundary",
+    "forbid",
+    "demo",
+    "dialogue",
+    "gloss",
+    "precedent",
+    "analogy",
+    "authority",
+    "consensus",
+    "policy",
+    "reductio",
+    "checklist",
+    "causal",
+    "material",
+    "identity",
+    "timeline",
+    "stakes",
+    "marker",
+    "other",
+)
 LENGTH_BUCKETS = (1, 3, 5, 8, 12, 17, 24, 33, 45, 60, 90, 130, 180, 240, 300)
 
 

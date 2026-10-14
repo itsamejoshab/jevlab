@@ -15,11 +15,12 @@ from textual.widgets.selection_list import Selection
 
 from .. import activity, vault
 from ..boards import Standing, standings
-from ..config import EDITION, EDITIONS
+from ..config import EDITION, EDITIONS, default_rerolls, reroll_gap
 from ..db import DB
-from ..modes import GOLF, HOME_MODES, GameMode, from_name
+from ..modes import HOME_MODES, GameMode, from_name
 from ..objective import site_round
 from ..search.engine import LEVELS
+from .chrome import NAMES, EditionMark
 from .copyselect import SelectableRichLog
 from .lab import LabScreen
 from .publish_log import PublishLog
@@ -63,9 +64,16 @@ BANNER_GLYPHS = {
     "I": ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
     "R": ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██║  ██║", "╚═╝  ╚═╝"],
 }
-BANNER = {"kev": "KEVLAB", "laya": "LAYALAB", "clef": "CLEFLAB", "luna": "LUNALAB", "decider": "DECIDERLAB"}.get(
-    EDITION, "JEVLAB"
-)
+
+
+def _banner_word() -> str:
+    return "JEVLAB"
+
+
+def _theatre() -> str:
+    return NAMES.get(EDITION, "Jev")
+
+
 BANNER_FACE = ["#ffffff", "#e4eef8", "#c6d9ec", "#a8c4e0", "#8aafd4", "#6c9ac8"]
 BANNER_SHADOW = "#3a4f66"
 BANNER_ACCENT = "#8aafd4"
@@ -75,8 +83,9 @@ CLASSIFICATION = "TOP SECRET // JEV-ORCON // NOFORN // EYES ONLY"
 
 def banner() -> Text:
     text = Text(justify="center", no_wrap=True)
+    word = _banner_word()
     for row, face in enumerate(BANNER_FACE):
-        line = "   ".join(BANNER_GLYPHS[letter][row] for letter in BANNER)
+        line = "   ".join(BANNER_GLYPHS[letter][row] for letter in word)
         for ch in line:
             text.append(ch, style=f"bold {face}" if ch == "█" else BANNER_SHADOW)
         text.append("\n")
@@ -92,11 +101,15 @@ def dossier() -> Text:
     text.append(
         "Directorate of Offline Adversarial Lexicography & Stochastic Oracle Interrogation\n", style="bold italic"
     )
-    theatre = {"kev": "Kev", "laya": "Laya", "clef": "Clef", "luna": "Luna", "decider": "Decider"}.get(EDITION, "Jev")
     text.append(
-        f"Trick {theatre} Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B", style="dim"
+        f"Trick {_theatre()} Theatre of Operations  ·  Special Access Programme JEV-7/Ω  ·  Sector 12-B",
+        style="dim",
     )
     return text
+
+
+def edition_status() -> str:
+    return f"{_theatre()} Mode Activated"
 
 
 def card(value: Text | str, caption: str) -> Text:
@@ -116,31 +129,36 @@ class HomeScreen(Screen):
     }
     #home-banner { width: 100%; text-align: center; text-wrap: nowrap; }
     #home-dossier { width: 100%; margin-top: 1; text-align: center; }
+    #edition-status { width: 100%; margin-top: 1; text-align: center; text-style: bold; color: $accent; }
     #home-rule { color: $primary-darken-2; margin: 1 0 0 0; }
     #home-mode { height: 3; margin-top: 1; align: center middle; }
     #home-mode Label { padding: 1 1 0 0; text-style: bold; color: $accent; }
     #game-mode { width: 40; }
-    #edition { width: 16; margin-left: 2; }
+    #edition-label { margin-left: 2; }
+    #edition { width: 18; }
     #home-cards { height: 4; margin-top: 1; }
     .card { width: 1fr; height: 4; margin: 0 1; border: round $primary-darken-1; content-align: center middle; text-align: center;
             border-title-color: $accent; border-title-style: bold; border-title-align: center; }
     #home-stats { width: 100%; margin: 1 0 0 0; text-align: center; }
-    #home-buttons { height: 5; align: center middle; }
-    #home-buttons Button { margin: 0 2; min-width: 20; }
+    #home-buttons { height: auto; min-height: 3; align: center middle; }
+    #home-buttons Button { margin: 0 1; min-width: 16; }
     #home-log { height: 12; border: round $secondary; display: none; }
     """
 
     BINDINGS = [
         Binding("s", "search", "Search"),
         Binding("p", "publish", "Publish"),
+        Binding("d", "defense", "Defense"),
         Binding("r", "refresh", "Refresh snapshot"),
         Binding("q", "app.quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         with Vertical(id="home"):
             yield Static(banner(), id="home-banner")
             yield Static(dossier(), id="home-dossier")
+            yield Static(edition_status(), id="edition-status")
             yield Rule(id="home-rule", line_style="heavy")
             with Horizontal(id="home-mode"):
                 yield Label("GAME MODE")
@@ -150,6 +168,7 @@ class HomeScreen(Screen):
                     allow_blank=False,
                     id="game-mode",
                 )
+                yield Label("EDITION", id="edition-label")
                 yield Select([(e.capitalize(), e) for e in EDITIONS], value=EDITION, allow_blank=False, id="edition")
             with Horizontal(id="home-cards"):
                 yield Static(id="card-lead", classes="card")
@@ -159,6 +178,7 @@ class HomeScreen(Screen):
             with Horizontal(id="home-buttons"):
                 yield Button("Search", id="search", variant="primary")
                 yield Button("Publish", id="publish", variant="success")
+                yield Button("Defense", id="defense", variant="warning")
                 yield Button("Refresh snapshot", id="refresh")
                 yield Button("Quit", id="quit", variant="error")
             yield SelectableRichLog(id="home-log", wrap=True, markup=False)
@@ -185,7 +205,11 @@ class HomeScreen(Screen):
             self.app.game_mode = from_name(event.value)
             self.update_stats()
         elif event.select.id == "edition" and isinstance(event.value, str) and event.value != EDITION:
-            self.app.exit(event.value)
+            from ..config import activate
+
+            activate(event.value)
+            self.app.title = f"jevlab · {event.value}"
+            self.app.switch_screen(HomeScreen())
 
     def update_stats(self) -> None:
         mode: GameMode = self.app.game_mode
@@ -250,9 +274,15 @@ class HomeScreen(Screen):
         {
             "search": self.action_search,
             "publish": self.action_publish,
+            "defense": self.action_defense,
             "refresh": self.action_refresh,
             "quit": self.app.exit,
         }[event.button.id]()
+
+    def action_defense(self) -> None:
+        from .defense import DefenseScreen
+
+        self.app.push_screen(DefenseScreen())
 
     def action_search(self) -> None:
         if not self.app.game_mode.publishable:
@@ -279,8 +309,28 @@ class HomeScreen(Screen):
 SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"))
 
 
+def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log) -> None:
+    """Snapshot each edition on its own database, then come back to the one that was open."""
+    from ..config import activate
+    from ..site.snapshot import take_snapshot
+
+    origin = EDITION
+    try:
+        for edition in editions:
+            try:
+                log(f"{edition}: opening its database")
+                activate(edition)
+                take_snapshot(DB(), modes=modes, log=log)
+            except Exception as error:
+                log(f"{edition} snapshot failed: {error!r}")
+    finally:
+        if EDITION != origin:
+            log(f"back to {origin}")
+            activate(origin)
+
+
 class SnapshotScreen(Screen):
-    """Pick play modes for this edition. Other editions are shown disabled."""
+    """Pick editions and play modes. One start snapshots each checked edition in turn."""
 
     CSS = """
     #snap-actions { height: auto; padding: 0 1; margin-bottom: 1; }
@@ -293,7 +343,8 @@ class SnapshotScreen(Screen):
     #start:hover, #start:focus { color: $text; background: $success; }
     #back { color: $text-muted; }
     #snap-help { height: auto; padding: 0 1 1 1; color: $text-muted; }
-    #snap-editions, #snap-modes { height: 1; padding: 0 1; }
+    #snap-editions { height: auto; padding: 0 1; }
+    #snap-modes { height: 1; padding: 0 1; }
     #snap-editions Label, #snap-modes Label { width: 12; height: 1; text-style: bold; }
     #snap-editions Setting, #snap-modes Setting { margin-right: 2; }
     #snap-log { height: 1fr; border: round $secondary; margin-top: 1; }
@@ -302,6 +353,7 @@ class SnapshotScreen(Screen):
     BINDINGS = [Binding("escape", "back", "back")]
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         with Horizontal(id="snap-actions"):
             yield Button("Start", id="start", variant="success", compact=True)
             yield Button("Back", id="back", compact=True)
@@ -309,13 +361,7 @@ class SnapshotScreen(Screen):
         with Horizontal(id="snap-editions"):
             yield Label("Editions")
             for edition in EDITIONS:
-                yield Setting(
-                    edition.capitalize(),
-                    value=edition == EDITION,
-                    disabled=edition != EDITION,
-                    id=f"snap-ed-{edition}",
-                    compact=True,
-                )
+                yield Setting(edition.capitalize(), value=True, id=f"snap-ed-{edition}", compact=True)
         with Horizontal(id="snap-modes"):
             yield Label("Modes")
             for label, mode in SNAPSHOT_MODES:
@@ -325,8 +371,8 @@ class SnapshotScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#snap-help", Static).update(
-            f"Snapshot {EDITION}. Other editions are disabled; switch to snapshot them. "
-            "Strict and Golf each fill Highest and Shortest."
+            "One start snapshots each checked edition, switching its database, then returns here. "
+            "Strict, Golf, and Casual each fill Highest and Shortest."
         )
         self.query_one("#snap-log").border_title = "snapshot"
         self.busy = False
@@ -346,28 +392,27 @@ class SnapshotScreen(Screen):
     def start(self) -> None:
         if self.busy:
             return
+        editions = tuple(edition for edition in EDITIONS if self.query_one(f"#snap-ed-{edition}", Checkbox).value)
         modes = tuple(mode for _label, mode in SNAPSHOT_MODES if self.query_one(f"#snap-mode-{mode}", Checkbox).value)
+        if not editions:
+            self.notify("pick at least one edition", severity="warning")
+            return
         if not modes:
             self.notify("pick at least one play mode", severity="warning")
             return
         self.busy = True
         self.query_one("#start", Button).disabled = True
-        self.snapshot_worker(modes)
+        self.snapshot_worker(editions, modes)
 
     @work(thread=True, exclusive=True)
-    def snapshot_worker(self, modes: tuple[str, ...]) -> None:
-        from ..site.snapshot import take_snapshot
-
+    def snapshot_worker(self, editions: tuple[str, ...], modes: tuple[str, ...]) -> None:
         log = self.query_one("#snap-log", RichLog)
 
         def write(message: str) -> None:
             activity.log("snapshot", message)
             self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
 
-        try:
-            take_snapshot(DB(), modes=modes, log=write)
-        except Exception as error:
-            write(f"snapshot failed: {error!r}")
+        run_snapshots(editions, modes, write)
 
         def done() -> None:
             self.busy = False
@@ -403,6 +448,7 @@ class LiveSetupScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         yield Static(id="live-help")
         with Vertical(id="live-question"):
             yield Static(id="live-now")
@@ -590,6 +636,7 @@ class SearchSetupScreen(Screen):
         )
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         yield Static(id="setup-help")
         yield SelectionList[str](*self.picker_options(), id="picker")
         with Vertical(id="run-panel"):
@@ -880,6 +927,7 @@ class PublishScreen(Screen):
     .opt Setting:focus, .opt Setting:hover { background: transparent; }
     .opt Label { width: 16; height: 1; text-style: bold; }
     .hint { width: 1fr; height: 1; margin-left: 1; color: $text-muted; }
+    .hint.warn { color: $warning; text-style: bold; }
     #rerolls { width: 6; height: 1; margin: 0; background: $boost; }
     #rerolls:focus { border: none; }
     #import-source { width: 16; height: 1; margin-right: 1; background: $boost; }
@@ -900,11 +948,18 @@ class PublishScreen(Screen):
         self.rows: list[Standing] = []
         self.long_rows: list[Standing] = []
         self.golf_picks: list = []
+        self.casual_picks: list = []
+        self._rows_off: list[Standing] | None = None
+        self._rows_long: list[Standing] | None = None
+        self._golf_all: list | None = None
+        self._casual_all: list | None = None
         self.busy = False
         self.stop_requested = False
         self.transcript = PublishLog()
+        self._chain_lines = 0
 
     def compose(self) -> ComposeResult:
+        yield EditionMark()
         with Horizontal(id="pub-body"):
             with Vertical(id="pub-side"):
                 with Horizontal(id="pub-actions"):
@@ -920,12 +975,22 @@ class PublishScreen(Screen):
                         yield Setting("Near-misses", False, id="long", compact=True)
                         yield Static("include long shots", classes="hint")
                     with Horizontal(classes="opt"):
-                        yield Setting("Exclude me leading", True, id="leading", compact=True)
-                        yield Static("skip boards we already lead", classes="hint")
+                        yield Setting("Include me leading", False, id="leading", compact=True)
+                        yield Static("boards we already lead", classes="hint")
+                    with Horizontal(classes="opt"):
+                        yield Setting("Include casual proxy", False, id="casual", compact=True)
+                        yield Static("strict highest on casual boards", classes="hint")
                     with Horizontal(classes="opt"):
                         yield Label("Re-rolls")
-                        yield Input("3", id="rerolls", type="integer", compact=True)
-                        yield Static("board keeps the best", classes="hint")
+                        yield Input(str(default_rerolls()), id="rerolls", type="integer", compact=True)
+                        gap = reroll_gap()
+                        if gap:
+                            hint, hint_class = f"waits {gap:.0f}s; a quick repeat is cached", "hint warn"
+                        elif default_rerolls() == 0:
+                            hint, hint_class = "same score every time", "hint"
+                        else:
+                            hint, hint_class = "board keeps the best", "hint"
+                        yield Static(hint, classes=hint_class)
                     sources = [(edition.capitalize(), edition) for edition in EDITIONS if edition != EDITION]
                     with Horizontal(classes="opt"):
                         yield Label("Import")
@@ -943,21 +1008,40 @@ class PublishScreen(Screen):
         self.query_one("#pub-log").border_title = "publisher"
         self.reload()
 
-    def reload(self) -> None:
+    def reload(self, full: bool = False) -> None:
+        if full:
+            self._rows_off = self._rows_long = self._golf_all = self._casual_all = None
         with_long = self.query_one("#long", Checkbox).value
-        exclude_leading = self.query_one("#leading", Checkbox).value
+        include_leading = self.query_one("#leading", Checkbox).value
+        include_casual = self.query_one("#casual", Checkbox).value
         u = self.game_mode.unit_abbr
-        every = standings(
-            DB(), mode=self.game_mode.play_mode, long_shots=with_long, board=self.game_mode.board, targets=True
-        )
-        self.rows = sorted((s for s in every if s.entry_beats), key=lambda s: s.search_order)
-        self.long_rows = sorted((s for s in every if s.long_shot), key=lambda s: s.search_order)
+        cached = self._rows_long if with_long else self._rows_off
+        if cached is None:
+            cached = standings(
+                DB(), mode=self.game_mode.play_mode, long_shots=with_long, board=self.game_mode.board, targets=True
+            )
+            if with_long:
+                self._rows_long = cached
+            else:
+                self._rows_off = cached
+        self.rows = sorted((s for s in cached if s.entry_beats), key=lambda s: s.search_order)
+        self.long_rows = sorted((s for s in cached if s.long_shot), key=lambda s: s.search_order) if with_long else []
         from ..crosspost import picks as golf_picks
 
-        self.golf_picks = golf_picks(DB())
-        if exclude_leading:
+        if self._golf_all is None:
+            self._golf_all = golf_picks(DB())
+        self.golf_picks = list(self._golf_all)
+        self.casual_picks = []
+        if include_casual:
+            from ..crosspost import casual_picks
+
+            if self._casual_all is None:
+                self._casual_all = casual_picks(DB())
+            self.casual_picks = list(self._casual_all)
+        if not include_leading:
             self.rows = [s for s in self.rows if not s.we_lead]
             self.golf_picks = [pick for pick in self.golf_picks if not _already_leading(pick)]
+            self.casual_picks = [pick for pick in self.casual_picks if not _already_leading(pick)]
         picker = self.query_one("#pub-picker", SelectionList)
         picker.clear_options()
         for s in self.rows:
@@ -987,7 +1071,7 @@ class PublishScreen(Screen):
         for index, pick in enumerate(self.golf_picks):
             entry = pick.entry
             prompt = Text()
-            prompt.append(f"GOLF {pick.mode.label} ", style="bold magenta")
+            prompt.append(f"{'GOLF ' + pick.mode.label:<18} ", style="bold magenta")
             prompt.append(
                 f"{entry['p_mean']:.3f}/{pick.units}c  ",
                 style="bold magenta",
@@ -997,6 +1081,16 @@ class PublishScreen(Screen):
             prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
             prompt.append(entry["phrase"][:80])
             picker.add_option(Selection(prompt, f"golf:{index}", True))
+        for index, pick in enumerate(self.casual_picks):
+            entry = pick.entry
+            prompt = Text()
+            prompt.append(f"{'CASUAL ' + pick.mode.label:<22} ", style="bold cyan")
+            prompt.append(f"{entry['p_mean']:.3f}/{pick.units}w  ", style="bold cyan")
+            lead = "empty" if pick.leader is None else f"{pick.leader.probability:.2f}/{pick.leader.units}w"
+            prompt.append(f"vs {lead}  ", style="yellow")
+            prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
+            prompt.append(entry["phrase"][:80])
+            picker.add_option(Selection(prompt, f"casual:{index}", True))
         help_text = Text()
         help_text.append(f"Publish {self.game_mode.label}  ", style="bold")
         if self.rows:
@@ -1015,18 +1109,30 @@ class PublishScreen(Screen):
             "including when you already lead Strict. Uncheck one to hold it this run.",
             style="magenta",
         )
+        if include_casual:
+            help_text.append(
+                f"\n{len(self.casual_picks)} Casual lines: the Strict Highest answer on a Casual board it would "
+                "take, including an empty board. A 1–2 word Casual leader usually keeps a tied score. "
+                "Uncheck one to hold it this run.",
+                style="cyan",
+            )
         if with_long:
+            if default_rerolls() == 0:
+                chase = "Submitted once: this model returns the same score every time, so a re-roll cannot help."
+            else:
+                chase = (
+                    f"Each is re-rolled the requested number of times, up to {LONG_REROLLS} while still short. "
+                    "A miss costs only turns, since the board keeps our best."
+                )
             help_text.append(
                 f"\n{len(self.long_rows)} long shots: lines whose average, but not lower bound, beats "
-                f"the leader. Unselected; each skips the oracle re-check and is re-rolled "
-                f"the requested number of times, up to {LONG_REROLLS} while still short. "
-                "A miss costs only turns, since the board keeps our best.",
+                f"the leader. Unselected. {chase}",
                 style="magenta",
             )
         self.query_one("#pub-help", Static).update(help_text)
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        if event.checkbox.id in ("long", "leading") and not self.busy:
+        if event.checkbox.id in ("long", "leading", "casual") and not self.busy:
             self.reload()
 
     def note(self, message: str) -> None:
@@ -1035,14 +1141,26 @@ class PublishScreen(Screen):
             if line.strip():
                 activity.log("publish", line)
         rendered = self.transcript.render(message)
-        if rendered.plain.strip():
-            self.query_one("#pub-log", RichLog).write(rendered)
+        if not rendered.plain.strip():
+            return
+        log = self.query_one("#pub-log", SelectableRichLog)
+        follow = log.is_vertical_scroll_end
+        one_line = self.transcript.chain is not None and "\n" not in rendered.plain
+        if one_line and self.transcript.extends_chain:
+            written = log.replace_tail(rendered, self._chain_lines, scroll_end=follow, one_line=True)
+        elif one_line:
+            written = log.append_one_line(rendered, scroll_end=follow)
+        else:
+            before = len(log.lines)
+            log.write(rendered, scroll_end=follow)
+            written = len(log.lines) - before
+        self._chain_lines = written if one_line else 0
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
             self.action_back()
         elif event.button.id == "refresh":
-            self.reload()
+            self.reload(full=True)
         elif event.button.id == "import-go":
             self.import_source()
         elif event.button.id == "publish":
@@ -1062,7 +1180,7 @@ class PublishScreen(Screen):
             import_from(DB(), source, log=self.note)
         except RuntimeError as error:
             self.note(str(error))
-        self.reload()
+        self.reload(full=True)
 
     def action_back(self) -> None:
         if self.busy:
@@ -1105,36 +1223,38 @@ class PublishScreen(Screen):
                 )
                 vault.set_status(s.slug, e["mode"], e["phrase"], "queued", board, target=s.target)
                 entries.append(e | {"status": "queued", "board": board, "target": s.target})
-        from ..crosspost import queue as queue_golf
+        from ..crosspost import queue as queue_cross
 
-        for index, pick in enumerate(self.golf_picks):
-            if f"golf:{index}" not in chosen:
-                continue
-            queue_golf(DB(), [pick])
-            entry = pick.entry
-            entries.append(
-                {
-                    "slug": pick.slug,
-                    "mode": GOLF,
-                    "phrase": entry["phrase"],
-                    "p_mean": entry["p_mean"],
-                    "p_lcb": entry["p_lcb"],
-                    "spread": entry.get("spread", 0.0),
-                    "n": entry.get("n", 0),
-                    "units": pick.units,
-                    "board": pick.mode.board,
-                    "target": pick.target,
-                    "status": "queued",
-                    "estimated_from": entry.get("estimated_from") or "",
-                }
-            )
+        for prefix, picks in (("golf", self.golf_picks), ("casual", self.casual_picks)):
+            for index, pick in enumerate(picks):
+                if f"{prefix}:{index}" not in chosen:
+                    continue
+                queue_cross(DB(), [pick])
+                entry = pick.entry
+                entries.append(
+                    {
+                        "slug": pick.slug,
+                        "mode": pick.mode.play_mode,
+                        "phrase": entry["phrase"],
+                        "p_mean": entry["p_mean"],
+                        "p_lcb": entry["p_lcb"],
+                        "spread": entry.get("spread", 0.0),
+                        "n": entry.get("n", 0),
+                        "units": pick.units,
+                        "board": pick.mode.board,
+                        "target": pick.target,
+                        "status": "queued",
+                        "estimated_from": entry.get("estimated_from") or "",
+                    }
+                )
         if not entries:
             self.notify("nothing selected", severity="warning")
             return
+        fallback = default_rerolls()
         try:
-            rerolls = int(self.query_one("#rerolls", Input).value or 3)
+            rerolls = int(self.query_one("#rerolls", Input).value or fallback)
         except ValueError:
-            rerolls = 3
+            rerolls = fallback
         dry = self.query_one("#dry", Checkbox).value
         self.busy = True
         self.stop_requested = False
@@ -1163,7 +1283,7 @@ class PublishScreen(Screen):
                 entries=entries,
                 log=write,
                 on_result=on_result,
-                long_rerolls=LONG_REROLLS,
+                long_rerolls=0 if default_rerolls() == 0 else LONG_REROLLS,
                 halt=lambda: self.stop_requested,
             )
         except Exception as error:

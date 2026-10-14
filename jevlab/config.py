@@ -23,22 +23,23 @@ def load_dotenv(path: Path = ROOT / ".env") -> None:
 load_dotenv()
 
 SITE_BASE = os.environ.get("JEV_SITE", "https://i-wanna-date-jev.begin-363.workers.dev")
-EDITIONS = ("jev", "kev", "laya", "clef", "luna", "decider")
-# Trick Kev, Trick Laya, Trick Clef, Trick Luna, and Trick Decider are mirrors of the game, each with its own
-# question revisions, boards, and model. Each edition keeps its own database, vault, and snapshots. A mirror
-# reads Jev's (never writes them) to borrow estimates.
-EDITION = os.environ.get("JEV_EDITION", "jev").strip().casefold() or "jev"
-if EDITION not in EDITIONS:
-    raise SystemExit(f"JEV_EDITION must be one of {', '.join(EDITIONS)}, not {EDITION!r}")
-MIRROR = EDITION != "jev"
-
+EDITIONS = ("jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "decider", "microsoft")
+# Golf submissions of one mid-range phrase on 2026-10-13: two immediate repeats, then two more
+# reads 20s apart. These editions returned one probability every time, so a re-roll cannot help.
+# Jev moved on back-to-back reads (0.32–0.34). Kev moved on back-to-back reads (0.8966–0.898).
+# Microsoft repeated a cached value when asked immediately, then moved after a 20s gap (0.32–0.38).
+DETERMINISTIC_EDITIONS = frozenset({"laya", "clef", "clef-flash", "clef-omni", "luna", "decider"})
+# Re-rolls to ask for on an edition whose score can move. Deterministic editions ask for none.
+NOISY_REROLLS = 5
+# Microsoft returns the previous score when the same phrase is submitted again immediately.
+# A 20s gap produced a new value. Jev and Kev move on the next call, so they do not wait.
+MICROSOFT_REROLL_GAP = 20.0
+# Trick Kev, Trick Laya, Trick Clef, Trick Clef-flash, Trick Clef-omni, Trick Luna, Trick Decider, and Trick
+# Microsoft are mirrors of the game, each with its own question revisions, boards, and model. Each edition
+# keeps its own database, vault, and snapshots. A mirror reads Jev's (never writes them) to borrow estimates.
 JEV_DATA = Path(os.environ.get("JEVLAB_DATA", ROOT / "data"))
 JEV_DB_PATH = JEV_DATA / "jev.db"
 JEV_VAULT = JEV_DATA / "vault"
-DATA = JEV_DATA / EDITION if MIRROR else JEV_DATA
-DB_PATH = DATA / "jev.db"
-SNAPSHOTS = DATA / "snapshots"
-VAULT = DATA / "vault"
 
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_BASE = os.environ.get("OPENROUTER_BASE", "https://openrouter.ai/api/v1")
@@ -49,17 +50,23 @@ TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1"
 # and OpenRouter maps that bare id onto `typesafe/gpt-6-luna`, which does not exist. The route that
 # answers is `openai/gpt-6-luna-decisions`. Decider's route is `perplexity/pplx-decider-v1-27b`. Kev, Luna, and
 # Decider are OpenRouter /systemone models.
-# Laya and Clef are scored in-process. Laya's id is its Hugging Face repo. The site asks for `clef` (27B);
-# local estimates use `clef-flash`, the smallest published checkpoint.
+# Laya, Clef, and Clef-flash are scored in-process. Laya's id is its Hugging Face repo. The Clef site asks
+# for the 27B model; local estimates use clef-flash, the smallest published checkpoint. Clef-flash on the
+# site is that same checkpoint, so it shares the local install. Clef-omni's weights are public (about 70 GB,
+# ~64 GB of GPU in bf16) and do not fit this machine, so it goes to OpenRouter. Microsoft has not published
+# weights; OpenRouter serves microsoft/microsoft-decision-1.
 EDITION_MODELS = {
     "jev": "jev-latest",
     "kev": "jaredpalmer/kev-4b",
     "laya": "convaiinnovations/laya",
     "clef": "clef-flash",
+    "clef-flash": "clef-flash",
+    "clef-omni": "cloudflare/clef-omni",
     "luna": "openai/gpt-6-luna-decisions",
     "decider": "perplexity/pplx-decider-v1-27b",
+    "microsoft": "microsoft/microsoft-decision-1",
 }
-JEV_MODEL = os.environ.get("JEV_MODEL", EDITION_MODELS[EDITION])
+JEV_MODEL = ""
 # Hugging Face repo for `jevlab install-laya`. Independent of the current edition's oracle model.
 LAYA_REPO = os.environ.get("JEV_LAYA_REPO", EDITION_MODELS["laya"])
 # The model Jev's own samples were requested with, so a mirror edition can look them up in Jev's database.
@@ -75,18 +82,121 @@ CLEF_CACHE = Path(os.environ.get("JEV_CLEF_CACHE", Path.home() / ".cache" / "jev
 CLEF_DEVICE = os.environ.get("JEV_CLEF_DEVICE", "").strip()
 # auto: bf16 on a ~28GB GPU, 4-bit on a GPU with about 8GB, otherwise the checkpoint split across GPU, RAM, and disk.
 CLEF_QUANT = os.environ.get("JEV_CLEF_QUANT", "auto").strip().lower() or "auto"
-# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev, Luna, and Decider are OpenRouter only.
-# Laya and Clef load a Hugging Face checkpoint locally (`huggingface`), one forward at a time.
-_LOCAL = EDITION in ("laya", "clef")
-_DEFAULT_BACKENDS = "huggingface" if _LOCAL else ("openrouter" if MIRROR else "typesafe,openrouter")
-ORACLE_BACKENDS = [b.strip() for b in os.environ.get("JEV_ORACLE_BACKENDS", _DEFAULT_BACKENDS).split(",") if b.strip()]
-ORACLE_CONCURRENCY = int(os.environ.get("JEV_ORACLE_CONCURRENCY", "1" if _LOCAL else ("4" if MIRROR else "24")))
-ORACLE_MAX_CONCURRENCY = int(os.environ.get("JEV_ORACLE_MAX_CONCURRENCY", "1" if _LOCAL else ("8" if MIRROR else "48")))
+# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev, Clef-omni, Luna, Decider, and
+# Microsoft are OpenRouter only. Laya, Clef, and Clef-flash load a Hugging Face checkpoint locally
+# (`huggingface`), one forward at a time.
 # Mirror searches first score this many lines Jev already rates well (search/triage.py) before generating any.
-TRIAGE_K = int(os.environ.get("JEV_TRIAGE_K", "40" if MIRROR else "0"))
 # Under load Jev's p99 is ~7s and p99.9 ~10s (2026-09-28), with a tail past 20s; slower calls give up and retry.
 # Kev's host is slower. A local forward has no HTTP timeout; the value only applies if a remote backend is added.
-ORACLE_TIMEOUT = float(os.environ.get("JEV_ORACLE_TIMEOUT", "60" if MIRROR else "20"))
+EDITION = "jev"
+MIRROR = False
+DATA = JEV_DATA
+DB_PATH = DATA / "jev.db"
+SNAPSHOTS = DATA / "snapshots"
+VAULT = DATA / "vault"
+ORACLE_BACKENDS = ["typesafe", "openrouter"]
+ORACLE_CONCURRENCY = 24
+ORACLE_MAX_CONCURRENCY = 48
+TRIAGE_K = 0
+ORACLE_TIMEOUT = 20.0
+# How many foreign words Defense posts on one board. Drawn from other boards' word lists, then our own
+# winning words and words already on that board are removed.
+DEFENSE_TOP = int(os.environ.get("JEV_DEFENSE_TOP", "20"))
+
+
+def activate(edition: str | None = None) -> str:
+    """Point paths, the oracle model, and oracle limits at one edition. Safe to call again from the TUI."""
+    global EDITION, MIRROR, DATA, DB_PATH, SNAPSHOTS, VAULT, JEV_MODEL
+    global ORACLE_BACKENDS, ORACLE_CONCURRENCY, ORACLE_MAX_CONCURRENCY, TRIAGE_K, ORACLE_TIMEOUT
+    name = edition if edition is not None else os.environ.get("JEV_EDITION", "jev")
+    name = (name or "jev").strip().casefold() or "jev"
+    if name not in EDITIONS:
+        raise SystemExit(f"JEV_EDITION must be one of {', '.join(EDITIONS)}, not {name!r}")
+    EDITION = name
+    MIRROR = EDITION != "jev"
+    DATA = JEV_DATA / EDITION if MIRROR else JEV_DATA
+    DB_PATH = DATA / "jev.db"
+    SNAPSHOTS = DATA / "snapshots"
+    VAULT = DATA / "vault"
+    DATA.mkdir(parents=True, exist_ok=True)
+    local = EDITION in ("laya", "clef", "clef-flash")
+    JEV_MODEL = os.environ.get("JEV_MODEL", EDITION_MODELS[EDITION])
+    default_backends = "huggingface" if local else ("openrouter" if MIRROR else "typesafe,openrouter")
+    ORACLE_BACKENDS = [
+        b.strip() for b in os.environ.get("JEV_ORACLE_BACKENDS", default_backends).split(",") if b.strip()
+    ]
+    ORACLE_CONCURRENCY = int(os.environ.get("JEV_ORACLE_CONCURRENCY", "1" if local else ("4" if MIRROR else "24")))
+    ORACLE_MAX_CONCURRENCY = int(
+        os.environ.get("JEV_ORACLE_MAX_CONCURRENCY", "1" if local else ("8" if MIRROR else "48"))
+    )
+    TRIAGE_K = int(os.environ.get("JEV_TRIAGE_K", "40" if MIRROR else "0"))
+    ORACLE_TIMEOUT = float(os.environ.get("JEV_ORACLE_TIMEOUT", "60" if MIRROR else "20"))
+    _push_edition()
+    return EDITION
+
+
+def _push_edition() -> None:
+    """Modules that copied these names at import see the edition that is current now."""
+    import sys
+
+    bindings = {
+        "jevlab.vault": {"VAULT": VAULT},
+        "jevlab.activity": {"DATA": DATA, "EDITION": EDITION},
+        "jevlab.netlog": {"DATA": DATA},
+        "jevlab.publish": {"DATA": DATA},
+        "jevlab.site.snapshot": {"SNAPSHOTS": SNAPSHOTS},
+        "jevlab.site.client": {"EDITION": EDITION},
+        "jevlab.oracle": {
+            "JEV_MODEL": JEV_MODEL,
+            "ORACLE_BACKENDS": ORACLE_BACKENDS,
+            "ORACLE_CONCURRENCY": ORACLE_CONCURRENCY,
+            "ORACLE_MAX_CONCURRENCY": ORACLE_MAX_CONCURRENCY,
+            "ORACLE_TIMEOUT": ORACLE_TIMEOUT,
+        },
+        "jevlab.search.engine": {"TRIAGE_K": TRIAGE_K},
+        "jevlab.search.global_model": {"DATA": DATA},
+        "jevlab.transfer": {"EDITION": EDITION},
+        "jevlab.live": {"JEV_MODEL": JEV_MODEL},
+        "jevlab.clef_local": {"JEV_MODEL": JEV_MODEL},
+        "jevlab.tui.app": {"EDITION": EDITION},
+        "jevlab.tui.pickers": {"EDITION": EDITION},
+        "jevlab.search.triage": {"EDITION": EDITION},
+    }
+    for module_name, values in bindings.items():
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        for key, value in values.items():
+            if hasattr(module, key):
+                setattr(module, key, value)
+    activity = sys.modules.get("jevlab.activity")
+    if activity is not None and hasattr(activity, "reopen"):
+        activity.reopen()
+    netlog = sys.modules.get("jevlab.netlog")
+    if netlog is not None and hasattr(netlog, "PATH"):
+        netlog.PATH = DATA / "net_errors.log"
+    publish = sys.modules.get("jevlab.publish")
+    if publish is not None and hasattr(publish, "LOCK_PATH"):
+        publish.LOCK_PATH = DATA / "publish.lock"
+    model = sys.modules.get("jevlab.search.global_model")
+    if model is not None and hasattr(model, "MODEL_PATH"):
+        model.MODEL_PATH = DATA / "models" / "global.pkl"
+
+
+activate()
+
+
+def default_rerolls(edition: str | None = None) -> int:
+    """Re-rolls to ask for when the caller did not choose. Zero where a repeat submission does not move."""
+    name = EDITION if edition is None else edition
+    return 0 if name in DETERMINISTIC_EDITIONS else NOISY_REROLLS
+
+
+def reroll_gap(edition: str | None = None) -> float:
+    """Seconds to wait before a re-roll. Only Microsoft, whose immediate repeat is a cached score."""
+    name = EDITION if edition is None else edition
+    return MICROSOFT_REROLL_GAP if name == "microsoft" else 0.0
+
 
 @dataclass(frozen=True)
 class GenModel:
@@ -105,26 +215,28 @@ class GenModel:
 # gemini-3.8-flash 1.25, glm-5.3-flash 3.25, deepseek-v4-flash 3.75, gemini-2.5-flash-lite 4.0. Gemini costs ~30x
 # DeepSeek per batch but a question uses only 5-20 batches (~1-2 cents). qwen3.5-flash, mistral-nemo and
 # command-r7b ranked 6.5-6.75 and moved to mid; command-r7b stays for variety (it hit 0.97 where most missed).
+# A question probes the unlocked models on five tactics and then stays with the winner (search/probe.py).
+# JEV_GEN_MODELS replaces this table; list that pool cheapest first.
 GEN_MODEL_TABLE = [
-    GenModel("google/gemini-3.8-flash", 0, "minimal"),               # 0.75/3.75
-    GenModel("z-ai/glm-5.3-flash", 0, "minimal"),                    # 0.04/0.50
-    GenModel("deepseek/deepseek-v4-flash", 0, "none"),               # 0.05/0.09
-    GenModel("google/gemini-2.5-flash-lite", 0, "none"),             # 0.10/0.40
-    GenModel("deepseek/deepseek-v4.1-flash", 1, "none"),             # 0.30/1.20
-    GenModel("cohere/command-r7b-12-2024", 1, "none"),               # 0.04/0.15
-    GenModel("qwen/qwen3.5-flash-02-23", 1, "none"),                 # 0.07/0.26
-    GenModel("mistralai/mistral-nemo", 1, "none"),                   # 0.02/0.03
-    GenModel("qwen/qwen3.6-flash", 1, "none"),                       # 0.19/1.13
-    GenModel("minimax/minimax-m3", 1, "none"),                       # 0.30/1.20
-    GenModel("google/gemini-3.1-flash-lite", 1, "minimal"),          # 0.25/1.50
-    GenModel("openai/gpt-5.6-luna", 1, "minimal"),                   # 0.20/1.20
-    GenModel("cohere/command-r-08-2024", 1, "none"),                 # 0.15/0.60, ~35s per batch
-    GenModel("mistralai/mistral-small-3.2-24b-instruct", 1, "none"), # 0.09/0.25
-    GenModel("qwen/qwen3.5-plus-20260420", 2, "none"),               # 0.30/1.80
-    GenModel("moonshotai/kimi-k2.6", 2, "none"),                     # 0.95/4.00
-    GenModel("x-ai/grok-4.3", 2, "none"),                            # 1.25/2.50
-    GenModel("cohere/command-a-plus", 2, "low", 14000),              # 0.30/1.50, thinks 3-5k tokens first
-    GenModel("cohere/command-a", 2, "none"),                         # 2.50/10.00
+    GenModel("google/gemini-3.8-flash", 0, "minimal"),  # 0.75/3.75
+    GenModel("z-ai/glm-5.3-flash", 0, "minimal"),  # 0.04/0.50
+    GenModel("deepseek/deepseek-v4-flash", 0, "none"),  # 0.05/0.09
+    GenModel("google/gemini-2.5-flash-lite", 0, "none"),  # 0.10/0.40
+    GenModel("deepseek/deepseek-v4.1-flash", 1, "none"),  # 0.30/1.20
+    GenModel("cohere/command-r7b-12-2024", 1, "none"),  # 0.04/0.15
+    GenModel("qwen/qwen3.5-flash-02-23", 1, "none"),  # 0.07/0.26
+    GenModel("mistralai/mistral-nemo", 1, "none"),  # 0.02/0.03
+    GenModel("qwen/qwen3.6-flash", 1, "none"),  # 0.19/1.13
+    GenModel("minimax/minimax-m3", 1, "none"),  # 0.30/1.20
+    GenModel("google/gemini-3.1-flash-lite", 1, "minimal"),  # 0.25/1.50
+    GenModel("openai/gpt-5.6-luna", 1, "minimal"),  # 0.20/1.20
+    GenModel("cohere/command-r-08-2024", 1, "none"),  # 0.15/0.60, ~35s per batch
+    GenModel("mistralai/mistral-small-3.2-24b-instruct", 1, "none"),  # 0.09/0.25
+    GenModel("qwen/qwen3.5-plus-20260420", 2, "none"),  # 0.30/1.80
+    GenModel("moonshotai/kimi-k2.6", 2, "none"),  # 0.95/4.00
+    GenModel("x-ai/grok-4.3", 2, "none"),  # 1.25/2.50
+    GenModel("cohere/command-a-plus", 2, "low", 14000),  # 0.30/1.50, thinks 3-5k tokens first
+    GenModel("cohere/command-a", 2, "none"),  # 2.50/10.00
 ]
 TIER_NAMES = {0: "core", 1: "mid", 2: "premium"}
 # Ladder level at which each tier starts: L0 normal, L2 sweep, L4 reframe.
@@ -140,8 +252,9 @@ def _gen_table() -> list[GenModel]:
     for item in raw.split(","):
         parts = [p.strip() for p in item.split(":") if p.strip()]
         if parts:
-            out.append(GenModel(parts[0], int(parts[1]) if len(parts) > 1 else 0,
-                                parts[2] if len(parts) > 2 else "none"))
+            out.append(
+                GenModel(parts[0], int(parts[1]) if len(parts) > 1 else 0, parts[2] if len(parts) > 2 else "none")
+            )
     return out
 
 
@@ -171,8 +284,9 @@ LONG_TARGET = int(os.environ.get("JEV_LONG_TARGET", "0"))
 # least this long. The run then races edits on dithered means and grows toward the leader's length.
 PLATEAU_LEADER_WORDS = int(os.environ.get("JEV_PLATEAU_LEADER_WORDS", "40"))
 # Models kept out of the long-chain round robin; each question may call them JEV_GEMINI_CALLS times, on a stall.
-EXPENSIVE_MODELS = tuple(m.strip() for m in os.environ.get("JEV_EXPENSIVE_MODELS", "google/gemini-3.8-flash").split(",")
-                         if m.strip())
+EXPENSIVE_MODELS = tuple(
+    m.strip() for m in os.environ.get("JEV_EXPENSIVE_MODELS", "google/gemini-3.8-flash").split(",") if m.strip()
+)
 GEMINI_CALLS = int(os.environ.get("JEV_GEMINI_CALLS", "2"))
 LONG_PLAN_CALLS = int(os.environ.get("JEV_LONG_PLAN_CALLS", "2"))
 LLM_TIMEOUT = float(os.environ.get("JEV_LLM_TIMEOUT", "60"))
@@ -182,5 +296,11 @@ PROXY_MODEL = os.environ.get("JEV_PROXY_MODEL", "qwen/qwen3-235b-a22b-2507")
 # Predictor embeddings: "local" (fastembed bge-small) or "openrouter:<model id>". Pick with `jevlab bench-embed`:
 # bge-m3 ranked phrases at rho 0.815 vs 0.77 for local, and its vectors are cached in SQLite.
 EMBED_BACKEND = os.environ.get("JEV_EMBED_MODEL", "openrouter:baai/bge-m3")
+
+
+def embeddings_path() -> Path:
+    """Predictor vectors live beside the hot database so a sample write does not share a 20 GB file."""
+    return DATA / "embeddings.db"
+
 
 DATA.mkdir(parents=True, exist_ok=True)

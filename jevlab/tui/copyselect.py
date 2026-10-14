@@ -9,10 +9,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from rich.cells import get_character_cell_size
+from rich.cells import cell_len, get_character_cell_size
+from rich.console import RenderableType
 from rich.segment import Segment
 from rich.style import Style as RichStyle
+from rich.text import Text
 from textual.app import App
+from textual.geometry import Size
 from textual.selection import Selection
 from textual.strip import Strip
 from textual.widget import Widget
@@ -88,6 +91,39 @@ def _paint_span(strip: Strip, start: int, end: int, style: RichStyle) -> Strip:
     return Strip(segments, width)
 
 
+def fit_tail(text: Text, width: int) -> Text:
+    """Keep `text` on one line. When it is wider than `width`, show its end."""
+    plain = text.plain
+    if width < 1:
+        return Text("")
+    if cell_len(plain) <= width:
+        return text.copy()
+    mark = "…"
+    budget = width - cell_len(mark)
+    if budget < 1:
+        return Text(mark)
+    start = _suffix_start(plain, budget)
+    if start > 0:
+        snapped = plain.find(" ", start)
+        if 0 <= snapped < len(plain) - 1:
+            rest = snapped + 1
+            if cell_len(plain[rest:]) <= budget and cell_len(plain[rest:]) >= min(8, budget):
+                start = rest
+    fitted = Text(mark, style="dim")
+    fitted.append_text(text[start:])
+    return fitted
+
+
+def _suffix_start(plain: str, budget: int) -> int:
+    used = 0
+    for index in range(len(plain) - 1, -1, -1):
+        size = cell_len(plain[index])
+        if used + size > budget:
+            return index + 1
+        used += size
+    return 0
+
+
 def paint_selection(widget: Widget, strip: Strip, y: int, x_origin: int) -> Strip:
     """Highlight ``strip`` where ``y`` is selected. ``x_origin`` is its first character."""
     selection = widget.text_selection
@@ -115,6 +151,46 @@ class SelectableRichLog(RichLog):
         else:
             origin = 0
         return paint_selection(self, strip.apply_offsets(origin, content_y), content_y, origin)
+
+    def replace_tail(
+        self, content: RenderableType, line_count: int, *, scroll_end: bool, one_line: bool = False
+    ) -> int:
+        """Replace the last `line_count` visual lines with `content`. Returns how many lines it now occupies."""
+        line_count = min(max(line_count, 0), len(self.lines))
+        if line_count:
+            del self.lines[-line_count:]
+            self._line_cache.clear()
+            self.virtual_size = Size(self._widest_line_width, len(self.lines))
+        if one_line and isinstance(content, Text):
+            return self.append_one_line(content, scroll_end=scroll_end)
+        before = len(self.lines)
+        self.write(content, scroll_end=scroll_end)
+        self.refresh()
+        return len(self.lines) - before
+
+    def append_one_line(self, content: Text, *, scroll_end: bool) -> int:
+        """Append `content` as exactly one line, keeping its end when it is wider than the log."""
+        width = self.scrollable_content_region.width
+        if width < 4:
+            width = max(self.size.width - 2, 8)
+        fitted = fit_tail(content, width)
+        options = self.app.console.options.update(overflow="ignore", no_wrap=True).update_width(width)
+        segments = self.app.console.render(fitted, options)
+        lines = list(Segment.split_lines(segments))
+        strips = Strip.from_lines(lines[:1]) if lines else []
+        strip = strips[0] if strips else Strip.blank(width)
+        strip.adjust_cell_length(width)
+        self.lines.append(strip)
+        if self.max_lines is not None and len(self.lines) > self.max_lines:
+            self._start_line += len(self.lines) - self.max_lines
+            self.lines = self.lines[-self.max_lines :]
+        self._widest_line_width = max(self._widest_line_width, strip.cell_length)
+        self._line_cache.clear()
+        self.virtual_size = Size(self._widest_line_width, len(self.lines))
+        self.refresh()
+        if scroll_end:
+            self.scroll_end(animate=False, immediate=False, x_axis=False)
+        return 1
 
     def get_selection(self, selection: Selection) -> tuple[str, str] | None:
         def line_at(index: int) -> str:

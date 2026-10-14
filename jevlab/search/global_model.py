@@ -37,7 +37,7 @@ def _spearman(a, b) -> float:
 
 
 def scored_phrases(db: DB) -> int:
-    return int(db.one("SELECT COUNT(DISTINCT state) AS n FROM oracle_samples")["n"])
+    return db.phrase_count()
 
 
 class GlobalPredictor:
@@ -146,8 +146,10 @@ def train_global(db: DB, limit: int = 0, per_question: int = 1500, log=print, em
         pred = Ridge(alpha=10.0).fit(X[train], y[train]).predict(X[~train])
         per_q += [_spearman(pred[m], y[~train][m]) for m in (slug_of[~train] == s for s in held) if m.sum() >= 20]
     model.rho = float(np.mean(per_q)) if per_q else 0.0
-    log(f"held-out within-question rho {model.rho:.3f} (median {np.median(per_q):.2f}) over {len(per_q)} "
-        f"questions, 5-fold by question; the engine blends it in when rho >= 0.2")
+    log(
+        f"held-out within-question rho {model.rho:.3f} (median {np.median(per_q):.2f}) over {len(per_q)} "
+        f"questions, 5-fold by question; the engine blends it in when rho >= 0.2"
+    )
     model.model = Ridge(alpha=10.0).fit(X, y)
     model.trained_on = len(rows)
     model.phrase_count = count

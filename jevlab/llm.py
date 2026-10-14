@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import re
 
@@ -19,6 +20,8 @@ class LLMError(RuntimeError):
 
 
 TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
+# Set to a list inside a task; complete() appends that reply's dollar cost. Tasks do not share the list.
+call_costs: contextvars.ContextVar[list[float] | None] = contextvars.ContextVar("jevlab_call_costs", default=None)
 
 
 def extract_json(text: str):
@@ -64,7 +67,7 @@ class LLM:
         return message
 
     async def complete(self, model: str, system: str, user: str, temperature: float = 1.0,
-                       max_tokens: int = 4000, json_mode: bool = True) -> str:
+                       max_tokens: int = 4000, json_mode: bool = True, reasoning: str | None = None) -> str:
         body = {
             "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -74,7 +77,7 @@ class LLM:
         }
         if model != PLAN_MODEL:
             spec = gen_model(model)
-            effort = spec.reasoning if spec else GEN_REASONING
+            effort = reasoning if reasoning is not None else (spec.reasoning if spec else GEN_REASONING)
             if spec and spec.max_tokens:
                 body["max_tokens"] = max(max_tokens, spec.max_tokens)
             if effort:
@@ -110,19 +113,25 @@ class LLM:
         except ValueError as error:
             raise LLMError(f"{model} non-JSON body: {response.text[:200]!r}", transient=True) from error
         self.calls += 1
-        self.cost += float((data.get("usage") or {}).get("cost") or 0)
+        spent = float((data.get("usage") or {}).get("cost") or 0)
+        self.cost += spent
+        bucket = call_costs.get()
+        if bucket is not None:
+            bucket.append(spent)
         try:
             return data["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as error:
             raise LLMError(f"{model} bad reply: {str(data)[:300]}", transient=True) from error
 
     async def json(self, model: str, system: str, user: str, temperature: float = 1.0, max_tokens: int = 4000,
-                   attempts: int = 3):
+                   attempts: int = 3, reasoning: str | None = None):
         """complete() + extract_json(), retrying unparseable or empty replies and transient HTTP errors
         (timeouts, 429, 5xx). Other 4xx errors are real request problems and fail at once."""
         for attempt in range(attempts):
             try:
-                return extract_json(await self.complete(model, system, user, temperature, max_tokens))
+                return extract_json(
+                    await self.complete(model, system, user, temperature, max_tokens, reasoning=reasoning)
+                )
             except LLMError as error:
                 if not error.transient or attempt == attempts - 1:
                     raise

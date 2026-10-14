@@ -18,12 +18,50 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, log) -> list[dict]:
+    """The menu lists questions without `jevRequest`. Opening one still returns that body."""
+    missing = [q for q in questions if not q.get("jevRequest") and q.get("revisionId")]
+    if not missing:
+        return questions
+    found: dict[str, dict] = {}
+
+    def fetch(question: dict):
+        revision = question["revisionId"]
+        try:
+            full = client.question(revision)
+        except SiteError as error:
+            log(f"  {question['slug']}: jevRequest fetch failed ({error})")
+            return revision, None
+        except Exception as error:
+            log(f"  {question['slug']}: jevRequest fetch failed ({error!r})")
+            return revision, None
+        return revision, full if isinstance(full, dict) else None
+
+    with ThreadPoolExecutor(workers) as pool:
+        for revision, full in pool.map(fetch, missing):
+            if full and full.get("jevRequest"):
+                found[revision] = full
+    filled = []
+    for question in questions:
+        full = found.get(question.get("revisionId") or "")
+        if not full:
+            filled.append(question)
+            continue
+        merged = dict(question)
+        for key in ("jevRequest", "instructions", "modelVersion", "askedBy"):
+            if full.get(key) is not None:
+                merged[key] = full[key]
+        filled.append(merged)
+    log(f"jevRequest filled for {len(found)}/{len(missing)} questions the menu omitted")
+    return filled
+
+
 def take_snapshot(
     db: DB,
     client: SiteClient | None = None,
     slugs: list[str] | None = None,
     modes: tuple[str, ...] = MODES,
-    workers: int = 6,
+    workers: int = 16,
     log=print,
 ) -> int:
     client = client or SiteClient()
@@ -49,6 +87,7 @@ def take_snapshot(
     snapshot_id = cursor.lastrowid
 
     questions = [q for q in menu.get("questions") or [] if not slugs or q["slug"] in slugs]
+    questions = fill_jev_requests(client, questions, workers, log)
     previous_goals = {row["slug"]: row["goal"] or "yes" for row in db.all("SELECT slug, goal FROM questions")}
     db.executemany(
         """INSERT OR REPLACE INTO questions
@@ -70,6 +109,7 @@ def take_snapshot(
     realign_vault_goals(db, previous_goals, {q["slug"] for q in questions}, log)
 
     jobs = [(q, mode) for q in questions for mode in modes]
+    log(f"fetching {len(jobs)} questions, {workers} at a time")
 
     def fetch(job):
         question, mode = job
@@ -80,13 +120,15 @@ def take_snapshot(
             ("words", lambda: client.words(rev, mode)),
             ("attempt", lambda: client.attempt(rev, mode) if me else None),
         ):
-            for tries in range(3):
+            for tries in range(4):
                 try:
                     out[key] = fn()
                     break
                 except SiteError as error:
                     out[key + "_error"] = str(error)
-                    time.sleep(0.2)
+                    # A read burst can trip the site's limiter. Wait that out instead of dropping the board.
+                    pause = 0.8 * (tries + 1) if error.rate_limited or error.server_down else 0.2
+                    time.sleep(pause)
                 except Exception as error:  # network hiccups
                     out[key + "_error"] = repr(error)
                     time.sleep(0.2)

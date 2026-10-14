@@ -4,6 +4,7 @@ The route bake-off scored the same tactics with every model. The winning model c
 with the question, and five tactics (rename, scene, syllogism, direct, wild) were enough
 to see which one. A fresh board stays with that model; a board whose tactics are already
 covered asks again after a shorter flat stretch, because one model stops covering them.
+A stall leaves that model when another one scored, so a flat stretch cannot lock it again.
 """
 
 from __future__ import annotations
@@ -36,14 +37,21 @@ def mean_top(values: list[float], k: int = 3) -> float:
     return sum(top) / len(top)
 
 
-def choose(scores: dict[str, float], pool: list[str]) -> str | None:
-    """Highest mean. Within ``WORTH_IT`` of it, the earlier pool entry wins. Nobody scoring loses."""
+def choose(scores: dict[str, float], pool: list[str], *, avoid: str | None = None) -> str | None:
+    """Highest mean. Within ``WORTH_IT`` of it, the earlier pool entry wins. Nobody scoring loses.
+
+    ``avoid`` is the writer a stall is leaving. It stays eligible when it is the only model, or
+    when no other model scored.
+    """
     if not pool:
         return None
-    best = max((scores.get(model, 0.0) for model in pool), default=0.0)
+    eligible = [model for model in pool if model != avoid]
+    if not eligible:
+        eligible = list(pool)
+    best = max((scores.get(model, 0.0) for model in eligible), default=0.0)
     if best <= 0:
         return None
-    for model in pool:
+    for model in eligible:
         if best - scores.get(model, 0.0) <= WORTH_IT:
             return model
     return None

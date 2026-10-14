@@ -77,7 +77,8 @@ class LLMGenerate(Strategy):
 
     One instance and bandit arm per price tier. Before the first batch, and again when the search
     goes flat, every unlocked model writes the same five tactics. The winner then writes every tactic
-    until the next probe. Within a tier that has not been probed, models still take turns.
+    until the next probe. A stall leaves that winner when another model scored. Within a tier that
+    has not been probed, models still take turns.
     """
 
     needs_llm = True
@@ -347,13 +348,19 @@ class LLMGenerate(Strategy):
                 if owner in by_model:
                     by_model[owner].append(cand.p)
             scores = {model: probe.mean_top(values) for model, values in by_model.items()}
-            winner = probe.choose(scores, pool) or pool[0]
+            # Cold and a newly unlocked tier may keep the writer. A stall may not, once someone else scored.
+            held = ctx.engine.probe_lock.model
+            avoid = held if held and not ctx.engine.probe_force and not self._writer_cold(ctx) else None
+            winner = probe.choose(scores, pool, avoid=avoid) or probe.choose(scores, pool) or pool[0]
             ctx.engine.probe_lock = probe.Lock(model=winner, batches=0)
             ctx.engine.probe_force = False
             self.just_probed = True
             self._release(ctx, winner)
             ranked = " ".join(f"{short(model)}={scores[model]:.3f}" for model in pool)
-            ctx.log(f"[{self.name}] probe locks {short(winner)} ({ranked})")
+            if avoid and winner != avoid:
+                ctx.log(f"[{self.name}] probe leaves {short(avoid)} after a stall; locks {short(winner)} ({ranked})")
+            else:
+                ctx.log(f"[{self.name}] probe locks {short(winner)} ({ranked})")
             return winner
 
     async def _batch(self, ctx) -> tuple[str, list[str], list[tuple[str, str]], bool]:

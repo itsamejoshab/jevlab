@@ -56,6 +56,16 @@ def test_lexicon_dedupes_and_prefers_words_that_travel():
     assert ranked.index("solo") > 0
 
 
+def test_pick_decoys_skips_stop_words():
+    decoys = pick_decoys(
+        ["the", "that", "with", "not", "The", "and", "is", "a", "gamma", "exceptions"],
+        present=set(),
+        protected=set(),
+        top_n=5,
+    )
+    assert decoys == ["gamma", "exceptions"]
+
+
 def test_pick_decoys_skips_our_words_words_already_there_and_answer_fragments():
     decoys = pick_decoys(
         ["alpha", "beta", "gamma", "Gamma", "delta", "not a word", "epsilon"],

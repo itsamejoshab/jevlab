@@ -2,8 +2,8 @@
 
 The site's words list is public, per play mode, and shared by Highest and Shortest.
 Rivals mine the top of it. Defense posts other boards' strongest words, one at a
-time, so that list stops being a copy of our winning phrase. The board keeps every
-row we post, so a decoy that takes a lead stays there.
+time, skipping function words, so that list stops being a copy of our winning phrase.
+The board keeps every row we post, so a decoy that takes a lead stays there.
 """
 
 from __future__ import annotations
@@ -31,6 +31,25 @@ QUIET = "quiet"
 BARE = "bare"
 BLIND = "blind"
 _ORDER = {READY: 0, QUIET: 1, BARE: 2, BLIND: 3}
+
+# Function words. They rank at the top of almost every board, so planting them does not hide our phrase.
+STOPWORDS = frozenset(
+    """
+    a about above after again against all am an and any are as at
+    be because been before being below between both but by
+    can could did do does doing down during
+    each few for from further
+    had has have having he her here hers herself him himself his how
+    i if in into is it its itself just
+    may me might more most must my myself
+    no nor not of off on once only or other our ours ourselves out over own
+    same shall she should so some such
+    than that the their theirs them themselves then there these they this those through to too
+    under until up very
+    was we were what when where which while who whom why will with without would
+    yes you your yours yourself yourselves
+    """.split()
+)
 
 
 def _now() -> str:
@@ -106,12 +125,12 @@ def pick_decoys(
     top_n: int,
     choices: list | None = None,
 ) -> list[str]:
-    """Up to `top_n` new words. Skips our phrase, words already on the board, and illegal tokens."""
+    """Up to `top_n` new words. Skips our phrase, words already on the board, stop words, and illegal tokens."""
     out: list[str] = []
     seen: set[str] = set()
     for word in ranked:
         key = fold(word)
-        if not key or key in seen or key in present or key in protected:
+        if not key or key in seen or key in present or key in protected or key in STOPWORDS:
             continue
         try:
             clean = check_word(word)

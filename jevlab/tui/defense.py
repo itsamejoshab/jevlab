@@ -238,7 +238,7 @@ def _help(targets: list[DefenseTarget], snap, me: str, top_n: int) -> Text:
     text.append(
         "\nThe words list is per play mode, shared by Highest and Shortest, so one Strict pass covers both. "
         f"Each board gets up to {top_n} words that rank high on other boards. "
-        "Words in our leading phrase, words already listed here, and words already planted are skipped. "
+        "Words in our leading phrase, words already listed here, words already planted, and stop words are skipped. "
         "A board with 40 or more words whose top list is mostly other people is left unchecked. "
         "A decoy that takes a lead stays on the board. Casual has its own list.",
     )

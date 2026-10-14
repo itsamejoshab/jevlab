@@ -491,8 +491,31 @@ class LocalEdit(Strategy):
         await ctx.evaluate([(p, self.name, parent.phrase, parent.archetype) for p in must + optional])
 
 
+def clause_span_deletions(words: list[str]) -> list[str]:
+    """Phrases left after deleting one clause span.
+
+    An interior marker starts a span, so the marker is deleted with the clause that follows it.
+    The prefix before the first marker is its own span. No interior marker means no cut: dropping
+    the whole line is not a candidate. A span whose removal leaves nothing is skipped.
+    """
+    breaks = [i for i, word in enumerate(words) if word.casefold() in CLAUSE_BREAKS and 0 < i < len(words) - 1]
+    if not breaks:
+        return []
+    bounds = [0, *breaks, len(words)]
+    kept = []
+    for start, end in zip(bounds, bounds[1:]):
+        rest = words[:start] + words[end:]
+        if rest:
+            kept.append(" ".join(rest))
+    return kept
+
+
 class Compress(Strategy):
-    """Ablate the best line word by word, then beam-delete while the rounded score holds."""
+    """Ablate the best line word by word, then beam-delete while the rounded score holds.
+
+    Each step also tries deleting one clause span. Those cuts are scored before the one- and
+    two-word pile and never pass through the budget screen.
+    """
 
     name = "compress"
 
@@ -565,21 +588,41 @@ class Compress(Strategy):
         beam = [root]
         for depth in range(self.depth):
             children: list[tuple[str, str, str]] = []
+            spans: list[tuple[str, str, str]] = []
             for node in beam:
                 w = node.words
+                short: list[tuple[str, str, str]] = []
                 for i in range(len(w)):
-                    children.append((" ".join(w[:i] + w[i + 1 :]), node.phrase, node.archetype))
+                    short.append((" ".join(w[:i] + w[i + 1 :]), node.phrase, node.archetype))
                 for i in range(len(w) - 1):
-                    children.append((" ".join(w[:i] + w[i + 2 :]), node.phrase, node.archetype))
+                    short.append((" ".join(w[:i] + w[i + 2 :]), node.phrase, node.archetype))
+                children.extend(short)
+                already = {row[0] for row in short}
+                for phrase in clause_span_deletions(w):
+                    if phrase in already:
+                        continue
+                    spans.append((phrase, node.phrase, node.archetype))
+                    already.add(phrase)
             children = [c for c in children if c[0]]
             left = self.left(ctx)
             if left < 20:
                 ctx.log(f"[compress] turn budget used at depth {depth + 1}; best so far {beam[0].units}w")
                 break
-            if len(children) * 2 > left:
-                origin = {p: (parent, arch) for p, parent, arch in children}
-                children = [(p, *origin[p]) for p in await ctx.screen(list(origin), left // 2) if p in origin]
-            scored = await ctx.evaluate([(p, self.name, parent, arch) for p, parent, arch in children], n=2)
+            # Span cuts are few and must not be subsampled. Score them first; the word pile
+            # gets whatever calls remain. If the spans themselves do not fit, take as many as
+            # n=2 allows and skip the pile.
+            room = left // 2
+            spans_now = spans[:room]
+            scored: list = []
+            if spans_now:
+                scored += await ctx.evaluate([(p, self.name, parent, arch) for p, parent, arch in spans_now], n=2)
+            if len(spans_now) == len(spans):
+                left = self.left(ctx)
+                if len(children) * 2 > left:
+                    origin = {p: (parent, arch) for p, parent, arch in children}
+                    picked = await ctx.screen(list(origin), left // 2)
+                    children = [(p, *origin[p]) for p in picked if p in origin]
+                scored += await ctx.evaluate([(p, self.name, parent, arch) for p, parent, arch in children], n=2)
             keep = [c for c in scored if holds(c)]
             if not keep:
                 if depth == 0:

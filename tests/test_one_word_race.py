@@ -90,8 +90,11 @@ def test_scoring_skips_multi_word_tries_except_a_manual_one(tmp_path):
 
     race.oracle = Oracle()
     longer.oracle = Oracle()
-    items = [("yes", "single_word", "", "wild"), ("yes please", "llm:cheap", "", "direct"),
-             ("typed phrase", "manual", "", "other")]
+    items = [
+        ("yes", "single_word", "", "wild"),
+        ("yes please", "llm:cheap", "", "direct"),
+        ("typed phrase", "manual", "", "other"),
+    ]
     asyncio.run(race.evaluate(items))
     asyncio.run(longer.evaluate(items))
     assert race.oracle.scored == ["yes", "typed phrase"]
@@ -125,6 +128,36 @@ def test_compress_mines_single_words_from_a_longer_line(tmp_path):
     asyncio.run(longer.strategies["compress"].compress(longer.ctx, longer.archive.items["alpha beta gamma"]))
     assert seen["race"] == ["alpha", "beta", "gamma"]
     assert any(len(phrase.split()) > 1 for phrase in seen["longer"])
+
+
+def test_compress_scores_a_clause_span_deletion(tmp_path):
+    """A clause marker starts a span, and deleting that span is scored even though it is longer than two words."""
+    eng = engine(tmp_path, "clause", (0.7, 2))
+    seen = []
+
+    async def evaluate(items, n=1):
+        seen.extend(item[0] for item in items)
+        return []
+
+    eng.evaluate = evaluate
+
+    class Oracle:
+        calls = 0
+
+    eng.oracle = Oracle()
+    phrase = "alpha beta gamma because delta epsilon zeta and eta theta iota"
+    eng.archive.add(phrase, Score(phrase, [0.8, 0.8]), "history")
+    # compress() does not set stop_at; the beam bails when left() < 20.
+    eng.strategies["compress"].stop_at = 10_000
+    asyncio.run(eng.strategies["compress"].compress(eng.ctx, eng.archive.items[phrase]))
+
+    # "because delta epsilon zeta" is an interior clause (marker included), shorter by four words.
+    kept = "alpha beta gamma and eta theta iota"
+    assert kept in seen
+    assert len(phrase.split()) - len(kept.split()) > 2
+    assert "because delta epsilon zeta and eta theta iota" in seen
+    assert "alpha beta gamma because delta epsilon zeta" in seen
+    assert "" not in seen
 
 
 def test_length_filter_keeps_one_word_lines_only_against_a_one_word_leader():

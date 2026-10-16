@@ -1,8 +1,9 @@
-"""Hard Highest yes/no visits: deal the catalog, grow the close frames, then compress.
+"""Hard Highest yes/no visits: deal until a frame is within 0.05 of the leader, then grow, then compress.
 
-A hard board has a leader who is not us, showing at least 0.90. The visit does not climb the
-ladder and does not start a line from nothing. Easy boards, Shortest yes, choice questions,
-score questions, and the long-chain regime stay on the ladder they already use.
+A far pass deals again, including after every frame has eight generator lines. The oracle
+budget ends that loop. A hard board has a leader who is not us, showing at least 0.90. The
+visit does not climb the ladder and does not start a line from nothing. Easy boards, Shortest
+yes, choice questions, score questions, and the long-chain regime stay on the ladder they already use.
 
 The schedule is the seam: a leader, the saved generator counts, the lines already scored,
 and the configured model list decide the phases and which frames they touch.
@@ -88,6 +89,7 @@ class HardSchedule:
         self.growth_frames: list[str] = []
         self.deal_ran = False
         self.growth_rounds = 0
+        self.assigned: set[str] = set()
 
     def _is_hard(self) -> bool:
         if self.shortest or self.long or self.kind != "noul":
@@ -97,21 +99,31 @@ class HardSchedule:
             return False
         return site_round(lead.probability) >= HARD_LINE
 
-    def unfinished(self) -> list[str]:
-        """Frames under the coverage bar, fewest generator lines first, catalog order on ties."""
+    def _ranked(self) -> list[str]:
+        """Every catalog frame, fewest generator lines first, catalog order on ties."""
         ranked = []
         for index, name in enumerate(CATALOG):
             count = int(self.counts.get(name, 0) or 0)
-            if count < COVERAGE:
-                ranked.append((count, index, name))
+            ranked.append((count, index, name))
         ranked.sort()
         return [name for _, _, name in ranked]
 
-    def plan_batches(self) -> list[DealBatch]:
-        """Disjoint batches assigned up front. Empty when the schedule is off or nothing is unfinished."""
+    def unfinished(self) -> list[str]:
+        """Frames under the coverage bar, fewest generator lines first, catalog order on ties."""
+        return [name for name in self._ranked() if int(self.counts.get(name, 0) or 0) < COVERAGE]
+
+    def plan_batches(self, *, past_coverage: bool = False, skip: set[str] | None = None) -> list[DealBatch]:
+        """Disjoint batches assigned up front. Empty when the schedule is off or nothing is unfinished.
+
+        `past_coverage` keeps dealing after every frame has eight lines, thinnest frames first.
+        `skip` holds frames just assigned, so the next pass takes the ones that were not.
+        """
         if not self.hard or not self.models:
             return []
-        queue = self.unfinished()
+        blocked = skip or set()
+        queue = [name for name in self.unfinished() if name not in blocked]
+        if not queue and past_coverage:
+            queue = [name for name in self._ranked() if name not in blocked]
         if not queue:
             return []
         batches = []
@@ -128,15 +140,18 @@ class HardSchedule:
         self.growth_rounds = 0
         self.deal_ran = False
         self.growth_frames = []
+        self.batches = []
         if not self.hard:
             self.phase = "off"
-            self.batches = []
             return
-        self.batches = self.plan_batches()
-        if self.batches:
-            self.phase = "deal"
+        kept = self.kept_frames()
+        if kept:
+            self.growth_frames = kept
+            self.phase = "grow"
             return
-        self.phase = self._after_deal(False)
+        self.batches = self.plan_batches(past_coverage=True)
+        self.assigned = {frame for batch in self.batches for frame in batch.frames}
+        self.phase = "deal" if self.batches else "done"
 
     def take_batch(self) -> DealBatch | None:
         if not self.batches:
@@ -146,7 +161,7 @@ class HardSchedule:
     def finish_deal(self) -> None:
         self.deal_ran = True
         self.batches = []
-        self.phase = self._after_deal(True)
+        self.phase = self._after_deal()
 
     def finish_growth(self) -> None:
         if self.phase == "grow":
@@ -156,21 +171,21 @@ class HardSchedule:
         if self.phase == "grow":
             self.growth_rounds += 1
 
-    def _after_deal(self, deal_ran: bool) -> str:
+    def _after_deal(self) -> str:
+        """Grow frames within 0.05 of the leader. Otherwise deal again, past the coverage bar if need be."""
         kept = self.kept_frames()
         if kept:
             self.growth_frames = kept
+            self.batches = []
             return "grow"
-        # The catalog pass is the visit. Do not grow or compress while frames are still unwritten.
-        if deal_ran and self.unfinished():
-            self.growth_frames = []
-            return "done"
-        if not self.unfinished():
-            closest = self.closest_frame()
-            if closest is not None:
-                self.growth_frames = [closest]
-                return "grow"
         self.growth_frames = []
+        skip = self.assigned
+        self.batches = self.plan_batches(past_coverage=True, skip=skip)
+        if not self.batches:
+            self.batches = self.plan_batches(past_coverage=True)
+        self.assigned = {frame for batch in self.batches for frame in batch.frames}
+        if self.batches:
+            return "deal"
         return "done"
 
     def displayed(self, frame: str) -> float | None:
@@ -191,21 +206,6 @@ class HardSchedule:
             if shown is not None and abs(shown - target) <= KEEP + 1e-9:
                 kept.append(name)
         return kept
-
-    def closest_frame(self) -> str | None:
-        lead = self.leader
-        if lead is None:
-            return None
-        target = site_round(lead.probability)
-        best: tuple[float, int, str] | None = None
-        for index, name in enumerate(CATALOG):
-            shown = self.displayed(name)
-            if shown is None:
-                continue
-            rank = (abs(shown - target), index, name)
-            if best is None or rank < best:
-                best = rank
-        return None if best is None else best[2]
 
     def jobs(self) -> set[str]:
         """Strategies the visit may run in this phase. The deal is not a bandit choice."""

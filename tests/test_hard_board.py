@@ -14,7 +14,7 @@ from jevlab.config import GEN_MODELS
 from jevlab.objective import Leader
 from jevlab.oracle import Score
 from jevlab.rules import RuleError, check_phrase
-from jevlab.search.engine import Engine
+from jevlab.search.engine import BudgetExhausted, Engine
 from jevlab.search.hardboard import CATALOG, HardSchedule, ScoredLine
 from jevlab.search.mechanical import BeamBuild, Grow
 from jevlab.search import memory as lab_memory
@@ -74,6 +74,12 @@ class FakeOracle:
     async def score(self, phrases, n):
         self.calls += len(phrases) * n
         return {phrase: Score(phrase, [0.91]) for phrase in phrases}
+
+
+class FarOracle(FakeOracle):
+    async def score(self, phrases, n):
+        self.calls += len(phrases) * n
+        return {phrase: Score(phrase, [0.40]) for phrase in phrases}
 
 
 def test_catalog_is_the_thirty_one_frames():
@@ -200,6 +206,7 @@ def test_a_mislabeled_batch_uses_its_frames_without_advancing_them(tmp_path, mon
     monkeypatch.setattr("jevlab.search.routes.DEAR_MODELS", frozenset({"dear/model"}))
     eng = engine(tmp_path, "miss")
     eng.oracle = FakeOracle()
+    eng.budget = 4
     eng.schedule = schedule(models=["dear/model"])
     eng.schedule.counts = eng.memory.generator_counts
     eng.schedule.begin()
@@ -207,8 +214,9 @@ def test_a_mislabeled_batch_uses_its_frames_without_advancing_them(tmp_path, mon
     assert assign("dear/model", list(assigned[:3])) is None
     writer = Writer(reply="other")
     eng.llm = writer
-    asyncio.run(eng.run_hard_deal())
-    assert len(writer.prompts) == 4
+    with pytest.raises(BudgetExhausted):
+        asyncio.run(eng.run_hard_deal())
+    assert len(writer.prompts) > 4
     assert all(model == "dear/model" for model, _ in writer.prompts)
     assert eng.memory.generator_counts == {}
     nxt = schedule(counts=dict(eng.memory.generator_counts), models=["dear/model"]).plan_batches()
@@ -225,38 +233,72 @@ def test_displayed_hundredths_keep_a_frame_at_five_hundredths():
     ]
     sched = schedule(lines=lines, leader=(0.90, 20))
     sched.begin()
-    assert sched.phase == "deal"
-    sched.finish_deal()
+    assert sched.phase == "grow"
     assert sched.growth_frames == ["speaker", "direct"]
     assert "scene" not in sched.growth_frames
     assert "extend" in sched.jobs() and "sweep" in sched.jobs() and "surrogate_bo" in sched.jobs()
     assert "compress" not in sched.jobs() and "beam" not in sched.jobs() and "grow" not in sched.jobs()
 
 
-def test_nothing_close_ends_the_visit_while_frames_remain(tmp_path):
-    lines = [ScoredLine("direct", "llm:core", 0.40, 4, "alpha beta gamma delta")]
-    sched = schedule(lines=lines, leader=(0.95, 40))
+def test_nothing_close_deals_again_until_a_frame_is_within_five_hundredths():
+    """A far pass starts another generator pass. Coverage of eight does not stop it. 0.05 does."""
+    far = ScoredLine("direct", "llm:core", 0.40, 4, "alpha beta gamma delta")
+    sched = schedule(lines=[far], leader=(0.95, 40))
     sched.begin()
+    assert sched.phase == "deal"
+    first = [frame for batch in sched.batches for frame in batch.frames]
+    for frame in first:
+        sched.counts[frame] = 1
     sched.finish_deal()
-    assert sched.deal_ran and sched.phase == "done" and sched.growth_frames == []
-    assert sched.jobs() == set()
+    assert sched.deal_ran and sched.phase == "deal" and sched.growth_frames == []
+    second = [frame for batch in sched.batches for frame in batch.frames]
+    assert second and not set(second) & set(first)
 
-    eng = engine(tmp_path, "far")
-    phrase = "alpha beta gamma delta"
-    eng.archive.add(phrase, Score(phrase, [0.40]), "llm:core", archetype="direct")
-    eng.open_hard_schedule()
+    covered = schedule(
+        lines=[
+            ScoredLine("direct", "llm:core", 0.80, 5, "alpha beta gamma delta epsilon"),
+            ScoredLine("scene", "sweep", 0.70, 5, "one two three four five"),
+        ],
+        counts=cover(),
+        leader=(0.95, 40),
+    )
+    covered.begin()
+    assert covered.phase == "deal" and covered.growth_frames == []
+    covered.lines.append(ScoredLine("direct", "llm:core", 0.91, 5, "close alpha beta gamma delta"))
+    covered.finish_deal()
+    assert covered.phase == "grow" and covered.growth_frames == ["direct"]
+
+
+def test_an_empty_generator_pass_does_not_deal_forever(tmp_path):
+    eng = engine(tmp_path, "empty", leader=(0.95, 40))
+    eng.oracle = FakeOracle()
+    eng.schedule = schedule(models=["only"], leader=(0.95, 40))
+    eng.schedule.counts = eng.memory.generator_counts
+    eng.schedule.begin()
     eng.llm = Writer(reply="empty")
-    asyncio.run(eng.run_hard_deal())
+    ran = asyncio.run(eng.run_hard_deal())
+    assert ran == 4
     assert eng.schedule.phase == "done"
-    assert eng.end_reason == "hard board: nothing within 0.05 and frames remain unwritten"
-    assert not eng.allowed("extend")
-    cand = eng.archive.items[phrase]
-    assert not eng.strategies["compress"].worth_cutting(eng.ctx, cand)
+    assert eng.oracle.calls == 0
 
 
-def test_a_covered_board_with_nothing_close_grows_only_the_closest_frame(tmp_path):
+def test_a_far_deal_keeps_going_until_the_budget_runs_out(tmp_path):
+    eng = engine(tmp_path, "loop", leader=(0.95, 40))
+    eng.budget = 6
+    eng.oracle = FarOracle()
+    eng.schedule = schedule(models=["m1", "m2"], leader=(0.95, 40))
+    eng.schedule.counts = eng.memory.generator_counts
+    eng.schedule.begin()
+    eng.llm = Writer()
+    with pytest.raises(BudgetExhausted):
+        asyncio.run(eng.run_hard_deal())
+    assert eng.rounds > 4
+    assert eng.schedule.phase == "deal"
+
+
+def test_growth_edits_only_the_kept_frame(tmp_path):
     lines = [
-        ScoredLine("direct", "llm:core", 0.80, 5, "alpha beta gamma delta epsilon"),
+        ScoredLine("direct", "llm:core", 0.91, 5, "alpha beta gamma delta epsilon"),
         ScoredLine("scene", "sweep", 0.70, 5, "one two three four five"),
     ]
     sched = schedule(lines=lines, counts=cover(), leader=(0.95, 40))

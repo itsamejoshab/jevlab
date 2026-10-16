@@ -94,9 +94,7 @@ def augment_alts(word: str, alts: list[str], banned: set[str] | None = None) -> 
     return alts + extra if extra else alts
 
 
-def sprinkle_wordnet(
-    synonyms: dict[str, list[str]], done: set[str], word: str, banned: set[str] | None = None
-) -> None:
+def sprinkle_wordnet(synonyms: dict[str, list[str]], done: set[str], word: str, banned: set[str] | None = None) -> None:
     """Add WordNet extras once. A later call leaves the list as it is, even when more synonyms exist."""
     if word.casefold() in FUNCTION_WORDS or word in done or word not in synonyms:
         return
@@ -213,11 +211,7 @@ class LabContext:
                 lines = [c for c in lines if c.archetype in frames]
             return lines[:k]
         cap = self.engine.grow_cap
-        pool = [
-            c
-            for c in self.archive.items.values()
-            if c.units <= cap and (frames is None or c.archetype in frames)
-        ]
+        pool = [c for c in self.archive.items.values() if c.units <= cap and (frames is None or c.archetype in frames)]
         return sorted(pool, key=lambda c: -(c.p - noise_sd(c.p) / c.score.n**0.5))[:k]
 
     def writer_model(self) -> str:
@@ -758,8 +752,8 @@ class Engine:
     def winning(self) -> bool:
         if not len(self.archive):
             return False
-        # The board's first line may round to the ceiling on a few lucky rolls; a confirmed win can sit below it.
-        return any(self.objective.wins(c.score, c.units, self.leader) for c in self.archive.top_by_board(50))
+        # Board order can put a lucky high average above a confirmed win.
+        return any(self.objective.wins(c.score, c.units, self.leader) for c in self.archive.items.values())
 
     def unbeatable(self) -> Candidate | None:
         """A one-word line whose every roll rounds to 1.00 tops either board, so no further search can beat it."""
@@ -842,11 +836,7 @@ class Engine:
 
     def should_enter_plateau(self, past_lines: int) -> bool:
         """Plateau is the old long-leader climb. A hard board uses the deal instead."""
-        return (
-            self.plateau_candidate
-            and not self.on_hard_board()
-            and (self.memory.runs > 0 or past_lines >= 500)
-        )
+        return self.plateau_candidate and not self.on_hard_board() and (self.memory.runs > 0 or past_lines >= 500)
 
     def open_hard_schedule(self) -> HardSchedule:
         self.schedule = HardSchedule.from_engine(self)
@@ -872,9 +862,7 @@ class Engine:
             return
         frames = self.kept_archetypes() or set()
         target = site_round(self.leader.probability)
-        behind = any(
-            cand.archetype in frames and site_round(cand.p) < target for cand in self.archive.items.values()
-        )
+        behind = any(cand.archetype in frames and site_round(cand.p) < target for cand in self.archive.items.values())
         if not behind:
             return
         room = self.leader.units + 2
@@ -932,19 +920,31 @@ class Engine:
                 message="[hard] growing " + ", ".join(self.schedule.growth_frames),
             )
         elif self.schedule.phase == "done":
-            self.end_reason = "hard board: nothing within 0.05 and frames remain unwritten"
+            self.end_reason = "hard board: generator pass scored nothing"
             self.emit("log", message=f"moving on: {self.end_reason}")
 
     async def run_hard_deal(self) -> int:
-        """Every batch assigned for this visit. A new best does not cancel the rest or drop the ladder."""
+        """Deal until a frame is within 0.05 of the leader. A pass that scores nothing does not spin."""
         if self.schedule is None or self.schedule.phase != "deal":
             return 0
         ran = 0
+        pass_calls = self.oracle.calls if self.oracle else 0
         while self.schedule.phase == "deal":
-            batch = self.schedule.take_batch()
-            if batch is None:
+            if not self.schedule.batches:
                 self._close_hard_deal()
-                break
+                if self.schedule.phase != "deal":
+                    break
+                scored = (self.oracle.calls if self.oracle else 0) - pass_calls
+                if scored <= 0:
+                    self.schedule.phase = "done"
+                    self.schedule.batches = []
+                    self.end_reason = "hard board: generator pass scored nothing"
+                    self.emit("log", message=f"moving on: {self.end_reason}")
+                    break
+                pass_calls = self.oracle.calls if self.oracle else 0
+                self.emit("log", message="[hard] nothing within 0.05 of the leader; dealing another pass")
+                continue
+            batch = self.schedule.take_batch()
             arm = self._generator_arm(batch.model)
             elites_before = dict(self.archive.elites)
             calls_before = self.oracle.calls if self.oracle else 0
@@ -968,8 +968,6 @@ class Engine:
             new_elites = sum(1 for cell, phrase in self.archive.elites.items() if elites_before.get(cell) != phrase)
             novel = self.count_novel(top_before)
             self.scheduler.update(arm.name, gain, calls, new_elites, novel)
-            if not self.schedule.batches:
-                self._close_hard_deal()
         return ran
 
     def hard_stall_action(self) -> str:
@@ -1383,7 +1381,7 @@ class Engine:
         ]
         if unsure:
             await self.evaluate([(c.phrase, "resample", c.parent, c.archetype) for c in unsure], n=8)
-        for cand in self.archive.top_by_board(5):
+        for cand in self.archive.items.values():
             if self.worth_vaulting(cand):
                 self.save(cand, auto=True)
 
@@ -1584,7 +1582,7 @@ class Engine:
                     break
                 if self.schedule is not None and self.schedule.phase == "done":
                     if not self.end_reason:
-                        self.end_reason = "hard board: nothing within 0.05 and frames remain unwritten"
+                        self.end_reason = "hard board: generator pass scored nothing"
                     self.emit("log", message=f"moving on: {self.end_reason}")
                     break
                 if self.on_hard_visit() and self.schedule.phase == "deal":
@@ -1685,11 +1683,7 @@ class Engine:
                     self.stall = 0
                     self.scheduler.boost = {"chain": 1.5, "llm_gen": 1.3}
                     self.emit("log", message=f"[chains] {flat}; favouring new chains and writers")
-                elif (
-                    self.stall >= self.patience()
-                    and self.rounds >= self.min_rounds
-                    and self.hard_stall_action()
-                ):
+                elif self.stall >= self.patience() and self.rounds >= self.min_rounds and self.hard_stall_action():
                     flat = f"{self.stall} rounds without a better line"
                     if self.hard_stall_action() == "compress":
                         self.schedule.finish_growth()

@@ -759,7 +759,7 @@ class LabScreen(Screen):
             header.append(f"   ours on board {engine.our_best.probability:.2f}/{engine.our_best.units}w")
         if len(engine.archive):
             best = engine.archive.top_by_board(1)[0]
-            wins = engine.objective.wins(best.score, best.units, lead)
+            wins = engine.winning()
             header.append("   best found ")
             header.append(f"{best.p:.3f}/{best.units}w", style="bold green" if wins else "bold")
             if wins:
@@ -926,7 +926,7 @@ class LabScreen(Screen):
         if len(engine.archive):
             best = engine.archive.top_by_board(1)[0]
             item.best = f"{best.p:.3f}/{best.units}w"
-            item.win = engine.objective.wins(best.score, best.units, engine.leader)
+            item.win = engine.winning()
         item.calls = engine.oracle.calls if engine.oracle else 0
 
     def render_queue(self) -> None:

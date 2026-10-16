@@ -532,6 +532,7 @@ class Engine:
         self.prior_task: asyncio.Future | None = None
         self.embedder: Embedder | None = embedder
         self.vaulted: set[str] = set()
+        self._confirm_stuck: set[str] = set()
         self.status = "idle"
 
     # Events.
@@ -939,6 +940,8 @@ class Engine:
         ran = 0
         pass_calls = self.oracle.calls if self.oracle else 0
         while self.schedule.phase == "deal":
+            if await self.confirm_contenders():
+                continue
             if not self.schedule.batches:
                 self._close_hard_deal()
                 if self.schedule.phase != "deal":
@@ -1372,6 +1375,43 @@ class Engine:
 
     # Promotion and vault.
 
+    def contender_batch(self) -> list[Candidate]:
+        """The next five lines whose displayed score already beats the leader and that still have fewer than five rolls."""
+        if self.leader is None:
+            return []
+        pending = [
+            cand
+            for cand in self.archive.items.values()
+            if cand.score.n < 5
+            and cand.phrase not in self._confirm_stuck
+            and self.objective.beats(cand.p, cand.units, self.leader)
+        ]
+        pending.sort(key=lambda cand: (self.objective.score_key(cand.score, cand.units), cand.p), reverse=True)
+        return pending[:5]
+
+    async def confirm_contenders(self) -> bool:
+        """Resample one batch of possible winners. False means new guesses may start."""
+        batch = self.contender_batch()
+        if not batch:
+            return False
+        before = {cand.phrase: cand.score.n for cand in batch}
+        self.emit(
+            "log",
+            message=(
+                f"[confirm] {len(batch)} line(s) already above the leader have fewer than five rolls; "
+                "resampling before new guesses"
+            ),
+        )
+        await self.evaluate([(cand.phrase, "resample", cand.parent, cand.archetype) for cand in batch], n=5)
+        advanced = False
+        for phrase, n in before.items():
+            cand = self.archive.items.get(phrase)
+            if cand is None or cand.score.n <= n:
+                self._confirm_stuck.add(phrase)
+            else:
+                advanced = True
+        return advanced
+
     async def promote(self) -> None:
         """Re-score the leaders so a lucky single sample does not stay on top."""
         need = [c for c in self.archive.top(5) + self.archive.top_by_board(5) if c.score.n < 5]
@@ -1594,6 +1634,14 @@ class Engine:
                         self.end_reason = "hard board: generator pass scored nothing"
                     self.emit("log", message=f"moving on: {self.end_reason}")
                     break
+                try:
+                    if await self.confirm_contenders():
+                        continue
+                except BudgetExhausted:
+                    if self.stopping or not self.idle_when_done:
+                        self.end_reason = self.end_reason or ("stopped" if self.stopping else self.budget_reason())
+                        break
+                    continue
                 if self.on_hard_visit() and self.schedule.phase == "deal":
                     try:
                         await self.run_hard_deal()

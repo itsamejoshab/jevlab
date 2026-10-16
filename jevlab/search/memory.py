@@ -23,6 +23,7 @@ class RunMemory:
     arms: dict[str, dict] = field(default_factory=dict)  # scheduler arm state
     compressed: list[str] = field(default_factory=list)
     synonyms: dict[str, list[str]] = field(default_factory=dict)
+    wordnet_done: list[str] = field(default_factory=list)  # words whose alternative list already has its WordNet extras
     exhausted: list[list] = field(default_factory=list)  # [phrase, p, units] frames that plateaued short
     history: list[dict] = field(default_factory=list)  # one summary per run
     level: int = 0  # highest escalation level the last run reached without winning

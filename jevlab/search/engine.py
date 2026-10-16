@@ -60,6 +60,50 @@ class BudgetExhausted(Exception):
     pass
 
 
+# WordNet contributes this many extras per word. Ask for more candidates so overlaps with the LLM list
+# still leave one or two new words, common senses first.
+WORDNET_ALTS = 2
+_WORDNET_CANDIDATES = 12
+
+
+def augment_alts(word: str, alts: list[str], banned: set[str] | None = None) -> list[str]:
+    """Append up to two WordNet synonyms the list does not already contain.
+
+    The LLM alternatives stay in front, in their original order. A missing thesaurus leaves the list alone.
+    """
+    from ..defense import synonyms as wordnet_synonyms
+
+    have = {alt.casefold() for alt in alts}
+    have.add(word.casefold())
+    blocked = {item.casefold() for item in banned} if banned else set()
+    extra: list[str] = []
+    for syn in wordnet_synonyms(word, _WORDNET_CANDIDATES):
+        key = syn.casefold()
+        if key in have or key in blocked:
+            continue
+        try:
+            clean = check_word(syn)
+        except RuleError:
+            continue
+        if clean.casefold() in have or clean.casefold() in blocked:
+            continue
+        have.add(clean.casefold())
+        extra.append(clean)
+        if len(extra) >= WORDNET_ALTS:
+            break
+    return alts + extra if extra else alts
+
+
+def sprinkle_wordnet(
+    synonyms: dict[str, list[str]], done: set[str], word: str, banned: set[str] | None = None
+) -> None:
+    """Add WordNet extras once. A later call leaves the list as it is, even when more synonyms exist."""
+    if word.casefold() in FUNCTION_WORDS or word in done or word not in synonyms:
+        return
+    synonyms[word] = augment_alts(word, synonyms[word], banned)
+    done.add(word)
+
+
 # Escalation ladder: (name, strategy that leads the level, extra scheduler boosts).
 LEVELS = [
     ("normal", None, {}),
@@ -90,6 +134,7 @@ class LabContext:
         self.banned: set[str] = set()
         self.pinned: set[str] = set()
         self.synonyms: dict[str, list[str]] = {}
+        self.wordnet_done: set[str] = set()
         self.phrase_surrogate: PhraseSurrogate | None = None
         self.word_surrogate: WordSurrogate | None = None
         self.chains: ChainLibrary | None = None
@@ -271,6 +316,8 @@ class LabContext:
                 self.log(f"[synonyms] {error}")
         for word in missing:
             self.synonyms.setdefault(word, [])
+        for word in dict.fromkeys(words):
+            sprinkle_wordnet(self.synonyms, self.wordnet_done, word, self.banned)
         return {w: self.synonyms.get(w, []) for w in words}
 
     def archetype_bests(self) -> dict[str, float]:
@@ -633,6 +680,9 @@ class Engine:
         self.scheduler.restore(mem.arms)
         self.strategies["compress"].done |= set(mem.compressed)
         self.ctx.synonyms.update(mem.synonyms)
+        self.ctx.wordnet_done = set(mem.wordnet_done)
+        for word in list(self.ctx.synonyms):
+            sprinkle_wordnet(self.ctx.synonyms, self.ctx.wordnet_done, word, self.ctx.banned)
         self.strategies["grow"].restore(mem.grow, mem.grow_gains)
         self.strategies["drift"].restore(mem.drift)
         self.strategies["probe_climb"].restore(mem.probe)
@@ -1055,6 +1105,7 @@ class Engine:
         mem.arms = self.scheduler.state()
         mem.compressed = sorted(self.strategies["compress"].done)[-500:]
         mem.synonyms = dict(list(self.ctx.synonyms.items())[-400:])
+        mem.wordnet_done = [word for word in mem.synonyms if word in self.ctx.wordnet_done]
         if self.plateau:
             grow = self.strategies["grow"]
             mem.grow = grow.state()

@@ -23,6 +23,7 @@ class RunMemory:
     arms: dict[str, dict] = field(default_factory=dict)  # scheduler arm state
     compressed: list[str] = field(default_factory=list)
     synonyms: dict[str, list[str]] = field(default_factory=dict)
+    wordnet_done: list[str] = field(default_factory=list)  # words whose alternative list already has its WordNet extras
     exhausted: list[list] = field(default_factory=list)  # [phrase, p, units] frames that plateaued short
     history: list[dict] = field(default_factory=list)  # one summary per run
     level: int = 0  # highest escalation level the last run reached without winning
@@ -30,6 +31,9 @@ class RunMemory:
     grow_gains: dict = field(default_factory=dict)  # plateau mode: word -> [total score change, appends]
     drift: str = ""  # plateau mode: where the walk along the top level stands
     probe: dict = field(default_factory=dict)  # plateau mode: probe climb's claim and line
+    # Generator-batch lines labeled with a catalog frame. Not style_stats: edits that inherit a
+    # frame do not count, and a restart keeps dealing from this field.
+    generator_counts: dict = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, text: str | None) -> "RunMemory":

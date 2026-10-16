@@ -2,7 +2,7 @@ import asyncio
 import random
 
 from jevlab.oracle import Score
-from jevlab.search.archive import Archive
+from jevlab.search.archive import ARCHETYPES, Archive
 from jevlab.search.engine import Engine
 from jevlab.search.mechanical import noise_sd, race
 from jevlab.objective import Objective
@@ -16,7 +16,8 @@ def test_plateau_needs_a_long_leader_at_the_ceiling(tmp_path):
     ordinary_cap = engine.length_cap
     engine.enter_plateau("test")
     assert engine.plateau and engine.length_cap == engine.grow_cap == 85 > ordinary_cap
-    assert engine.allowed("extend") and engine.allowed("grow")
+    # Highest does not start a line from nothing, even after entering the plateau.
+    assert engine.allowed("extend") and not engine.allowed("grow") and not engine.allowed("beam")
 
     grow = engine.strategies["grow"]
     grow.restore(["a b c", "a b d"])
@@ -32,7 +33,17 @@ def test_plateau_needs_a_long_leader_at_the_ceiling(tmp_path):
 
     assert not other("a", (0.98, 86)).plateau_candidate
     short_leader = other("b", (0.99, 20))
-    assert not short_leader.plateau_candidate and not short_leader.allowed("extend")
+    assert not short_leader.plateau_candidate and not short_leader.allowed("grow")
+    # Clause extension is not plateau-only on Highest: a kept line can grow without it.
+    phrase = "kept line alpha beta"
+    short_leader.archive.add(phrase, Score(phrase, [0.97]), "llm:core", archetype="direct")
+    for name in ARCHETYPES:
+        if name != "other":
+            short_leader.memory.generator_counts[name] = 8
+    short_leader.open_hard_schedule()
+    assert not short_leader.plateau and short_leader.schedule.phase == "grow"
+    assert short_leader.allowed("extend")
+    assert short_leader.strategies["extend"].available(short_leader.ctx)
 
 
 def test_noise_shrinks_toward_the_ends():

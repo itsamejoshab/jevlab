@@ -29,6 +29,7 @@ from sklearn.linear_model import BayesianRidge
 from sklearn.neural_network import MLPRegressor
 
 from ..objective import logit
+from .vectors import pack_half, unpack_vec
 
 warnings.filterwarnings("ignore", module="sklearn")
 
@@ -93,7 +94,7 @@ class OpenRouterEmbeddings:
             for row in self.db.all(
                 f"SELECT text, vec FROM embeddings WHERE model = ? AND text IN ({marks})", (self.model, *chunk)
             ):
-                out[row["text"]] = np.frombuffer(row["vec"], dtype=np.float32)
+                out[row["text"]] = unpack_vec(row["vec"])
         return out
 
     def embed(self, texts: list[str], batch_size: int = 0):
@@ -124,7 +125,7 @@ class OpenRouterEmbeddings:
             vectors = [np.asarray(r["embedding"], dtype=np.float32) for r in rows]
             self.db.executemany(
                 "INSERT OR REPLACE INTO embeddings VALUES (?, ?, ?)",
-                [(self.model, t, v.tobytes()) for t, v in zip(chunk, vectors)],
+                [(self.model, t, pack_half(v)) for t, v in zip(chunk, vectors)],
             )
             found.update(zip(chunk, vectors))
         for text in texts:

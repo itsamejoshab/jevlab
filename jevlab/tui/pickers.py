@@ -9,7 +9,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Checkbox, Footer, Input, Label, RichLog, Rule, Select, SelectionList, Static, Switch
 from textual.widgets.selection_list import Selection
 
@@ -119,6 +119,37 @@ def card(value: Text | str, caption: str) -> Text:
     return text
 
 
+class ConfirmVacuum(ModalScreen[bool]):
+    """Ask before rewriting the databases. Escape and Cancel both decline."""
+
+    CSS = """
+    ConfirmVacuum { align: center middle; }
+    #vacuum-ask {
+        width: 64; height: auto; border: solid $primary; padding: 1 2; background: $surface;
+    }
+    #vacuum-ask Static { width: 100%; }
+    #vacuum-ask-actions { height: 3; margin-top: 1; align: center middle; }
+    #vacuum-ask-actions Button { margin: 0 1; min-width: 10; }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vacuum-ask"):
+            yield Static(
+                "Vacuum reclaims unused space in every edition's databases. It can take a long time. Scores are kept."
+            )
+            with Horizontal(id="vacuum-ask-actions"):
+                yield Button("OK", id="ok", variant="warning")
+                yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "ok")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class HomeScreen(Screen):
     CSS = """
     HomeScreen { align: center middle; }
@@ -142,7 +173,13 @@ class HomeScreen(Screen):
     #home-stats { width: 100%; margin: 1 0 0 0; text-align: center; }
     #home-buttons { height: auto; min-height: 3; align: center middle; }
     #home-buttons Button { margin: 0 1; min-width: 16; }
-    #home-log { height: 12; border: round $secondary; display: none; }
+    #home-foot { height: 1; margin-top: 1; align: right middle; }
+    #vacuum {
+        height: 1; min-width: 8; margin: 0; padding: 0 1;
+        border: none; background: transparent; color: $text-muted;
+    }
+    #vacuum:hover, #vacuum:focus { background: $boost; color: $text; }
+    #home-log { height: 8; border: round $secondary; display: none; margin-top: 1; }
     """
 
     BINDINGS = [
@@ -181,6 +218,8 @@ class HomeScreen(Screen):
                 yield Button("Countermeasures", id="defense", variant="warning")
                 yield Button("Sync", id="refresh")
                 yield Button("Quit", id="quit", variant="error")
+            with Horizontal(id="home-foot"):
+                yield Button("Vacuum", id="vacuum", compact=True)
             yield SelectableRichLog(id="home-log", wrap=True, markup=False)
         yield Footer()
 
@@ -277,6 +316,7 @@ class HomeScreen(Screen):
             "publish": self.action_publish,
             "defense": self.action_defense,
             "refresh": self.action_refresh,
+            "vacuum": self.action_vacuum,
             "quit": self.app.exit,
         }[event.button.id]()
 
@@ -306,6 +346,44 @@ class HomeScreen(Screen):
     def action_refresh(self) -> None:
         self.app.push_screen(SnapshotScreen())
 
+    def action_vacuum(self) -> None:
+        if self.query_one("#vacuum", Button).disabled:
+            return
+        self.app.push_screen(ConfirmVacuum(), self._vacuum_confirmed)
+
+    def _vacuum_confirmed(self, proceed: bool | None) -> None:
+        if proceed:
+            self.query_one("#vacuum", Button).disabled = True
+            self.vacuum_worker()
+
+    @work(thread=True, exclusive=True)
+    def vacuum_worker(self) -> None:
+        log = self.query_one("#home-log", SelectableRichLog)
+
+        def begin() -> None:
+            log.display = True
+            log.clear()
+
+        def write(message: str) -> None:
+            self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
+
+        def finish(message: str, *, failed: bool) -> None:
+            self.query_one("#vacuum", Button).disabled = False
+            self.notify(message, severity="error" if failed else "information")
+
+        self.app.call_from_thread(begin)
+        write("starting")
+        try:
+            from ..maintain import run
+
+            run(log=write)
+        except Exception as exc:
+            write(f"failed: {exc}")
+            self.app.call_from_thread(finish, f"Vacuum failed: {exc}", failed=True)
+            return
+        write("done")
+        self.app.call_from_thread(finish, "Vacuum finished", failed=False)
+
 
 SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"))
 
@@ -317,24 +395,56 @@ def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=N
     stopping halfway would leave a half-written snapshot as the latest one.
     """
     from ..config import activate
-    from ..site.snapshot import take_snapshot
+    from ..site.snapshot import edition_label, log_rule, take_snapshot
 
     origin = EDITION
+    count = len(editions)
+    known = {mode: label for label, mode in SNAPSHOT_MODES}
+    labels = ", ".join(known.get(mode, mode) for mode in modes)
+    noun = "edition" if count == 1 else "editions"
+    log(log_rule(f"snapshot · {count} {noun} · {labels}"))
+    finished = 0
     try:
-        for edition in editions:
+        for index, edition in enumerate(editions, start=1):
             if halt and halt():
-                log("stopped")
+                log(log_rule(f"stopped · {finished}/{count} finished"))
                 break
+            name = edition_label(edition)
+            section = f"{index}/{count}"
+            log(log_rule(f"{section} · {name}"))
             try:
-                log(f"{edition}: opening its database")
                 activate(edition)
-                take_snapshot(DB(), modes=modes, log=log)
+                take_snapshot(DB(), modes=modes, log=log, section=section)
+                finished += 1
             except Exception as error:
-                log(f"{edition} snapshot failed: {error!r}")
+                log(log_rule(f"{section} · {name} · failed"))
+                log(f"  {error!r}")
     finally:
         if EDITION != origin:
-            log(f"back to {origin}")
+            log(log_rule(f"back to {edition_label(origin)}"))
             activate(origin)
+
+
+def snapshot_line(message: str) -> Text:
+    """Timestamp plus the snapshot line. Section rules are the only colored lines."""
+    from ..site.snapshot import rule_title
+
+    line = Text()
+    line.append(f"{time.strftime('%H:%M:%S')} ", style="dim")
+    title = rule_title(message)
+    if title is None:
+        line.append(message)
+        return line
+    if title.startswith("stopped"):
+        style = "bold yellow"
+    elif title.endswith("failed"):
+        style = "bold red"
+    elif " · done · " in title:
+        style = "bold green"
+    else:
+        style = "bold cyan"
+    line.append(message, style=style)
+    return line
 
 
 class RunKeys:
@@ -421,7 +531,10 @@ class SnapshotScreen(RunKeys, Screen):
     #snap-modes { height: 1; padding: 0 1; }
     #snap-editions Label, #snap-modes Label { width: 12; height: 1; text-style: bold; }
     #snap-editions Setting, #snap-modes Setting { margin-right: 2; }
-    #snap-log { height: 1fr; border: round $secondary; margin-top: 1; }
+    #snap-log {
+        height: 1fr; border: round $secondary; margin-top: 1;
+        border-title-color: $secondary; border-title-style: bold; border-title-align: center;
+    }
     """
 
     BINDINGS = [
@@ -487,7 +600,16 @@ class SnapshotScreen(RunKeys, Screen):
 
         def write(message: str) -> None:
             activity.log("snapshot", message)
-            self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
+
+            def paint() -> None:
+                from ..site.snapshot import rule_title
+
+                log.write(snapshot_line(message))
+                title = rule_title(message)
+                if title:
+                    log.border_title = title
+
+            self.app.call_from_thread(paint)
 
         run_snapshots(editions, modes, write, halt=self.gate)
 
@@ -725,10 +847,10 @@ class SearchSetupScreen(Screen):
             with Horizontal(id="params"):
                 with Vertical(classes="field"):
                     yield Label("ORACLE CALLS / QUESTION")
-                    yield Input("3000", id="budget", type="integer", max_length=7)
+                    yield Input("7000", id="budget", type="integer", max_length=7)
                 with Vertical(classes="field"):
                     yield Label("PATIENCE")
-                    yield Input("12", id="stall", type="integer", max_length=3)
+                    yield Input("6", id="stall", type="integer", max_length=3)
                 with Vertical(classes="field"):
                     yield Label("LLM IDEAS")
                     yield Switch(True, id="llm")
@@ -748,7 +870,7 @@ class SearchSetupScreen(Screen):
                     yield Switch(False, id="win-mode")
                 with Vertical(classes="field"):
                     yield Label("CALLS AFTER LEAD")
-                    yield Input("2000", id="win-extra", type="integer", max_length=6, disabled=True)
+                    yield Input("500", id="win-extra", type="integer", max_length=6, disabled=True)
             with Horizontal(id="actions"):
                 yield Label("select")
                 yield Button("All", id="all")

@@ -10,9 +10,10 @@ from jevlab.oracle import question_key
 from jevlab.search.global_model import scored_phrases
 
 
-def test_new_samples_update_the_summary_and_the_distinct_count(tmp_path):
+def test_new_samples_update_the_summary_and_the_phrase_count(tmp_path):
     db = DB(tmp_path / "t.db")
     assert scored_phrases(db) == 0
+    assert db.one("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'phrase_seen'") is None
     db.add_oracle_samples(
         [
             ("h1", "m", "alpha beta", 0.8, "{}", 1, 0, 1.0, "q1"),
@@ -25,7 +26,7 @@ def test_new_samples_update_the_summary_and_the_distinct_count(tmp_path):
     assert row["n"] == 2
     assert row["total"] == 1.4
     db.add_oracle_samples([("h1", "m", "alpha beta", 0.9, "{}", 1, 0, 1.0, "q2")])
-    assert scored_phrases(db) == 2
+    assert scored_phrases(db) == 3
     other = db.one("SELECT n, total FROM phrase_stats WHERE qkey = 'q2' AND state = 'alpha beta'")
     assert other["n"] == 1
     assert other["total"] == 0.9

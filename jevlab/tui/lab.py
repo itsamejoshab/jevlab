@@ -158,9 +158,9 @@ class LabScreen(Screen):
     def __init__(
         self,
         slugs: list[str],
-        budget: int = 3000,
+        budget: int = 7000,
         use_llm: bool = True,
-        max_stall: int = 12,
+        max_stall: int = 6,
         single: bool = False,
         seed: int | None = None,
         escalate: bool = True,
@@ -758,8 +758,8 @@ class LabScreen(Screen):
         if engine.our_best:
             header.append(f"   ours on board {engine.our_best.probability:.2f}/{engine.our_best.units}w")
         if len(engine.archive):
-            best = engine.archive.top_by_board(1)[0]
-            wins = engine.objective.wins(best.score, best.units, lead)
+            best = engine.confirmed_leader() or engine.archive.top_by_board(1)[0]
+            wins = engine.confirmed_win()
             header.append("   best found ")
             header.append(f"{best.p:.3f}/{best.units}w", style="bold green" if wins else "bold")
             if wins:
@@ -924,9 +924,9 @@ class LabScreen(Screen):
     @staticmethod
     def update_item(item: QueueItem, engine: Engine) -> None:
         if len(engine.archive):
-            best = engine.archive.top_by_board(1)[0]
+            best = engine.confirmed_leader() or engine.archive.top_by_board(1)[0]
             item.best = f"{best.p:.3f}/{best.units}w"
-            item.win = engine.objective.wins(best.score, best.units, engine.leader)
+            item.win = engine.confirmed_win()
         item.calls = engine.oracle.calls if engine.oracle else 0
 
     def render_queue(self) -> None:
@@ -947,11 +947,7 @@ class LabScreen(Screen):
             text.append(f"{icon} ", style=style)
             text.append(f"{item.title[:28]:<28} ", style="bold" if item.state == "running" else "")
             text.append(f"{item.leader:<9} ", style="yellow")
-            best = item.best
-            if item.state == "running" and self.engine and len(self.engine.archive):
-                c = self.engine.archive.top_by_board(1)[0]
-                best = f"{c.p:.3f}/{c.units}w"
-            text.append(f"{best:<11}", style="bold green" if item.win else "")
+            text.append(f"{item.best:<11}", style="bold green" if item.win else "")
             if item.win:
                 text.append(" WIN", style="bold green")
             text.append("\n")

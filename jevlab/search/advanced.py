@@ -39,7 +39,7 @@ class Genetic(Strategy):
         values = list(pop.values())
         if ctx.engine.one_word_race:
             values = [c for c in values if c.units == 1]
-        return values
+        return ctx.restrict(values)
 
     def tournament(self, pop, rng, size: int = 3):
         return max(rng.sample(pop, min(size, len(pop))), key=lambda c: c.fitness)
@@ -111,7 +111,7 @@ class SurrogateBO(Strategy):
 
     async def run(self, ctx) -> None:
         rng = ctx.rng
-        parents = ctx.parents(20) + ctx.archive.elite_list()
+        parents = ctx.restrict(ctx.parents(20) + ctx.archive.elite_list())
         if ctx.engine.one_word_race:
             parents = [c for c in parents if c.units == 1]
         if not parents:
@@ -155,7 +155,7 @@ class GCGSwap(Strategy):
 
     async def run(self, ctx) -> None:
         rng = ctx.rng
-        starts = ctx.parents(4)
+        starts = ctx.restrict(ctx.parents(4))
         if ctx.engine.one_word_race:
             starts = [c for c in starts if c.units == 1]
         if not starts:

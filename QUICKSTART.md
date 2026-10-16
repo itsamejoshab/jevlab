@@ -94,8 +94,9 @@ Please be a good guest. This is someone's hobby game. Keep the default delays, a
 
 The site has five mirror games, Trick Kev, Trick Luna, Trick Decider, Trick Laya, and Trick Clef, each with its own
 model and boards. Add `--edition kev`, `--edition luna`, `--edition decider`, `--edition laya`, or `--edition clef`
-to any command, or set `JEV_EDITION` in `.env`. Each mirror keeps its data in `data/kev/`, `data/luna/`,
-`data/decider/`, `data/laya/`, or `data/clef/` and reads (never writes) Jev's data to borrow estimates.
+to any command, or set `JEV_EDITION` in `.env`. Each mirror keeps its data in `jevlab/data/kev/`,
+`jevlab/data/luna/`, `jevlab/data/decider/`, `jevlab/data/laya/`, or `jevlab/data/clef/` and reads (never writes)
+Jev's data to borrow estimates.
 
 Kev's classifier is `jaredpalmer/kev-4b` on OpenRouter, Luna's is `openai/gpt-6-luna-decisions`, and Decider's is
 `perplexity/pplx-decider-v1.1-27b`, also on OpenRouter, so the same API key scores them:
@@ -159,18 +160,20 @@ uv run ruff check
 
 | Path | Contents |
 | --- | --- |
-| `data/jev.db` | SQLite: snapshots, boards, cached oracle samples, run memory |
-| `data/vault/` | Verified winning lines per question |
-| `data/snapshots/` | Raw JSON from each `jevlab snapshot` |
-| `data/models/` | Trained cross-question predictor (`jevlab train-global`) |
-| `data/kev/` | The same layout for the Kev edition |
-| `data/luna/` | The same layout for the Luna edition |
-| `data/decider/` | The same layout for the Decider edition |
-| `data/laya/` | The same layout for the Laya edition |
-| `data/clef/` | The same layout for the Clef edition |
+| `jevlab/data/jev.db` | SQLite: snapshots, boards, cached oracle samples, run memory |
+| `jevlab/data/vault/` | Verified winning lines per question |
+| `jevlab/data/snapshots/` | Raw JSON from each `jevlab snapshot` |
+| `jevlab/data/models/` | Trained cross-question predictor (`jevlab train-global`) |
+| `jevlab/data/kev/` | The same layout for the Kev edition |
+| `jevlab/data/luna/` | The same layout for the Luna edition |
+| `jevlab/data/decider/` | The same layout for the Decider edition |
+| `jevlab/data/laya/` | The same layout for the Laya edition |
+| `jevlab/data/clef/` | The same layout for the Clef edition |
 | `~/.cache/jevlab/huggingface` | Laya and Clef weights (`JEV_LAYA_CACHE`, `JEV_CLEF_CACHE`) |
 
-`data/`, `.env`, and `session.json` are gitignored. Move the data elsewhere with `JEVLAB_DATA=/path`. The Laya
+`jevlab/data/`, `.env`, and `session.json` are gitignored. The data directory sits beside the package, and a relative
+`JEVLAB_DATA` is resolved from there, not from the shell's current directory. Move the data elsewhere with an
+absolute `JEVLAB_DATA=/path`. The Laya
 and Clef weights never land in the repo; they stay in the cache above.
 
 ## Next

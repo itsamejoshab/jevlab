@@ -43,10 +43,6 @@ TURBO_BOARDS = 8
 XPOST_BANNER = "---RUNNING ADD'L XPOST OPS---"
 # A Shortest-yes gamble that lands 1 roll in 5 still hits within 13 rolls (build + 12 re-rolls) ~95% of the time.
 GAMBLE_REROLLS = 12
-# How long to keep reading a board that has not listed the score we just posted.
-BOARD_WAIT = 20.0
-# Gaps between those reads. The first read is immediate; these are the pauses after a miss.
-BOARD_POLLS = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0)
 # Vault lines tried on one board after Jev rejects a word, before leaving the rest for the next run.
 MAX_FALLBACKS = 5
 # A line estimated from the other edition gets one oracle sample; it is skipped only when that sample plus this
@@ -296,45 +292,8 @@ def golf_try(client: SiteClient, live: dict, text: str, log, target: str = "") -
     return credited(turn, target)
 
 
-def row_listed(rows: list[dict], me: str, score: float, units: int | None, objective: Objective) -> bool:
-    """True when a row of ours is already at least the posting.
-
-    A better row we already hold counts. The site keeps the best, so a lower post will not replace it.
-    ``units`` is None when only the rounded score matters.
-    """
-    if not me:
-        return True
-    ours = [row for row in rows if row.get("userId") == me]
-
-    def rank(row: dict):
-        shown = Leader(float(row.get("probability") or 0), int(row.get("wordCount") or 0))
-        if units is None:
-            return site_round(shown.probability)
-        return objective.leader_key(shown)
-
-    if not ours:
-        return False
-    best = max(ours, key=rank)
-    if units is None:
-        return site_round(float(best.get("probability") or 0)) + 1e-9 >= site_round(score)
-    posted = Leader(site_round(score), units)
-    shown = Leader(float(best.get("probability") or 0), int(best.get("wordCount") or 0))
-    return objective.leader_key(shown) >= objective.leader_key(posted)
-
-
-def _board_rows(boards: dict, board: str, target: str) -> list[dict]:
-    """Rows for one board, or every board when ``board`` is empty."""
-    if board:
-        return target_rows(boards, board, target) if target else list(boards.get(board) or [])
-    rows: list[dict] = []
-    for value in boards.values():
-        if isinstance(value, list):
-            rows.extend(row for row in value if isinstance(row, dict))
-    return rows
-
-
 def store_boards(db: DB, live: dict, mode: str, boards: dict) -> None:
-    """Write one question's live boards into the snapshot tables."""
+    """Write one question's boards into the snapshot tables."""
     row = db.latest_snapshot()
     snapshot_id = row["id"] if row else 0
     db.executemany(
@@ -343,61 +302,55 @@ def store_boards(db: DB, live: dict, mode: str, boards: dict) -> None:
     )
 
 
-def refresh_board(db: DB, client: SiteClient, live: dict, mode: str) -> None:
-    """Write the live boards for one question back into the snapshot tables."""
-    try:
-        boards = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
-    except SiteError:
-        return
-    store_boards(db, live, mode, boards)
+def _our_rows(rows: list, me: str, choice: str) -> list[dict]:
+    found = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("userId") != me:
+            continue
+        if choice and row.get("choice") != choice:
+            continue
+        found.append(row)
+    return found
 
 
-def wait_for_row(
-    db: DB | None,
-    client: SiteClient,
-    live: dict,
-    mode: str,
-    me: str,
-    score: float,
-    units: int | None,
-    objective: Objective,
-    log,
-    board: str = "",
-    target: str = "",
+def record_posting(
+    boards: dict, me: str, board: str, choice: str, score: float, units: int, phrase: str, objective: Objective
 ) -> None:
-    """Read the live board until our row shows this posting, then store it.
+    """Write the score we just posted onto the board copy read before the turn.
 
-    The first read is immediate. Later reads back off, and the wait stops at ``BOARD_WAIT``.
-    The last board we did see is still stored, so a slow board does not leave an older snapshot behind.
+    The site keeps our best row. A score that would not appear (a 0.00 on an empty board, a Shortest-yes
+    line under the yes threshold) leaves that copy unchanged.
     """
-    started = time.monotonic()
-    gaps = iter(BOARD_POLLS)
-    last: dict | None = None
-    while True:
-        try:
-            last = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
-        except SiteError:
-            last = None
-        if last is not None and row_listed(_board_rows(last, board, target), me, score, units, objective):
-            waited = time.monotonic() - started
-            if waited >= 0.4:
-                log(f"  board listed {site_round(score):.2f} after {waited:.1f}s")
-            if db is not None:
-                store_boards(db, live, mode, last)
+    if not me or not board:
+        return
+    rows = boards.get(board)
+    if not isinstance(rows, list):
+        rows = []
+        boards[board] = rows
+    ours = _our_rows(rows, me, choice)
+    held = None
+    if ours:
+        held_row = max(
+            ours,
+            key=lambda row: objective.leader_key(
+                Leader(float(row.get("probability") or 0), int(row.get("wordCount") or 0))
+            ),
+        )
+        held = Leader(float(held_row.get("probability") or 0), int(held_row.get("wordCount") or 0))
+        if objective.leader_key(held) >= objective.key(score, units):
             return
-        elapsed = time.monotonic() - started
-        if elapsed >= BOARD_WAIT:
-            log(
-                f"  board had not listed {site_round(score):.2f} after {elapsed:.0f}s; keeping the snapshot as it stands"
-            )
-            if db is not None and last is not None:
-                store_boards(db, live, mode, last)
-            return
-        try:
-            gap = next(gaps)
-        except StopIteration:
-            gap = BOARD_POLLS[-1]
-        time.sleep(min(gap, BOARD_WAIT - elapsed))
+        held_row["probability"] = score
+        held_row["wordCount"] = units
+        held_row["phrase"] = phrase
+        if choice:
+            held_row["choice"] = choice
+        return
+    if not objective.beats(score, units, None):
+        return
+    row = {"userId": me, "probability": score, "wordCount": units, "phrase": phrase}
+    if choice:
+        row["choice"] = choice
+    rows.append(row)
 
 
 def credited(turn: dict | None, target: str) -> float:
@@ -619,8 +572,8 @@ def publish_entry(
         except RuleError as error:
             raise PublishError(f"phrase breaks strict rules: {error}") from error
         units = len(words)
-    boards = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
-    boards = {b: drop_clashing(r, live.get("choices"), me) if isinstance(r, list) else r for b, r in boards.items()}
+    raw = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
+    boards = {b: drop_clashing(r, live.get("choices"), me) if isinstance(r, list) else r for b, r in raw.items()}
     rows = target_rows(boards, board, target) if target else boards.get(board) or []
     leader = board_leader(rows, me, board=board)
     ours = max(
@@ -747,7 +700,11 @@ def publish_entry(
             "INSERT OR REPLACE INTO site_scores VALUES (?, ?, ?, ?, ?, ?)",
             (slug, mode, phrase, best, "publish", now_iso()),
         )
-    wait_for_row(db, client, live, mode, me, best, units, objective, log, board=board, target=target)
+    filed = picked if missed and shown_p is not None else target
+    posted = shown_p if missed and shown_p is not None else best
+    sent = words[0] if game_mode.golf else " ".join(words)
+    record_posting(raw, me, board, filed, posted, units, sent, objective)
+    store_boards(db, live, mode, raw)
     if won:
         detail = f"rerolls={tries}"
     elif missed and shown_p is not None:

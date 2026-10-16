@@ -189,11 +189,7 @@ def target_line(ctx, detail: str = "") -> str:
     if ctx.objective.kind == "score":
         levels = [str(level) for level in (ctx.question.get("raw") or {}).get("levels") or [] if str(level)]
         ends = f" The scale runs from {levels[0]} (low) to {levels[-1]} (high)." if len(levels) >= 2 else ""
-        bar = (
-            f" It counts once the score is at least {ctx.objective.threshold:.2f}."
-            if ctx.objective.shortest
-            else ""
-        )
+        bar = f" It counts once the score is at least {ctx.objective.threshold:.2f}." if ctx.objective.shortest else ""
         extra = f" ({detail})" if detail else ""
         return (
             "This is a scale. Push Jev toward the high end; the score shown is how far up the scale Jev landed."
@@ -359,7 +355,11 @@ def single_words_user(ctx, count: int) -> str:
     if singles:
         shown = [c for c in singles if c.units == 1] if ctx.engine.one_word_race else singles
         if shown:
-            label = "Our best one-word lines so far" if ctx.engine.one_word_race else "Our best one- and two-word lines so far"
+            label = (
+                "Our best one-word lines so far"
+                if ctx.engine.one_word_race
+                else "Our best one- and two-word lines so far"
+            )
             lines.append(label + ": " + ", ".join(f"{c.phrase} {c.p:.2f}" for c in shown))
     impacts = ctx.top_impacts(20)
     if impacts:
@@ -378,9 +378,7 @@ def single_words_user(ctx, count: int) -> str:
         )
         shape = '{"phrases": [{"text": "<one word>"}]}'
     else:
-        ask = (
-            f"\nWrite {count} candidates: about two thirds single words, the rest two-word phrases. "
-        )
+        ask = f"\nWrite {count} candidates: about two thirds single words, the rest two-word phrases. "
         shape = '{"phrases": [{"text": "<word or two>"}]}'
     lines.append(
         ask + "Think of words "
@@ -477,7 +475,17 @@ def gen_user(ctx, archetypes: list[str], count: int, variants_of: list = (), fre
         for phrase in variants_of:
             lines.append(f"- {phrase}")
     cap = ctx.engine.grow_cap
-    if shortest and ctx.engine.one_word_race:
+    schedule = getattr(ctx.engine, "schedule", None)
+    hard_deal = schedule is not None and schedule.hard and schedule.phase == "deal"
+    if hard_deal and schedule.deal_uses_board_words():
+        helpful = ctx.helpful_board_lines()
+        if helpful:
+            lines.append(
+                "Public board lines that raise the score, strongest first. Build from these: " + " | ".join(helpful)
+            )
+    if hard_deal:
+        span = f"about {cap} words each"
+    elif shortest and ctx.engine.one_word_race:
         span = (
             f"exactly 1 word each. The leader is already 1 word, so a longer phrase cannot win; "
             f"the word must reach at least {ctx.objective.threshold:.2f} and outscore the leader"
@@ -624,7 +632,9 @@ def plan_user(ctx, stats: dict) -> str:
             f"{ctx.objective.ceiling:.2f}, then compact it)"
         )
     keep = (
-        f"keeping it at or above {ctx.objective.threshold:.2f}" if ctx.objective.shortest else "keeping the rounded score"
+        f"keeping it at or above {ctx.objective.threshold:.2f}"
+        if ctx.objective.shortest
+        else "keeping the rounded score"
     )
     tactics = ", ".join(ARCHETYPE_GUIDE)
     lines.append(

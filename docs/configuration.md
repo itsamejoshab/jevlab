@@ -112,7 +112,7 @@ Decider keep the remote oracle on OpenRouter and lower concurrency. Laya and Cle
 
 | Setting | Jev | Kev | Luna | Decider | Laya | Clef |
 | --- | --- | --- | --- | --- | --- | --- |
-| Data directory | `data/` | `data/kev/` | `data/luna/` | `data/decider/` | `data/laya/` | `data/clef/` |
+| Data directory | `jevlab/data/` | `jevlab/data/kev/` | `jevlab/data/luna/` | `jevlab/data/decider/` | `jevlab/data/laya/` | `jevlab/data/clef/` |
 | `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `openai/gpt-6-luna-decisions` | `perplexity/pplx-decider-v1.1-27b` | `convaiinnovations/laya` | `clef-flash` |
 | `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `openrouter` | `openrouter` | `huggingface` | `huggingface` |
 | `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 4 / 8 | 4 / 8 | 1 / 1 | 1 / 1 |
@@ -131,7 +131,7 @@ any other edition.
 | --- | --- | --- |
 | `JEV_SITE` | the live site | Base URL for snapshot and publish |
 | `JEV_COOKIE` | empty | Session cookie header for signed-in calls (or use `session.json`) |
-| `JEVLAB_DATA` | `./data` | Database, vault, snapshots, models |
+| `JEVLAB_DATA` | `jevlab/data` | Database, vault, snapshots, models. A relative path is resolved from the package directory |
 | `JEV_LLM_TIMEOUT` | 60 | Seconds per generator or planner call |
 | `JEV_TRIAGE_K` | 0 (Kev, Laya, and Clef 40) | Existing lines to score before generating |
 | `JEV_LONG_TARGET` | 0 | Word target for the experimental long-chain regime (0 is off) |

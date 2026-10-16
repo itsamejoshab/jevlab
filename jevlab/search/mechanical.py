@@ -32,7 +32,13 @@ class LevelStrategy(Strategy):
     level = 0
 
     def available(self, ctx) -> bool:
-        return ctx.engine.level == self.level and len(ctx.archive) > 0
+        if not len(ctx.archive):
+            return False
+        # The blank-start beam stays on its ladder step. Hard growth may use the other level tools
+        # without climbing there, and without probing a newly unlocked tier.
+        if self.name != "beam" and ctx.engine.hard_editing():
+            return True
+        return ctx.engine.level == self.level
 
 
 def single_edits(words: list[str], pool: list[str], rng, per_slot: int = 12) -> list[str]:
@@ -140,7 +146,10 @@ class Extend(Strategy):
 
     def available(self, ctx) -> bool:
         roots = ctx.climb_roots(1) if len(ctx.archive) else []
-        return ctx.engine.plateau and bool(roots) and roots[0].units + 2 <= ctx.engine.grow_cap
+        if not roots or roots[0].units + 2 > ctx.engine.grow_cap:
+            return False
+        # A hard visit can append a clause to a kept line without waiting for plateau mode.
+        return ctx.engine.plateau or ctx.engine.hard_editing()
 
     async def llm_clauses(self, ctx, root) -> list[str]:
         if ctx.llm is None:
@@ -595,7 +604,10 @@ class Sweep(LevelStrategy):
         self.optimal: set[str] = set()
 
     def available(self, ctx) -> bool:
-        return super().available(ctx) and ctx.climb_roots(1)[0].phrase not in self.optimal
+        if not super().available(ctx):
+            return False
+        roots = ctx.climb_roots(1)
+        return bool(roots) and roots[0].phrase not in self.optimal
 
     async def candidates(self, ctx, words: list[str], per: int) -> dict[tuple[int, str], list[str]]:
         """Vocabulary per position: the word surrogate's HotFlip ranking when trusted, else vocab order."""

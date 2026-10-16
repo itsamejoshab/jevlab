@@ -15,6 +15,7 @@ import unicodedata
 from . import rejected
 
 MAX_WORD_LENGTH = 16
+# A local default for ordinary checks. The site does not cap a phrase at this many words.
 MAX_WORDS = 60
 _LATIN = re.compile(r"^[A-Za-z0-9]+$")
 
@@ -66,8 +67,7 @@ OPTION_STOPWORDS = frozenset({"a", "an", "and", "at", "for", "in", "of", "on", "
 
 def _fold(text: str) -> str:
     """The site's word key: NFD, keep only letters and digits, lowercase."""
-    stripped = "".join(c for c in unicodedata.normalize("NFD", text)
-                       if unicodedata.category(c)[0] in "LN")
+    stripped = "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c)[0] in "LN")
     return stripped.lower()
 
 
@@ -93,8 +93,7 @@ def drop_clashing(rows: list[dict], choices: list | None, me: str) -> list[dict]
     """Board rows without our own rows that break the answer-name rule; the server keeps them, we don't count them."""
     if not choices or not me:
         return rows
-    return [r for r in rows if not (r.get("userId") == me and r.get("phrase")
-                                    and option_clash(r["phrase"], choices))]
+    return [r for r in rows if not (r.get("userId") == me and r.get("phrase") and option_clash(r["phrase"], choices))]
 
 
 def check_phrase(phrase: str, choices: list | None = None, max_words: int = MAX_WORDS) -> str:

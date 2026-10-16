@@ -6,7 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+PACKAGE = Path(__file__).resolve().parent
+ROOT = PACKAGE.parent
 
 
 def load_dotenv(path: Path = ROOT / ".env") -> None:
@@ -37,7 +38,22 @@ MICROSOFT_REROLL_GAP = 20.0
 # Trick Kev, Trick Laya, Trick Clef, Trick Clef-flash, Trick Clef-omni, Trick Luna, Trick Decider, and Trick
 # Microsoft are mirrors of the game, each with its own question revisions, boards, and model. Each edition
 # keeps its own database, vault, and snapshots. A mirror reads Jev's (never writes them) to borrow estimates.
-JEV_DATA = Path(os.environ.get("JEVLAB_DATA", ROOT / "data"))
+
+
+def data_dir() -> Path:
+    """Database, vault, and snapshots. Beside this package (`jevlab/data`), never the process's current directory.
+
+    A relative `JEVLAB_DATA` is resolved from the package directory, so starting the lab from the repo root and
+    from `jevlab/` use the same files.
+    """
+    raw = os.environ.get("JEVLAB_DATA", "").strip()
+    path = Path(raw).expanduser() if raw else PACKAGE / "data"
+    if not path.is_absolute():
+        path = PACKAGE / path
+    return path.resolve()
+
+
+JEV_DATA = data_dir()
 JEV_DB_PATH = JEV_DATA / "jev.db"
 JEV_VAULT = JEV_DATA / "vault"
 

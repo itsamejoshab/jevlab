@@ -115,9 +115,6 @@ CREATE TABLE IF NOT EXISTS phrase_stats (
     sumsq REAL NOT NULL,
     PRIMARY KEY (qkey, state)
 );
-CREATE TABLE IF NOT EXISTS phrase_seen (
-    state TEXT PRIMARY KEY
-);
 CREATE TABLE IF NOT EXISTS lab_meta (
     key TEXT PRIMARY KEY,
     n INTEGER NOT NULL
@@ -310,10 +307,7 @@ class DB:
                        WHERE qkey IS NOT NULL AND noul IS NOT NULL
                        GROUP BY qkey, state"""
                 )
-                self.conn.execute(
-                    "INSERT INTO phrase_seen (state) SELECT DISTINCT state FROM oracle_samples WHERE state IS NOT NULL"
-                )
-                n = self.conn.execute("SELECT COUNT(*) FROM phrase_seen").fetchone()[0]
+                n = self.conn.execute("SELECT COUNT(*) FROM phrase_stats").fetchone()[0]
                 self.conn.execute("INSERT INTO lab_meta (key, n) VALUES ('phrases', ?)", (n,))
                 self.conn.execute("INSERT INTO lab_meta (key, n) VALUES ('phrase_stats', 1)")
                 self.conn.execute("COMMIT")
@@ -387,17 +381,20 @@ class DB:
                     if qkey is None or noul is None or not state:
                         continue
                     value = float(noul)
-                    self.conn.execute(
+                    added = self.conn.execute(
                         """INSERT INTO phrase_stats (qkey, state, n, total, sumsq) VALUES (?, ?, 1, ?, ?)
                            ON CONFLICT(qkey, state) DO UPDATE SET
                              n = n + 1,
                              total = total + excluded.total,
-                             sumsq = sumsq + excluded.sumsq""",
+                             sumsq = sumsq + excluded.sumsq
+                           RETURNING n""",
                         (qkey, state, value, value * value),
-                    )
-                    inserted = self.conn.execute("INSERT OR IGNORE INTO phrase_seen (state) VALUES (?)", (state,))
-                    if inserted.rowcount:
-                        self.conn.execute("UPDATE lab_meta SET n = n + 1 WHERE key = 'phrases'")
+                    ).fetchone()
+                    if added is not None and added[0] == 1:
+                        self.conn.execute(
+                            "INSERT INTO lab_meta (key, n) VALUES ('phrases', 1) "
+                            "ON CONFLICT(key) DO UPDATE SET n = n + 1"
+                        )
                 self.conn.execute("COMMIT")
             except Exception:
                 self.conn.execute("ROLLBACK")

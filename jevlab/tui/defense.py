@@ -211,7 +211,7 @@ class DefenseScreen(Screen):
 
 def _row(target: DefenseTarget) -> Text:
     text = Text()
-    tag = {QUIET: "crowded", BARE: "nothing new", BLIND: "no phrase"}.get(target.status, "")
+    tag = {READY: "at-risk", QUIET: "crowded", BARE: "nothing new", BLIND: "no phrase"}.get(target.status, "")
     style = {READY: "bold green", QUIET: "dim"}.get(target.status, "dim")
     text.append(f"{_mode_name(target.play_mode):<7} ", style="bold")
     text.append(f"{'+'.join(target.held):<18} ", style=style)
@@ -221,11 +221,9 @@ def _row(target: DefenseTarget) -> Text:
     if target.status == READY:
         count = len(target.decoys)
         label = f"{count}/{plan.need}" if plan.need and count < plan.need else f"{count:>2}"
-        text.append(
-            f"{plan.ours_in_top}/{plan.top_len or plan.ours_in_top} of the top are our answer  {label} decoys  "
-        )
+        text.append(f"{plan.ours_in_top}/{plan.top_len or plan.ours_in_top} {label} decoys  ")
     elif target.status == QUIET:
-        text.append(f"{plan.answer_words}/{plan.word_count} listed words are our answer  ")
+        text.append(f"{plan.answer_words}/{plan.word_count}  ")
     text.append(f"{target.title[:36]:<36} ", style="bold")
     if target.phrase:
         text.append(target.phrase[:48], style="dim")

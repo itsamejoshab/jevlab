@@ -19,7 +19,7 @@ from ..defense import BARE, BLIND, QUIET, READY, DefenseTarget, defend, scan
 from ..modes import CASUAL, GOLF
 from .chrome import EditionMark
 from .copyselect import SelectableRichLog
-from .pickers import Setting
+from .pickers import RunKeys, Setting
 
 
 def _mode_name(play_mode: str) -> str:
@@ -67,7 +67,9 @@ class DefenseLog:
         return Text(raw)
 
 
-class DefenseScreen(Screen):
+class DefenseScreen(RunKeys, Screen):
+    pause_message = "paused after the current word"
+    leave_message = "stopping after the current word, then back"
     CSS = """
     #def-body { height: 1fr; }
     #def-side { width: 3fr; height: 1fr; }
@@ -86,13 +88,15 @@ class DefenseScreen(Screen):
     #def-log { width: 2fr; min-width: 42; max-width: 72; height: 1fr; border: round $secondary; margin-left: 1; }
     """
 
-    BINDINGS = [Binding("escape", "back", "back")]
+    BINDINGS = [
+        Binding("space", "toggle_pause", "pause/resume", priority=True),
+        Binding("q", "leave", "stop & back", priority=True),
+        Binding("escape", "back", "back"),
+    ]
 
     def __init__(self):
         super().__init__()
         self.targets: list[DefenseTarget] = []
-        self.busy = False
-        self.stop_requested = False
         self.transcript = DefenseLog()
 
     def compose(self) -> ComposeResult:
@@ -179,8 +183,7 @@ class DefenseScreen(Screen):
             return
         dry = self.query_one("#dry", Checkbox).value
         word_by_word = self.query_one("#by-word", Checkbox).value
-        self.busy = True
-        self.stop_requested = False
+        self.begin_run()
         self.query_one("#defend", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
         self.note(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
@@ -192,7 +195,7 @@ class DefenseScreen(Screen):
             self.app.call_from_thread(self.note, message)
 
         try:
-            result = defend(jobs, dry_run=dry, log=write, halt=lambda: self.stop_requested, word_by_word=word_by_word)
+            result = defend(jobs, dry_run=dry, log=write, halt=self.gate, word_by_word=word_by_word)
         except Exception as error:
             write(f"defense crashed: {error!r}")
             result = None
@@ -204,7 +207,8 @@ class DefenseScreen(Screen):
         self.app.call_from_thread(self._done)
 
     def _done(self) -> None:
-        self.busy = False
+        if self.finish_run():
+            return
         self.query_one("#defend", Button).disabled = False
         self.query_one("#stop", Button).disabled = True
         self.reload()

@@ -147,9 +147,9 @@ class HomeScreen(Screen):
 
     BINDINGS = [
         Binding("s", "search", "Scan"),
-        Binding("p", "publish", "Launch"),
-        Binding("d", "defense", "Countermeasures"),
-        Binding("r", "refresh", "Download"),
+        Binding("l", "publish", "Launch"),
+        Binding("c", "defense", "Countermeasures"),
+        Binding("d", "refresh", "Download"),
         Binding("q", "app.quit", "Quit"),
     ]
 
@@ -310,14 +310,21 @@ class HomeScreen(Screen):
 SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"))
 
 
-def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log) -> None:
-    """Snapshot each edition on its own database, then come back to the one that was open."""
+def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=None) -> None:
+    """Snapshot each edition on its own database, then come back to the one that was open.
+
+    `halt` is checked before each edition. One edition, once started, runs to the end:
+    stopping halfway would leave a half-written snapshot as the latest one.
+    """
     from ..config import activate
     from ..site.snapshot import take_snapshot
 
     origin = EDITION
     try:
         for edition in editions:
+            if halt and halt():
+                log("stopped")
+                break
             try:
                 log(f"{edition}: opening its database")
                 activate(edition)
@@ -330,8 +337,74 @@ def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log) -> Non
             activate(origin)
 
 
-class SnapshotScreen(Screen):
+class RunKeys:
+    """Space pauses a running job. q stops it and leaves.
+
+    Space is inactive while idle, so a focused list or checkbox can still use it to toggle.
+    """
+
+    pause_message = "paused"
+    leave_message = "stopping"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.busy = False
+        self.paused = False
+        self.stop_requested = False
+        self.leave_after = False
+
+    def gate(self) -> bool:
+        """Block the worker while paused. True means the run should stop."""
+        while self.paused and not self.stop_requested:
+            time.sleep(0.05)
+        return bool(self.stop_requested)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "toggle_pause":
+            return True if self.busy else None
+        return super().check_action(action, parameters)
+
+    def begin_run(self) -> None:
+        self.busy = True
+        self.paused = False
+        self.stop_requested = False
+        self.leave_after = False
+        self.refresh_bindings()
+
+    def finish_run(self) -> bool:
+        """Clear the run. True means the screen is closing and the caller should stop touching it."""
+        leave = self.leave_after
+        self.busy = False
+        self.paused = False
+        self.stop_requested = False
+        self.leave_after = False
+        if leave:
+            self.app.pop_screen()
+            return True
+        self.refresh_bindings()
+        return False
+
+    def action_toggle_pause(self) -> None:
+        if not self.busy:
+            return
+        self.paused = not self.paused
+        self.notify(self.pause_message if self.paused else "resumed")
+
+    def action_leave(self) -> None:
+        if self.busy:
+            self.stop_requested = True
+            self.paused = False
+            self.leave_after = True
+            self.notify(self.leave_message)
+            return
+        self.app.pop_screen()
+
+
+class SnapshotScreen(RunKeys, Screen):
     """Pick editions and play modes. One start snapshots each checked edition in turn."""
+
+    pause_message = "paused before the next edition"
+    leave_message = "stopping after this edition"
 
     CSS = """
     #snap-actions { height: auto; padding: 0 1; margin-bottom: 1; }
@@ -351,7 +424,11 @@ class SnapshotScreen(Screen):
     #snap-log { height: 1fr; border: round $secondary; margin-top: 1; }
     """
 
-    BINDINGS = [Binding("escape", "back", "back")]
+    BINDINGS = [
+        Binding("space", "toggle_pause", "pause/resume", priority=True),
+        Binding("q", "leave", "stop & back", priority=True),
+        Binding("escape", "back", "back"),
+    ]
 
     def compose(self) -> ComposeResult:
         yield EditionMark("Download")
@@ -376,7 +453,6 @@ class SnapshotScreen(Screen):
             "Strict, Golf, and Casual each fill Highest and Shortest."
         )
         self.query_one("#snap-log").border_title = "snapshot"
-        self.busy = False
 
     def action_back(self) -> None:
         if self.busy:
@@ -401,7 +477,7 @@ class SnapshotScreen(Screen):
         if not modes:
             self.notify("pick at least one play mode", severity="warning")
             return
-        self.busy = True
+        self.begin_run()
         self.query_one("#start", Button).disabled = True
         self.snapshot_worker(editions, modes)
 
@@ -413,10 +489,11 @@ class SnapshotScreen(Screen):
             activity.log("snapshot", message)
             self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
 
-        run_snapshots(editions, modes, write)
+        run_snapshots(editions, modes, write, halt=self.gate)
 
         def done() -> None:
-            self.busy = False
+            if self.finish_run():
+                return
             self.query_one("#start", Button).disabled = False
 
         self.app.call_from_thread(done)
@@ -445,6 +522,7 @@ class LiveSetupScreen(Screen):
 
     BINDINGS = [
         Binding("g", "go", "GO"),
+        Binding("p", "toggle_post", "post on/off", priority=True),
         Binding("escape", "back", "back"),
     ]
 
@@ -522,7 +600,7 @@ class LiveSetupScreen(Screen):
             text.append("CASUAL: a whole phrase goes up as one hyphenated word on a word-chain round. ")
         text.append("A sentence round submits the phrase in one turn, on the mode the round names. ")
         if not self.query_one("#post", Switch).value:
-            text.append("POST is off: the search runs and nothing is sent. p toggles it during the run.")
+            text.append("POST is off: the search runs and nothing is sent. p toggles posting.")
         self.query_one("#live-help", Static).update(text)
 
     def refresh_round(self) -> None:
@@ -571,6 +649,9 @@ class LiveSetupScreen(Screen):
 
     def action_back(self) -> None:
         self.app.pop_screen()
+
+    def action_toggle_post(self) -> None:
+        self.query_one("#post", Switch).toggle()
 
     def action_go(self) -> None:
         max_level = self.query_one("#max-level", Select).value
@@ -913,7 +994,9 @@ class Setting(Checkbox):
         super().watch_value()
 
 
-class PublishScreen(Screen):
+class PublishScreen(RunKeys, Screen):
+    pause_message = "paused after the current phrase"
+    leave_message = "stopping after the current phrase, then back"
     CSS = """
     #pub-body { height: 1fr; }
     #pub-side { width: 3fr; height: 1fr; }
@@ -940,6 +1023,8 @@ class PublishScreen(Screen):
     """
 
     BINDINGS = [
+        Binding("space", "toggle_pause", "pause/resume", priority=True),
+        Binding("q", "leave", "stop & back", priority=True),
         Binding("escape", "back", "back"),
     ]
 
@@ -954,8 +1039,6 @@ class PublishScreen(Screen):
         self._rows_long: list[Standing] | None = None
         self._golf_all: list | None = None
         self._casual_all: list | None = None
-        self.busy = False
-        self.stop_requested = False
         self.transcript = PublishLog()
         self._chain_lines = 0
 
@@ -1261,8 +1344,7 @@ class PublishScreen(Screen):
             rerolls = fallback
         dry = self.query_one("#dry", Checkbox).value
         word_by_word = self.query_one("#by-word", Checkbox).value
-        self.busy = True
-        self.stop_requested = False
+        self.begin_run()
         self.query_one("#publish", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
         self.query_one("#import-go", Button).disabled = True
@@ -1289,7 +1371,7 @@ class PublishScreen(Screen):
                 log=write,
                 on_result=on_result,
                 long_rerolls=0 if default_rerolls() == 0 else LONG_REROLLS,
-                halt=lambda: self.stop_requested,
+                halt=self.gate,
                 word_by_word=word_by_word,
             )
         except Exception as error:
@@ -1308,8 +1390,8 @@ class PublishScreen(Screen):
                 )
 
         def done() -> None:
-            self.busy = False
-            self.stop_requested = False
+            if self.finish_run():
+                return
             self.query_one("#publish", Button).disabled = False
             self.query_one("#stop", Button).disabled = True
             self.query_one("#import-go", Button).disabled = False

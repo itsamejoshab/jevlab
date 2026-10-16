@@ -9,7 +9,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Checkbox, Footer, Input, Label, RichLog, Rule, Select, SelectionList, Static, Switch
 from textual.widgets.selection_list import Selection
 
@@ -119,6 +119,38 @@ def card(value: Text | str, caption: str) -> Text:
     return text
 
 
+class ConfirmVacuum(ModalScreen[bool]):
+    """Ask before rewriting the databases. Escape and Cancel both decline."""
+
+    CSS = """
+    ConfirmVacuum { align: center middle; }
+    #vacuum-ask {
+        width: 64; height: auto; border: solid $primary; padding: 1 2; background: $surface;
+    }
+    #vacuum-ask Static { width: 100%; }
+    #vacuum-ask-actions { height: 3; margin-top: 1; align: center middle; }
+    #vacuum-ask-actions Button { margin: 0 1; min-width: 10; }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vacuum-ask"):
+            yield Static(
+                "Vacuum reclaims unused space in every edition's databases. "
+                "It can take a long time. Scores are kept."
+            )
+            with Horizontal(id="vacuum-ask-actions"):
+                yield Button("OK", id="ok", variant="warning")
+                yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "ok")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class HomeScreen(Screen):
     CSS = """
     HomeScreen { align: center middle; }
@@ -142,7 +174,13 @@ class HomeScreen(Screen):
     #home-stats { width: 100%; margin: 1 0 0 0; text-align: center; }
     #home-buttons { height: auto; min-height: 3; align: center middle; }
     #home-buttons Button { margin: 0 1; min-width: 16; }
-    #home-log { height: 12; border: round $secondary; display: none; }
+    #home-foot { height: 1; margin-top: 1; align: right middle; }
+    #vacuum {
+        height: 1; min-width: 8; margin: 0; padding: 0 1;
+        border: none; background: transparent; color: $text-muted;
+    }
+    #vacuum:hover, #vacuum:focus { background: $boost; color: $text; }
+    #home-log { height: 8; border: round $secondary; display: none; margin-top: 1; }
     """
 
     BINDINGS = [
@@ -181,6 +219,8 @@ class HomeScreen(Screen):
                 yield Button("Countermeasures", id="defense", variant="warning")
                 yield Button("Sync", id="refresh")
                 yield Button("Quit", id="quit", variant="error")
+            with Horizontal(id="home-foot"):
+                yield Button("Vacuum", id="vacuum", compact=True)
             yield SelectableRichLog(id="home-log", wrap=True, markup=False)
         yield Footer()
 
@@ -277,6 +317,7 @@ class HomeScreen(Screen):
             "publish": self.action_publish,
             "defense": self.action_defense,
             "refresh": self.action_refresh,
+            "vacuum": self.action_vacuum,
             "quit": self.app.exit,
         }[event.button.id]()
 
@@ -305,6 +346,44 @@ class HomeScreen(Screen):
 
     def action_refresh(self) -> None:
         self.app.push_screen(SnapshotScreen())
+
+    def action_vacuum(self) -> None:
+        if self.query_one("#vacuum", Button).disabled:
+            return
+        self.app.push_screen(ConfirmVacuum(), self._vacuum_confirmed)
+
+    def _vacuum_confirmed(self, proceed: bool | None) -> None:
+        if proceed:
+            self.query_one("#vacuum", Button).disabled = True
+            self.vacuum_worker()
+
+    @work(thread=True, exclusive=True)
+    def vacuum_worker(self) -> None:
+        log = self.query_one("#home-log", SelectableRichLog)
+
+        def begin() -> None:
+            log.display = True
+            log.clear()
+
+        def write(message: str) -> None:
+            self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
+
+        def finish(message: str, *, failed: bool) -> None:
+            self.query_one("#vacuum", Button).disabled = False
+            self.notify(message, severity="error" if failed else "information")
+
+        self.app.call_from_thread(begin)
+        write("starting")
+        try:
+            from ..maintain import run
+
+            run(log=write)
+        except Exception as exc:
+            write(f"failed: {exc}")
+            self.app.call_from_thread(finish, f"Vacuum failed: {exc}", failed=True)
+            return
+        write("done")
+        self.app.call_from_thread(finish, "Vacuum finished", failed=False)
 
 
 SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"))

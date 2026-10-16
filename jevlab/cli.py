@@ -224,6 +224,13 @@ def cmd_tui(_args) -> int:
     return run_home()
 
 
+def cmd_maintain(_args) -> int:
+    from .maintain import run
+
+    run(log=lambda message: print(message, file=sys.stderr))
+    return 0
+
+
 def cmd_lab(args) -> int:
     from .tui.app import run_lab
 
@@ -488,9 +495,11 @@ def main(argv: list[str] | None = None) -> int:
         "--edition",
         choices=EDITIONS,
         default=EDITION,
-        help="game edition: jev (data/), kev (data/kev/), laya (data/laya/), clef (data/clef/), "
-        "clef-flash (data/clef-flash/), clef-omni (data/clef-omni/), luna (data/luna/), "
-        "decider (data/decider/), or microsoft (data/microsoft/); read before anything else loads",
+        help="game edition: jev (jevlab/data/), kev (jevlab/data/kev/), laya (jevlab/data/laya/), "
+        "clef (jevlab/data/clef/), clef-flash (jevlab/data/clef-flash/), "
+        "clef-omni (jevlab/data/clef-omni/), luna (jevlab/data/luna/), "
+        "decider (jevlab/data/decider/), or microsoft (jevlab/data/microsoft/); "
+        "read before anything else loads",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -509,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.set_defaults(func=cmd_install_clef)
 
-    p = sub.add_parser("snapshot", help="pull questions, boards, word impacts, and our attempts into data/jev.db")
+    p = sub.add_parser("snapshot", help="pull questions, boards, word impacts, and our attempts into jevlab/data/jev.db")
     p.add_argument("--q", nargs="*", help="limit to these slugs or play URLs")
     p.add_argument("--modes", nargs="*", help="strict casual golf emoji (default all)")
     p.add_argument("--workers", type=int, default=16)
@@ -669,6 +678,12 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("train-global", help="train the cross-question predictor on every scored phrase")
     p.add_argument("--limit", type=int, default=0, help="cap on training rows (0 = all)")
     p.set_defaults(func=cmd_train_global)
+
+    p = sub.add_parser(
+        "maintain",
+        help="shrink the databases: half-precision embeddings, drop the phrase counter table, prune old snapshots",
+    )
+    p.set_defaults(func=cmd_maintain)
 
     args = parser.parse_args((["--edition", edition] if edition is not None else []) + argv)
     if args.edition != EDITION:

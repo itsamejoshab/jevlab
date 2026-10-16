@@ -18,7 +18,7 @@ positional arguments:
     tui                 home screen: choose Search, Publish, or Defense (default when no command is given)
     install-laya        download Laya weights from Hugging Face into ~/.cache/jevlab (outside the repo)
     install-clef        download Clef weights from Hugging Face into ~/.cache/jevlab (outside the repo)
-    snapshot            pull questions, boards, word impacts, and our attempts into data/jev.db
+    snapshot            pull questions, boards, word impacts, and our attempts into jevlab/data/jev.db
     calibrate           replay site-scored phrases through the oracle and report parity
     lab                 interactive TUI search for one yes/no or choice question (strict highest or shortest
                         yes)
@@ -39,7 +39,7 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --edition {jev,kev,laya,clef,luna,decider}
-                        game edition: jev (data/), kev (data/kev/), laya (data/laya/), clef (data/clef/), luna (data/luna/), or decider (data/decider/);
+                        game edition: jev (jevlab/data/), kev (jevlab/data/kev/), laya (jevlab/data/laya/), clef (jevlab/data/clef/), luna (jevlab/data/luna/), or decider (jevlab/data/decider/);
                         read before anything else loads
 ```
 

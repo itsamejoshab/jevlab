@@ -569,6 +569,55 @@ def test_home_opens_defense(monkeypatch, tmp_path):
     asyncio.run(check())
 
 
+def test_home_vacuum_waits_for_ok(monkeypatch, tmp_path):
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "home.db"))
+    ran: list[str] = []
+
+    def fake_run(log=print) -> None:
+        log("reclaimed")
+        ran.append("ran")
+
+    monkeypatch.setattr("jevlab.maintain.run", fake_run)
+
+    class _App(App):
+        def __init__(self):
+            super().__init__()
+            self.game_mode = HIGHEST
+
+        def on_mount(self) -> None:
+            self.push_screen(HomeScreen())
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(120, 48)) as pilot:
+            await pilot.pause()
+            button = app.screen.query_one("#vacuum", Button)
+            assert str(button.label) == "Vacuum"
+            assert button.parent.id == "home-foot"
+            app.screen.action_vacuum()
+            await pilot.pause()
+            assert str(app.screen.query_one("#ok", Button).label) == "OK"
+            assert str(app.screen.query_one("#cancel", Button).label) == "Cancel"
+            await pilot.click("#cancel")
+            await pilot.pause()
+            assert ran == []
+            assert isinstance(app.screen, HomeScreen)
+            app.screen.action_vacuum()
+            await pilot.pause()
+            await pilot.click("#ok")
+            for _ in range(40):
+                await pilot.pause()
+                if ran and not app.screen.query_one("#vacuum", Button).disabled:
+                    break
+            assert ran == ["ran"]
+            assert app.screen.query_one("#home-log").display is True
+
+    asyncio.run(check())
+
+
 def test_defense_word_by_word_defaults_off_and_golf_is_marked_gone(monkeypatch, tmp_path):
     monkeypatch.setattr("jevlab.tui.defense.DB", lambda: DB(tmp_path / "empty.db"))
 

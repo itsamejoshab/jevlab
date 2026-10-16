@@ -1,7 +1,7 @@
 """Which generator models earn their price, per archetype.
 
 Each cell is one tactic, one model, one question: the same prompt the search would
-send, scored by the oracle. Rows append to data/route_bakeoff.jsonl, so a stopped
+send, scored by the oracle. Rows append to jevlab/data/route_bakeoff.jsonl, so a stopped
 run resumes. Qwen3.8 Max is not in the pool.
 
     uv run python scripts/route_bakeoff.py
@@ -18,6 +18,7 @@ import statistics
 import time
 from pathlib import Path
 
+from jevlab.config import DATA
 from jevlab.db import DB
 from jevlab.llm import LLMError, call_costs
 from jevlab.modes import is_searchable
@@ -26,8 +27,7 @@ from jevlab.search.engine import Engine
 from jevlab.search.prompts import ARCHETYPE_GUIDE, gen_system, gen_user
 from jevlab.search.strategies import LLMGenerate
 
-ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "data" / "route_bakeoff.jsonl"
+OUT = DATA / "route_bakeoff.jsonl"
 
 # Price bands. Qwen3.8 Max is intentionally absent.
 CHEAP = (

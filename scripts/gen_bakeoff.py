@@ -6,6 +6,7 @@ import statistics
 import sys
 import time
 
+from jevlab.config import DATA
 from jevlab.db import DB
 from jevlab.search.engine import Engine
 from jevlab.search.strategies import LLMGenerate
@@ -108,7 +109,7 @@ def top_mean(ps, k=5):
 
 async def main():
     results = [await bake(slug) for slug in QUESTIONS]
-    json.dump(results, open("data/gen_bakeoff.json", "w"), indent=1)
+    json.dump(results, open(DATA / "gen_bakeoff.json", "w"), indent=1)
     ranks = {m: [] for m in MODELS}
     for res in results:
         print(f"\n{res['slug']} (leader {res['leader']:.2f})")

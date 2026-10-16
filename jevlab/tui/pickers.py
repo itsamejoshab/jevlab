@@ -149,7 +149,7 @@ class HomeScreen(Screen):
         Binding("s", "search", "Scan"),
         Binding("l", "publish", "Launch"),
         Binding("c", "defense", "Countermeasures"),
-        Binding("d", "refresh", "Download"),
+        Binding("d", "refresh", "Sync"),
         Binding("q", "app.quit", "Quit"),
     ]
 
@@ -179,7 +179,7 @@ class HomeScreen(Screen):
                 yield Button("Scan", id="search", variant="primary")
                 yield Button("Launch", id="publish", variant="success")
                 yield Button("Countermeasures", id="defense", variant="warning")
-                yield Button("Download", id="refresh")
+                yield Button("Sync", id="refresh")
                 yield Button("Quit", id="quit", variant="error")
             yield SelectableRichLog(id="home-log", wrap=True, markup=False)
         yield Footer()
@@ -240,7 +240,7 @@ class HomeScreen(Screen):
         if not snap:
             for widget in (lead_card, ready_card, vault_card):
                 widget.update(card("—", "awaiting intel"))
-            text.append("No snapshot yet. Press Download first.", style="bold red")
+            text.append("No snapshot yet. Press Sync first.", style="bold red")
             self.query_one("#home-stats", Static).update(text)
             return
         rows = standings(db, mode=mode.play_mode, board=mode.board)

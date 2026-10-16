@@ -1403,41 +1403,61 @@ class Engine:
 
     # Promotion and vault.
 
+    def score_to_beat(self) -> Leader | None:
+        """Our confirmed line, once one is on the board, otherwise the leader we found there."""
+        ours = self.confirmed_leader()
+        if ours is not None:
+            return Leader(ours.p, ours.units, ours=True)
+        return self.leader
+
+    def could_beat(self, cand: Candidate, bar: Leader, ours: Candidate | None) -> bool:
+        """A short line can still win when two standard errors of oracle noise would carry it over our line."""
+        p = cand.p
+        if ours is not None:
+            from .mechanical import margin
+
+            p = min(1.0, cand.p + margin(cand, ours, 2.0))
+        return self.objective.beats(p, cand.units, bar)
+
     def contender_batch(self) -> list[Candidate]:
-        """The next five lines whose displayed score already beats the leader and that still have fewer than five rolls."""
-        if self.leader is None:
+        """Every line that could beat the score to beat and that still has fewer than five rolls."""
+        bar = self.score_to_beat()
+        if bar is None:
             return []
+        ours = self.confirmed_leader()
         pending = [
             cand
             for cand in self.archive.items.values()
-            if cand.score.n < 5
-            and cand.phrase not in self._confirm_stuck
-            and self.objective.beats(cand.p, cand.units, self.leader)
+            if cand.score.n < 5 and cand.phrase not in self._confirm_stuck and self.could_beat(cand, bar, ours)
         ]
         pending.sort(key=lambda cand: (self.objective.score_key(cand.score, cand.units), cand.p), reverse=True)
-        return pending[:5]
+        return pending
 
     async def confirm_contenders(self) -> bool:
-        """Resample one batch of possible winners. False means new guesses may start."""
+        """Give every line that could still win one more roll. False means new guesses may start."""
         batch = self.contender_batch()
         if not batch:
             return False
-        before = {cand.phrase: cand.score.n for cand in batch}
+        bar = self.score_to_beat()
+        shown = f"{bar.probability:.3f}/{bar.units}w" if bar is not None else "the leader"
         self.emit(
             "log",
-            message=(
-                f"[confirm] {len(batch)} line(s) already above the leader have fewer than five rolls; "
-                "resampling before new guesses"
-            ),
+            message=f"[confirm] {len(batch)} line(s) within range of {shown}; one more roll each",
         )
-        await self.evaluate([(cand.phrase, "resample", cand.parent, cand.archetype) for cand in batch], n=5)
+        groups: dict[int, list[Candidate]] = {}
+        for cand in batch:
+            groups.setdefault(cand.score.n + 1, []).append(cand)
         advanced = False
-        for phrase, n in before.items():
-            cand = self.archive.items.get(phrase)
-            if cand is None or cand.score.n <= n:
-                self._confirm_stuck.add(phrase)
-            else:
-                advanced = True
+        for target in sorted(groups):
+            group = groups[target]
+            before = {cand.phrase: cand.score.n for cand in group}
+            await self.evaluate([(cand.phrase, "resample", cand.parent, cand.archetype) for cand in group], n=target)
+            for phrase, n in before.items():
+                cand = self.archive.items.get(phrase)
+                if cand is None or cand.score.n <= n:
+                    self._confirm_stuck.add(phrase)
+                else:
+                    advanced = True
         return advanced
 
     async def promote(self) -> None:

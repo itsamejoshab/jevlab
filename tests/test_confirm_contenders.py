@@ -1,7 +1,7 @@
-"""Lines whose displayed score already beats the leader are confirmed before any new guesses.
+"""Lines that could still beat the score to beat get one more roll before any new guesses.
 
-A batch is the next five in board order that still have fewer than five rolls. The following batch
-waits until those five are done. A line under the leader does not hold up the next guess.
+Each pass adds a single roll and checks again. A line that falls out of range stops. Once a line is
+confirmed, later lines are judged against that line, with oracle noise allowed for a short sample.
 """
 
 import asyncio
@@ -16,10 +16,10 @@ class _HoldingOracle:
     def __init__(self):
         self.calls = 0
         self.qkey = "k"
-        self.batches: list[list[str]] = []
+        self.batches: list[tuple[list[str], int]] = []
 
     async def score(self, states, n=1):
-        self.batches.append(list(states))
+        self.batches.append((list(states), n))
         self.calls += len(states) * n
         return {state: Score(state, [0.93] * n) for state in states}
 
@@ -77,8 +77,74 @@ def test_possible_winners_are_confirmed_in_batches_of_five_before_new_guesses(tm
     assert guesser.runs == 1
     assert all(guesser.n_at_guess[phrase] >= 5 for phrase in beaters.values())
     assert guesser.n_at_guess[weak] == 1
-    assert [len(batch) for batch in oracle.batches] == [5, 3]
-    assert set(oracle.batches[0]) == {beaters[units] for units in (16, 18, 20, 22, 24)}
+    assert [n for _, n in oracle.batches] == [2, 3, 4, 5]
+    assert all(set(phrases) == set(beaters.values()) for phrases, _ in oracle.batches)
+
+
+def test_a_confirmed_line_becomes_the_score_to_beat(tmp_path):
+    eng = engine(tmp_path, "ours", leader=(0.92, 12))
+    sure = " ".join(["sure"] + ["alpha"] * 20)
+    eng.archive.add(sure, Score(sure, [0.936] * 5), "surrogate_bo")
+    behind = " ".join(["behind"] + ["beta"] * 29)
+    eng.archive.add(behind, Score(behind, [0.93]), "surrogate_bo")
+    ahead = " ".join(["ahead"] + ["gamma"] * 19)
+    eng.archive.add(ahead, Score(ahead, [0.95]), "surrogate_bo")
+    shorter = " ".join(["short"] + ["delta"] * 17)
+    eng.archive.add(shorter, Score(shorter, [0.936]), "surrogate_bo")
+    # One roll at 0.930 displays under 0.936, but the oracle noise can still carry it over that line.
+    close = " ".join(["close"] + ["epsilon"] * 17)
+    eng.archive.add(close, Score(close, [0.930]), "surrogate_bo")
+    far = " ".join(["far"] + ["zeta"] * 9)
+    eng.archive.add(far, Score(far, [0.90]), "surrogate_bo")
+
+    batch = {cand.phrase for cand in eng.contender_batch()}
+
+    assert ahead in batch
+    assert shorter in batch
+    assert close in batch
+    assert behind not in batch
+    assert far not in batch
+    assert sure not in batch
+
+
+def test_each_confirm_adds_one_roll_and_drops_a_line_that_falls_out_of_range(tmp_path):
+    eng = engine(tmp_path, "step", leader=(0.92, 12))
+    sure = " ".join(["sure"] + ["alpha"] * 23)
+    eng.archive.add(sure, Score(sure, [0.95] * 5), "surrogate_bo")
+    close = " ".join(["close"] + ["beta"] * 17)
+    eng.archive.add(close, Score(close, [0.944]), "surrogate_bo")
+    steady = " ".join(["steady"] + ["gamma"] * 15)
+    eng.archive.add(steady, Score(steady, [0.96]), "surrogate_bo")
+
+    class Oracle:
+        def __init__(self):
+            self.calls = 0
+            self.qkey = "k"
+            self.asked: list[tuple[list[str], int]] = []
+
+        async def score(self, states, n=1):
+            self.asked.append((list(states), n))
+            self.calls += len(states)
+            out = {}
+            for state in states:
+                if state == close:
+                    out[state] = Score(state, [0.944, 0.70])
+                else:
+                    out[state] = Score(state, [0.96] * n)
+            return out
+
+    eng.oracle = Oracle()
+    assert asyncio.run(eng.confirm_contenders())
+    assert [n for _, n in eng.oracle.asked] == [2]
+    assert eng.archive.items[close].score.n == 2
+    assert eng.archive.items[steady].score.n == 2
+
+    eng.oracle.asked.clear()
+    assert asyncio.run(eng.confirm_contenders())
+    assert close not in {phrase for phrases, _ in eng.oracle.asked for phrase in phrases}
+    assert [n for _, n in eng.oracle.asked] == [3]
+    assert eng.archive.items[steady].score.n == 3
+    assert eng.archive.items[close].score.n == 2
 
 
 def test_a_line_under_the_leader_does_not_delay_the_next_guess(tmp_path):

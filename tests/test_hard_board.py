@@ -16,6 +16,7 @@ from jevlab.oracle import Score
 from jevlab.rules import RuleError, check_phrase
 from jevlab.search.engine import BudgetExhausted, Engine
 from jevlab.search.hardboard import CATALOG, HardSchedule, ScoredLine
+from jevlab.search.prompts import gen_user
 from jevlab.search.mechanical import BeamBuild, Grow
 from jevlab.search import memory as lab_memory
 from jevlab.search.probe import Lock
@@ -280,6 +281,38 @@ def test_an_empty_generator_pass_does_not_deal_forever(tmp_path):
     assert ran == 4
     assert eng.schedule.phase == "done"
     assert eng.oracle.calls == 0
+
+
+def test_consecutive_hard_passes_ask_for_longer_lines(tmp_path):
+    eng = engine(tmp_path, "stretch", leader=(0.95, 12))
+    assert "mostly 6 to 18" in gen_user(eng.ctx, ["direct"], 4)
+
+    eng.budget = 6
+    eng.oracle = FarOracle()
+    eng.schedule = schedule(models=["m1", "m2"], leader=(0.95, 12))
+    eng.schedule.counts = eng.memory.generator_counts
+    eng.schedule.begin()
+    eng.llm = Writer()
+    with pytest.raises(BudgetExhausted):
+        asyncio.run(eng.run_hard_deal())
+
+    prompts = [user for _, user in eng.llm.prompts]
+    assert len(prompts) >= 5
+    assert all("about 60 words each" in prompt for prompt in prompts[:4])
+    assert all("about 70 words each" in prompt for prompt in prompts[4:])
+    assert "mostly 6 to 18" not in prompts[0]
+    assert check_phrase(" ".join(["alpha"] * 70), eng.choices, eng.length_cap)
+
+
+def test_a_close_frame_does_not_stretch_the_generator_length(tmp_path):
+    eng = engine(tmp_path, "held", leader=(0.95, 12))
+    phrase = " ".join(["alpha"] * 12)
+    eng.archive.add(phrase, Score(phrase, [0.93]), "llm:core", archetype="direct")
+    eng.memory.generator_counts = cover()
+    eng.open_hard_schedule()
+    assert eng.schedule.phase == "grow"
+    assert eng.length_cap == 30
+    assert "mostly 6 to 18" in gen_user(eng.ctx, ["direct"], 4)
 
 
 def test_a_far_deal_keeps_going_until_the_budget_runs_out(tmp_path):

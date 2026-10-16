@@ -25,6 +25,10 @@ MIN_BATCHES = 4
 FRAMES_PER_BATCH = 3
 # Growth edits an existing line. The blank-start beam is not one of these.
 GROWTH_JOBS = ("sweep", "surrogate_bo", "extend")
+# Asked length for a hard generator pass. The site does not cap a phrase at 60 words; 60 is where a
+# stuck deal starts, and each following pass in that same streak asks for HARD_LENGTH_STEP more.
+HARD_LENGTH = 60
+HARD_LENGTH_STEP = 10
 EDIT_JOBS = GROWTH_JOBS + ("local_edit", "genetic", "gcg", "precision")
 
 
@@ -90,6 +94,7 @@ class HardSchedule:
         self.deal_ran = False
         self.growth_rounds = 0
         self.assigned: set[str] = set()
+        self.deal_passes = 0
 
     def _is_hard(self) -> bool:
         if self.shortest or self.long or self.kind != "noul":
@@ -138,6 +143,7 @@ class HardSchedule:
 
     def begin(self) -> None:
         self.growth_rounds = 0
+        self.deal_passes = 0
         self.deal_ran = False
         self.growth_frames = []
         self.batches = []
@@ -151,6 +157,7 @@ class HardSchedule:
             return
         self.batches = self.plan_batches(past_coverage=True)
         self.assigned = {frame for batch in self.batches for frame in batch.frames}
+        self.deal_passes = 1 if self.batches else 0
         self.phase = "deal" if self.batches else "done"
 
     def take_batch(self) -> DealBatch | None:
@@ -185,8 +192,15 @@ class HardSchedule:
             self.batches = self.plan_batches(past_coverage=True)
         self.assigned = {frame for batch in self.batches for frame in batch.frames}
         if self.batches:
+            self.deal_passes += 1
             return "deal"
         return "done"
+
+    def deal_length(self) -> int:
+        """Words a hard generator pass should ask for. Zero unless this visit is dealing."""
+        if not self.hard or self.phase != "deal" or self.deal_passes < 1:
+            return 0
+        return HARD_LENGTH + HARD_LENGTH_STEP * (self.deal_passes - 1)
 
     def displayed(self, frame: str) -> float | None:
         """Best displayed probability on this frame, whatever tool wrote the line."""

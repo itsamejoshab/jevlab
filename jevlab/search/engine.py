@@ -851,9 +851,20 @@ class Engine:
     def open_hard_schedule(self) -> HardSchedule:
         self.schedule = HardSchedule.from_engine(self)
         self.schedule.begin()
+        self.apply_hard_deal_length()
         if self.schedule.phase == "grow":
             self.open_growth_room()
         return self.schedule
+
+    def apply_hard_deal_length(self) -> None:
+        """Let a hard generator pass write as long as this streak is asking for."""
+        if self.schedule is None:
+            return
+        length = self.schedule.deal_length()
+        if length <= 0:
+            return
+        self.length_cap = max(self.length_cap, length)
+        self.grow_cap = max(self.grow_cap, length)
 
     def refresh_hard_lines(self) -> None:
         if self.schedule is None:
@@ -940,6 +951,7 @@ class Engine:
         ran = 0
         pass_calls = self.oracle.calls if self.oracle else 0
         while self.schedule.phase == "deal":
+            self.apply_hard_deal_length()
             if await self.confirm_contenders():
                 continue
             if not self.schedule.batches:
@@ -954,7 +966,14 @@ class Engine:
                     self.emit("log", message=f"moving on: {self.end_reason}")
                     break
                 pass_calls = self.oracle.calls if self.oracle else 0
-                self.emit("log", message="[hard] nothing within 0.05 of the leader; dealing another pass")
+                length = self.schedule.deal_length()
+                self.emit(
+                    "log",
+                    message=(
+                        "[hard] nothing within 0.05 of the leader; dealing another pass"
+                        + (f" at about {length} words" if length else "")
+                    ),
+                )
                 continue
             batch = self.schedule.take_batch()
             arm = self._generator_arm(batch.model)

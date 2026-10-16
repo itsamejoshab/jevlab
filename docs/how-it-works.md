@@ -2,7 +2,7 @@
 
 This is the technical account of the jobs listed in the [README](../README.md). The formulas live on their own pages, linked from the section that uses them, and collected under [The math](#the-math).
 
-A phrase is a Strict chain: Latin letters and digits, no punctuation, each word lowercase, ALL CAPS, or Capitalized, at most 16 characters per word and 60 words per phrase. Choice questions also reject a word that is a fragment of an answer name. `jevlab/rules/strict.py` checks this before anything is scored.
+A phrase is a Strict chain: Latin letters and digits, no punctuation, each word lowercase, ALL CAPS, or Capitalized, at most 16 characters per word. Choice questions also reject a word that is a fragment of an answer name. `jevlab/rules/strict.py` checks this before anything is scored. The site does not cap how many words a phrase may contain.
 
 ## One round
 

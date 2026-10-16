@@ -1,14 +1,17 @@
 """The submit screen lays the log out as one block per phrase."""
 
 import asyncio
+import threading
+import time
 
 from textual.app import App, ComposeResult
 
 from jevlab.config import EDITION, EDITIONS
 from jevlab.db import DB
-from jevlab.modes import HIGHEST
+from jevlab.modes import GOLF, HIGH_SCORES, HIGHEST, STRICT
+from jevlab.publish import TURBO_BOARDS, XPOST_BANNER, publish
 from jevlab.tui.pickers import PublishScreen, SnapshotScreen
-from jevlab.tui.publish_log import PublishLog
+from jevlab.tui.publish_log import TURBO_BANNER, PublishLog
 
 
 def test_every_edition_banner_has_glyphs():
@@ -68,15 +71,20 @@ def test_publish_log_groups_a_phrase_and_marks_a_better_roll():
     assert done.splitlines()[-1] == "1/2 on top  · nothing sent"
 
 
-def test_publish_log_grows_the_denominator_for_lines_past_the_batch():
+def test_publish_log_sets_extra_cross_posts_aside_from_the_counter():
     log = PublishLog()
     log.render("publishing 1 line(s), re-rolls 5")
     first = log.render("\n== cereal [Strict Shortest] 0.910/2w: exactly more").plain
     assert "▸ 1/1  " in first
+    banner = log.render("---RUNNING ADD'L XPOST OPS---")
+    assert banner.plain == "---RUNNING ADD'L XPOST OPS---"
+    assert any("yellow" in str(span.style) for span in banner.spans)
     extra = log.render("\n== cereal [Golf Highest] 0.910/12c: exactly more").plain
-    assert "▸ 2/2  " in extra
+    assert "▸ 1/1" not in extra and "▸ 2/2" not in extra
+    assert "Golf Highest" in extra
     another = log.render("\n== pigeons [Golf Shortest] 0.779/5c: Books").plain
-    assert "▸ 3/3  " in another
+    assert "▸ 3/3" not in another
+    assert "Golf Shortest" in another
 
 
 def test_publish_log_keeps_lines_it_does_not_recognize():
@@ -114,6 +122,40 @@ def test_publish_log_chain_and_oracle_stay_on_one_phrase():
     miss = log.render("  -> failed: oracle re-check 0.905 no longer beats empty board").plain
     assert miss.startswith("  ✗ failed:")
     assert miss.endswith("cereal")
+
+
+def test_publish_log_turbo_warns_without_changing_the_opening_line():
+    log = PublishLog()
+    log.turbo = True
+    assert str(TURBO_BOARDS) in TURBO_BANNER
+    banner = log.render(TURBO_BANNER)
+    assert banner.plain == TURBO_BANNER
+    assert any("yellow" in str(span.style) for span in banner.spans)
+    opening = log.render("publishing 2 line(s), re-rolls 3")
+    assert opening.plain == "2 lines · 3 re-rolls"
+    assert "Turbo" not in opening.plain
+    assert not log.extends_chain
+
+
+def test_publish_log_turbo_keeps_each_chain_word_and_each_questions_best():
+    log = PublishLog()
+    log.turbo = True
+    log.render("[1/2] == cereal [Strict Highest] 0.910/2w: exactly more")
+    first = log.render("[1/2] + exactly           0.40")
+    assert "[1/2]" in first.plain and "+exactly" in first.plain
+    assert not log.extends_chain
+    other = log.render("[2/2] + other             0.20")
+    assert "[2/2]" in other.plain and "+other" in other.plain
+    assert "+exactly" not in other.plain
+    assert any("cyan" in str(span.style) for span in other.spans)
+    low = log.render("[1/2] re-roll 1: 0.40 (best 0.40)")
+    assert "green" not in "".join(str(span.style) for span in low.spans)
+    high = log.render("[1/2] re-roll 2: 0.80 (best 0.80)")
+    assert any("green" in str(span.style) for span in high.spans)
+    # Question 2 has its own best. 0.60 beats its 0.50, not question 1's 0.80.
+    log.render("[2/2] re-roll 1: 0.50 (best 0.50)")
+    caught_up = log.render("[2/2] re-roll 2: 0.60 (best 0.60)")
+    assert any("green" in str(span.style) for span in caught_up.spans)
 
 
 def test_publish_word_by_word_defaults_off_and_is_sent(monkeypatch, tmp_path):
@@ -457,3 +499,208 @@ def test_snapshot_switches_each_edition_then_returns(monkeypatch):
         ("snap", "laya", "db", ("strict_chain",)),
         ("on", "jev"),
     ]
+
+
+def _question(db: DB, slug: str, revision: str) -> None:
+    db.execute(
+        "INSERT INTO questions VALUES (?, 0, ?, 'Is it rude?', '', 'noul', 'yes', 0.2, 0.5, 'm', '{}', '{}')",
+        (slug, revision),
+    )
+
+
+def _entry(slug: str, phrase: str) -> dict:
+    return {
+        "slug": slug,
+        "mode": STRICT,
+        "phrase": phrase,
+        "p_mean": 0.99,
+        "p_lcb": 0.9,
+        "units": len(phrase.split()),
+        "board": HIGH_SCORES,
+        "target": "",
+        "status": "queued",
+    }
+
+
+class _DrySite:
+    def __init__(self, questions: list[dict]):
+        self.questions = questions
+        self.lock = threading.Lock()
+        self.entered: list[str] = []
+        self.second = threading.Event()
+        self.overlapped = False
+        self.depth = 0
+
+    def viewer(self):
+        return {"player": {"user": {"id": "me"}}}
+
+    def menu(self):
+        return {"questions": self.questions}
+
+    def save_session(self):
+        return None
+
+    def leaderboards(self, revision_id: str, _mode: str) -> dict:
+        with self.lock:
+            self.depth += 1
+            self.entered.append(revision_id)
+            if self.depth > 1:
+                self.overlapped = True
+            n = len(self.entered)
+        if n == 1:
+            self.overlapped = self.second.wait(1)
+        else:
+            self.second.set()
+        try:
+            time.sleep(0.05)
+            return {"leaderboards": {}}
+        finally:
+            with self.lock:
+                self.depth -= 1
+
+
+def test_publish_turbo_overlaps_questions_and_keeps_one_slug_in_order(tmp_path):
+    db = DB(tmp_path / "t.db")
+    _question(db, "alpha", "ra")
+    _question(db, "beta", "rb")
+    site = _DrySite(
+        [
+            {"slug": "alpha", "revisionId": "ra", "kind": "noul", "goal": "yes"},
+            {"slug": "beta", "revisionId": "rb", "kind": "noul", "goal": "yes"},
+        ]
+    )
+    lines: list[str] = []
+    lock = threading.Lock()
+
+    def write(message: str) -> None:
+        with lock:
+            lines.append(message)
+
+    code = publish(
+        dry_run=True,
+        rerolls=0,
+        entries=[_entry("alpha", "alpha beta"), _entry("beta", "gamma delta")],
+        log=write,
+        crosspost=False,
+        turbo=True,
+        db=db,
+        client=site,
+        lock_path=tmp_path / "lock",
+    )
+    assert code == 0
+    assert site.overlapped
+    text = "\n".join(lines)
+    assert "[1/2]" in text and "[2/2]" in text
+    assert "alpha beta" in text and "gamma delta" in text
+
+    same = _DrySite([{"slug": "alpha", "revisionId": "ra", "kind": "noul", "goal": "yes"}])
+    ordered: list[str] = []
+
+    def write_one(message: str) -> None:
+        ordered.append(message)
+
+    publish(
+        dry_run=True,
+        rerolls=0,
+        entries=[_entry("alpha", "alpha beta"), _entry("alpha", "gamma delta")],
+        log=write_one,
+        crosspost=False,
+        turbo=True,
+        db=db,
+        client=same,
+        lock_path=tmp_path / "lock-one",
+    )
+    joined = "\n".join(ordered)
+    assert joined.find("alpha beta") < joined.find("gamma delta")
+    assert not same.overlapped
+    assert "[1/1]" in joined
+
+
+def test_publish_runs_extra_cross_posts_after_the_numbered_batch(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    site = _DrySite([{"slug": "alpha", "revisionId": "ra", "kind": "noul", "goal": "yes"}])
+    monkeypatch.setattr("jevlab.publish.publish_entry", lambda *args, **kwargs: "won")
+    monkeypatch.setattr("jevlab.publish.sweep_banned", lambda *args, **kwargs: [])
+
+    def followups(_db, slug, log):
+        log("  cross-posting 1 line(s) to Golf")
+        return [_entry(slug, "golf line") | {"mode": GOLF, "units": 9}]
+
+    monkeypatch.setattr("jevlab.publish.golf_followups", followups)
+    lines: list[str] = []
+    publish(
+        rerolls=0,
+        entries=[_entry("alpha", "alpha beta")],
+        log=lines.append,
+        turbo=True,
+        db=db,
+        client=site,
+        lock_path=tmp_path / "lock",
+    )
+    text = "\n".join(lines)
+    banner = text.find(XPOST_BANNER)
+    assert banner > text.find("[1/1]")
+    assert banner < text.find("golf line")
+    golf = next(line for line in lines if "golf line" in line)
+    assert "[1/1]" not in golf and "[2/" not in golf
+
+
+def test_publish_turbo_defaults_off_and_the_log_starts_with_the_warning(monkeypatch, tmp_path):
+    from textual.widgets.selection_list import Selection
+
+    from jevlab.boards import Standing
+
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "t.db"))
+    monkeypatch.setattr("jevlab.tui.pickers.standings", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.crosspost.picks", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.activity.log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("jevlab.tui.pickers.vault.set_status", lambda *args, **kwargs: None)
+    calls: list[dict] = []
+
+    def fake_publish(**kwargs):
+        calls.append(kwargs)
+        return 0
+
+    monkeypatch.setattr("jevlab.publish.publish", fake_publish)
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(PublishScreen(HIGHEST))
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(140, 42)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            turbo = screen.query_one("#turbo")
+            assert turbo.value is False
+            assert str(turbo.label) == "Turbo"
+            entry = {
+                "slug": "cereal",
+                "mode": STRICT,
+                "phrase": "alpha beta",
+                "p_mean": 0.9,
+                "p_lcb": 0.8,
+                "spread": 0.01,
+                "n": 5,
+                "units": 2,
+                "status": "candidate",
+            }
+            standing = Standing("cereal", "Cereal", "noul", "yes", None, None, entry, False, True)
+            screen.rows = [standing]
+            screen.query_one("#pub-picker").add_option(Selection("cereal", standing.key, True))
+            turbo.value = True
+            screen.start_publish()
+            for _ in range(20):
+                await pilot.pause()
+                if calls and not screen.busy:
+                    break
+            assert calls[0]["turbo"] is True
+            text = "\n".join(line.text for line in screen.query_one("#pub-log").lines)
+            assert text.strip().startswith("Turbo is on")
+            assert text.find("Turbo is on") < text.find("line")
+
+    asyncio.run(check())

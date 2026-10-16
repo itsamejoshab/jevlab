@@ -12,13 +12,14 @@ from __future__ import annotations
 import fcntl
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .db import DB
 from .modes import CASUAL, GOLF, HIGH_SCORES, SHORTEST_YES, STRICT
 from .objective import Leader, board_leader, objective_for
-from .publish import LOCK_PATH, SENTENCE_WORDS, WordRejected, turn_with_retry
+from .publish import LOCK_PATH, SENTENCE_WORDS, TURBO_BOARDS, WordRejected, turn_with_retry
 from .rules import RuleError, check_word, drop_clashing, option_clash
 from .rules.banned import BannedPhrase, hit, tokens
 from .site import SiteClient, SiteError, active_words
@@ -542,6 +543,101 @@ class DefenseRun:
     skipped: int
     planned: int = 0
 
+    def __add__(self, other: DefenseRun) -> DefenseRun:
+        return DefenseRun(
+            self.boards + other.boards,
+            self.posted + other.posted,
+            self.skipped + other.skipped,
+            self.planned + other.planned,
+        )
+
+
+def _tagged(log, index: int, total: int):
+    """Prefix each line so overlapping boards can still be told apart."""
+    mark = f"[{index}/{total}]"
+
+    def write(message: str) -> None:
+        lines = str(message).splitlines()
+        if not lines:
+            log(message)
+            return
+        log("\n".join(f"{mark} {line}" if line.strip() else line for line in lines))
+
+    return write
+
+
+def _defend_one(
+    db: DB,
+    client: SiteClient,
+    menu: dict,
+    me: str,
+    ranked: list[str],
+    slug: str,
+    mode: str,
+    dry_run: bool,
+    word_by_word: bool,
+    log,
+    halt,
+) -> DefenseRun:
+    """Post decoys for one board. The caller decides whether to start it."""
+    live = menu.get(slug)
+    if live is None:
+        log(f"\n== {slug} [{mode}] question is gone")
+        return DefenseRun(0, 0, 1)
+    try:
+        payload = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
+        impacts = [row for row in (client.words(live["revisionId"], mode) or []) if isinstance(row, dict)]
+    except SiteError as error:
+        log(f"\n== {slug} [{mode}] {error}")
+        return DefenseRun(0, 0, 1)
+    question = _live_question(live)
+    choices = list(live.get("choices") or [])
+    high_rows = drop_clashing(list(payload.get(HIGH_SCORES) or []), choices, me)
+    short_rows = drop_clashing(list(payload.get(SHORTEST_YES) or []), choices, me)
+    high_lead, high_phrase = _hold(high_rows, me, question, HIGH_SCORES)
+    short_lead, short_phrase = _hold(short_rows, me, question, SHORTEST_YES)
+    where = " ".join(name for lead, name in ((high_lead, "Highest"), (short_lead, "Shortest")) if lead)
+    log(f"\n== {slug} [{mode}] {where or 'not leading'}")
+    if not high_lead and not short_lead:
+        log("  no longer leading; skipping")
+        return DefenseRun(0, 0, 1)
+    phrases = [phrase for lead, phrase in ((high_lead, high_phrase), (short_lead, short_phrase)) if lead and phrase]
+    decided = plan_board(
+        impacts,
+        ranked,
+        phrases,
+        _posted(db, mode).get(slug, set()),
+        choices,
+        live.get("title") or live.get("instructions") or "",
+    )
+    if decided.status == BLIND:
+        log("  leading phrase is missing; skipping so we do not repost our own words")
+        return DefenseRun(0, 0, 1)
+    if not decided.decoys:
+        log("  nothing new to add")
+        return DefenseRun(0, 0, 1)
+    if decided.status == QUIET:
+        log(f"  crowded ({decided.answer_words} of {decided.word_count} listed words are our answer); skipping")
+        return DefenseRun(0, 0, 1)
+    sentence = " ".join(decided.decoys)
+    if dry_run:
+        log(f"  {sentence}\n  dry run.")
+        return DefenseRun(0, 0, 0, 1)
+    how = " one word at a time" if word_by_word else ""
+    log(f"  {sentence}\n  submitting...{how}")
+    attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
+    try:
+        _attempt, planted = _post_words(client, attempt, list(decided.decoys), log, halt, word_by_word=word_by_word)
+    except SiteError as error:
+        log(f"  {error}")
+        return DefenseRun(0, 0, 1)
+    for word in planted:
+        _remember(db, slug, mode, word)
+    if planted:
+        log("  done.")
+        return DefenseRun(1, len(planted), 0)
+    return DefenseRun(0, 0, 1)
+
 
 def defend(
     jobs: list[tuple[str, str]],
@@ -552,10 +648,12 @@ def defend(
     client: SiteClient | None = None,
     lock_path=None,
     word_by_word: bool = False,
+    turbo: bool = False,
 ) -> DefenseRun:
     """Post decoys for each (slug, play mode). Live words and the live lead are re-checked first.
 
     Decoys go up as a sentence unless `word_by_word` is set, which appends one word per turn.
+    `turbo` posts up to TURBO_BOARDS boards at once. Words on one board stay in order.
     """
     db = db or DB()
     path = lock_path or LOCK_PATH
@@ -576,87 +674,48 @@ def defend(
             log("not signed in: put a session cookie in session.json or JEV_COOKIE")
             return DefenseRun(0, 0, len(jobs))
         menu = {q["slug"]: q for q in client.menu().get("questions") or []}
-        posted_words = 0
-        touched = 0
-        skipped = 0
-        planned = 0
-        ranked_by_mode: dict[str, list[str]] = {}
-        for index, (slug, mode) in enumerate(jobs, start=1):
+        modes = {mode for _, mode in jobs}
+        ranked_by_mode = {mode: lexicon(list(_impacts(db, mode).values())) for mode in modes}
+        if turbo:
+            _thesaurus()
+
+        def one(item: tuple[int, tuple[str, str]]) -> tuple[bool, DefenseRun]:
+            index, (slug, mode) = item
             if halt and halt():
-                log("stopped")
-                skipped += len(jobs) - index + 1
-                break
-            live = menu.get(slug)
-            if live is None:
-                log(f"\n== {slug} [{mode}] question is gone")
-                skipped += 1
-                continue
-            try:
-                payload = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
-                impacts = [row for row in (client.words(live["revisionId"], mode) or []) if isinstance(row, dict)]
-            except SiteError as error:
-                log(f"\n== {slug} [{mode}] {error}")
-                skipped += 1
-                continue
-            question = _live_question(live)
-            choices = list(live.get("choices") or [])
-            high_rows = drop_clashing(list(payload.get(HIGH_SCORES) or []), choices, me)
-            short_rows = drop_clashing(list(payload.get(SHORTEST_YES) or []), choices, me)
-            high_lead, high_phrase = _hold(high_rows, me, question, HIGH_SCORES)
-            short_lead, short_phrase = _hold(short_rows, me, question, SHORTEST_YES)
-            where = " ".join(name for lead, name in ((high_lead, "Highest"), (short_lead, "Shortest")) if lead)
-            log(f"\n== {slug} [{mode}] {where or 'not leading'}")
-            if not high_lead and not short_lead:
-                log("  no longer leading; skipping")
-                skipped += 1
-                continue
-            phrases = [
-                phrase for lead, phrase in ((high_lead, high_phrase), (short_lead, short_phrase)) if lead and phrase
-            ]
-            if mode not in ranked_by_mode:
-                ranked_by_mode[mode] = lexicon(list(_impacts(db, mode).values()))
-            decided = plan_board(
-                impacts,
+                return True, DefenseRun(0, 0, 1)
+            board_log = _tagged(log, index, len(jobs)) if turbo else log
+            return False, _defend_one(
+                db,
+                client,
+                menu,
+                me,
                 ranked_by_mode[mode],
-                phrases,
-                _posted(db, mode).get(slug, set()),
-                choices,
-                live.get("title") or live.get("instructions") or "",
+                slug,
+                mode,
+                dry_run,
+                word_by_word,
+                board_log,
+                halt,
             )
-            if decided.status == BLIND:
-                log("  leading phrase is missing; skipping so we do not repost our own words")
-                skipped += 1
-                continue
-            if not decided.decoys:
-                log("  nothing new to add")
-                skipped += 1
-                continue
-            if decided.status == QUIET:
-                log(f"  crowded ({decided.answer_words} of {decided.word_count} listed words are our answer); skipping")
-                skipped += 1
-                continue
-            sentence = " ".join(decided.decoys)
-            if dry_run:
-                log(f"  {sentence}\n  dry run.")
-                planned += 1
-                continue
-            how = " one word at a time" if word_by_word else ""
-            log(f"  {sentence}\n  submitting...{how}")
-            attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
-            try:
-                _attempt, planted = _post_words(
-                    client, attempt, list(decided.decoys), log, halt, word_by_word=word_by_word
-                )
-            except SiteError as error:
-                log(f"  {error}")
-                skipped += 1
-                continue
-            for word in planted:
-                _remember(db, slug, mode, word)
-            if planted:
-                touched += 1
-                posted_words += len(planted)
-                log("  done.")
-            else:
-                skipped += 1
-        return DefenseRun(touched, posted_words, skipped, planned)
+
+        indexed = list(enumerate(jobs, start=1))
+        if turbo and len(jobs) > 1:
+            with ThreadPoolExecutor(min(TURBO_BOARDS, len(jobs))) as pool:
+                outcomes = list(pool.map(one, indexed))
+        else:
+            outcomes = []
+            for item in indexed:
+                stopped, result = one(item)
+                outcomes.append((stopped, result))
+                if stopped:
+                    break
+        total = DefenseRun(0, 0, 0)
+        stopped_any = False
+        for stopped, result in outcomes:
+            total += result
+            stopped_any = stopped_any or stopped
+        if stopped_any:
+            skipped = total.skipped + (len(jobs) - len(outcomes))
+            total = DefenseRun(total.boards, total.posted, skipped, total.planned)
+            log("stopped")
+        return total

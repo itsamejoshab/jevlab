@@ -9,6 +9,7 @@ result on its own line. Word-by-word chain edits share one line
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from rich.text import Text
 
@@ -29,6 +30,15 @@ _BORROWED = re.compile(r"^estimated from (?P<edition>\S+): posting the borrowed 
 _RESULT = re.compile(r"^-> (?P<body>.*)$")
 _FINISHED = re.compile(r"^finished: (?P<won>\d+)/(?P<total>\d+) on top(?P<tail>.*)$")
 _FALL = re.compile(r"^falling through to the next vault line: (?P<phrase>.*)$")
+_MARK = re.compile(r"^\[(?P<i>\d+)/(?P<n>\d+)\] (?P<body>.*)$")
+
+TURBO_BANNER = "Turbo is on. Up to 8 questions run at once, so this log will be mixed together and harder to follow."
+
+
+@dataclass
+class _PhraseState:
+    best: float | None = None
+    slug: str = ""
 
 
 class PublishLog:
@@ -42,8 +52,13 @@ class PublishLog:
         self.chain: Text | None = None
         self.extends_chain = False
         self._line_kind = "other"
+        self.turbo = False
+        self.xposts = False
+        self.slots: dict[int, _PhraseState] = {}
 
     def render(self, message: str) -> Text:
+        if self.turbo:
+            return self._render_turbo(message)
         was_open = self.chain is not None
         parts: list[tuple[str, Text]] = []
         for raw in str(message).splitlines():
@@ -77,6 +92,88 @@ class PublishLog:
         self.extends_chain = was_open and parts[0][0] == "chain"
         return rendered
 
+    def _render_turbo(self, message: str) -> Text:
+        """One new line per message. Chain words are not rewritten onto a shared tail."""
+        parts: list[Text] = []
+        for raw in str(message).splitlines():
+            line = raw.strip()
+            if not line:
+                parts.append(Text(""))
+                continue
+            mark = ""
+            body = line
+            slot_id = 0
+            if found := _MARK.match(line):
+                mark = f"[{found['i']}/{found['n']}]"
+                body = found["body"].strip()
+                slot_id = int(found["i"])
+            piece = self._turbo_piece(body, slot_id)
+            if piece is None:
+                continue
+            if mark:
+                tagged = Text()
+                tagged.append(f"{mark} ", style="bold cyan")
+                tagged.append_text(piece)
+                parts.append(tagged)
+            else:
+                parts.append(piece)
+        self.extends_chain = False
+        self.chain = None
+        self._line_kind = "other"
+        if not parts:
+            return Text("")
+        rendered = Text()
+        for index, piece in enumerate(parts):
+            if index:
+                rendered.append("\n")
+            rendered.append_text(piece)
+        return rendered
+
+    def _turbo_piece(self, body: str, slot_id: int) -> Text | None:
+        if body.startswith("Turbo is on") or body == "---RUNNING ADD'L XPOST OPS---":
+            return Text(body, style="bold yellow")
+        slot = self.slots.setdefault(slot_id, _PhraseState())
+        if found := _HEADER.match(body):
+            return self._turbo_header(found, slot)
+        if found := _CHAIN.match(body):
+            self._note_slot(slot, float(found["p"]))
+            style = "cyan" if found["op"] == "+" else "yellow"
+            return Text(f"  {found['op']}{found['word'].strip()}", style=style)
+        if found := _POP.match(body):
+            return Text(f"  -{found['word'].strip()}", style="yellow")
+        saved_best, saved_slug = self.best, self.slug
+        self.best, self.slug = slot.best, slot.slug
+        try:
+            return self._one(body)
+        finally:
+            slot.best = self.best
+            slot.slug = self.slug
+            self.best, self.slug = saved_best, saved_slug
+            self.chain = None
+            self._line_kind = "other"
+
+    def _turbo_header(self, found: re.Match[str], slot: _PhraseState) -> Text:
+        slot.best = None
+        slot.slug = found["slug"]
+        label = found["label"]
+        mode, _, target = label.partition(" -> ")
+        text = Text()
+        text.append("▸ ", style="bold cyan")
+        text.append(mode, style="bold cyan")
+        if target:
+            text.append("  →  ", style="dim")
+            text.append(target, style="bold")
+        text.append(f"\n  {found['slug']}", style="bold")
+        text.append(f"  {found['score']}", style="bold")
+        phrase = found["phrase"].strip()
+        if phrase:
+            text.append("\n  " + phrase)
+        return text
+
+    def _note_slot(self, slot: _PhraseState, score: float) -> None:
+        if slot.best is None or score > slot.best:
+            slot.best = score
+
     def _one(self, line: str) -> Text | None:
         self._line_kind = "other"
         if not line:
@@ -96,9 +193,13 @@ class PublishLog:
         return text
 
     def _match(self, line: str) -> Text | None:
+        if line == "---RUNNING ADD'L XPOST OPS---":
+            self.xposts = True
+            return Text(line, style="bold yellow")
         if found := _START.match(line):
             self.total = int(found["n"])
             self.count = 0
+            self.xposts = False
             text = Text()
             if found["dry"]:
                 text.append("dry run  ", style="bold yellow")
@@ -151,16 +252,19 @@ class PublishLog:
         return None
 
     def _header(self, found: re.Match[str]) -> Text:
-        self.count += 1
-        if self.total and self.count > self.total:
-            self.total = self.count
         self.best = None
         self.slug = found["slug"]
         label = found["label"]
         mode, _, target = label.partition(" -> ")
-        mark = f"{self.count}/{self.total}" if self.total else str(self.count)
         text = Text()
-        text.append(f"▸ {mark}  ", style="bold cyan")
+        if self.xposts:
+            text.append("▸ ", style="bold cyan")
+        else:
+            self.count += 1
+            if self.total and self.count > self.total:
+                self.total = self.count
+            mark = f"{self.count}/{self.total}" if self.total else str(self.count)
+            text.append(f"▸ {mark}  ", style="bold cyan")
         text.append(mode, style="bold cyan")
         if target:
             text.append("  →  ", style="dim")

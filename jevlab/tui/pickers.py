@@ -23,7 +23,7 @@ from ..search.engine import LEVELS
 from .chrome import NAMES, EditionMark
 from .copyselect import SelectableRichLog
 from .lab import LabScreen
-from .publish_log import PublishLog
+from .publish_log import TURBO_BANNER, PublishLog
 
 
 def fmt_leader(s: Standing, u: str = "w") -> str:
@@ -1068,6 +1068,9 @@ class PublishScreen(RunKeys, Screen):
                         yield Setting("Include casual proxy", False, id="casual", compact=True)
                         yield Static("strict highest on casual boards", classes="hint")
                     with Horizontal(classes="opt"):
+                        yield Setting("Turbo", False, id="turbo", compact=True)
+                        yield Static("several questions at once; the log is tagged", classes="hint")
+                    with Horizontal(classes="opt"):
                         yield Label("Re-rolls")
                         yield Input(str(default_rerolls()), id="rerolls", type="integer", compact=True)
                         gap = reroll_gap()
@@ -1232,6 +1235,10 @@ class PublishScreen(RunKeys, Screen):
             return
         log = self.query_one("#pub-log", SelectableRichLog)
         follow = log.is_vertical_scroll_end
+        if self.transcript.turbo:
+            log.write(rendered, scroll_end=follow)
+            self._chain_lines = 0
+            return
         one_line = self.transcript.chain is not None and "\n" not in rendered.plain
         if one_line and self.transcript.extends_chain:
             written = log.replace_tail(rendered, self._chain_lines, scroll_end=follow, one_line=True)
@@ -1344,15 +1351,20 @@ class PublishScreen(RunKeys, Screen):
             rerolls = fallback
         dry = self.query_one("#dry", Checkbox).value
         word_by_word = self.query_one("#by-word", Checkbox).value
+        turbo = self.query_one("#turbo", Checkbox).value
         self.begin_run()
         self.query_one("#publish", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
         self.query_one("#import-go", Button).disabled = True
+        if turbo:
+            self.transcript.turbo = True
+            self.transcript.slots.clear()
+            self.note(TURBO_BANNER)
         self.note(f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
-        self.publish_worker(entries, dry, rerolls, word_by_word)
+        self.publish_worker(entries, dry, rerolls, word_by_word, turbo)
 
     @work(thread=True, exclusive=True)
-    def publish_worker(self, entries: list[dict], dry: bool, rerolls: int, word_by_word: bool) -> None:
+    def publish_worker(self, entries: list[dict], dry: bool, rerolls: int, word_by_word: bool, turbo: bool) -> None:
         from ..publish import publish
 
         results = []
@@ -1373,6 +1385,7 @@ class PublishScreen(RunKeys, Screen):
                 long_rerolls=0 if default_rerolls() == 0 else LONG_REROLLS,
                 halt=self.gate,
                 word_by_word=word_by_word,
+                turbo=turbo,
             )
         except Exception as error:
             write(f"publisher crashed: {error!r}")
@@ -1390,6 +1403,7 @@ class PublishScreen(RunKeys, Screen):
                 )
 
         def done() -> None:
+            self.transcript.turbo = False
             if self.finish_run():
                 return
             self.query_one("#publish", Button).disabled = False

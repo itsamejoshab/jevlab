@@ -20,8 +20,10 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import threading
 import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from . import vault
@@ -35,6 +37,10 @@ from .rules.banned import BannedPhrase, hit as hit_ban, note as note_ban
 from .site import SiteClient, SiteError, active_words
 
 LOCK_PATH = DATA / "publish.lock"
+# How many questions Turbo posts at once. The submit and defend screens name this number in the log banner.
+TURBO_BOARDS = 8
+# Golf lines discovered after a Strict win. They are not part of the numbered batch.
+XPOST_BANNER = "---RUNNING ADD'L XPOST OPS---"
 # A Shortest-yes gamble that lands 1 roll in 5 still hits within 13 rolls (build + 12 re-rolls) ~95% of the time.
 GAMBLE_REROLLS = 12
 # How long to keep reading a board that has not listed the score we just posted.
@@ -158,8 +164,7 @@ def append_texts(words: list[str], *, hold_last: bool, group: int = 1) -> list[s
         pieces.append(words[-1])
         return pieces
     return [
-        words[start] if step == 1 else " ".join(words[start : start + step])
-        for start in range(0, len(words), step)
+        words[start] if step == 1 else " ".join(words[start : start + step]) for start in range(0, len(words), step)
     ]
 
 
@@ -843,6 +848,33 @@ def golf_followups(db: DB, slug: str, log) -> list[dict]:
     return [e for e in vault.queued() if e["mode"] == GOLF and e["slug"] == slug]
 
 
+def _tagged(log, index: int, total: int):
+    """Prefix each line so overlapping questions can still be told apart."""
+    mark = f"[{index}/{total}]"
+
+    def write(message: str) -> None:
+        lines = str(message).splitlines()
+        if not lines:
+            log(message)
+            return
+        log("\n".join(f"{mark} {line}" if line.strip() else line for line in lines))
+
+    return write
+
+
+def _slug_groups(entries: list[dict]) -> list[list[dict]]:
+    """One group per question, in first-seen order. Lines for a question stay in that order."""
+    order: list[str] = []
+    buckets: dict[str, list[dict]] = {}
+    for entry in entries:
+        slug = entry["slug"]
+        if slug not in buckets:
+            order.append(slug)
+            buckets[slug] = []
+        buckets[slug].append(entry)
+    return [buckets[slug] for slug in order]
+
+
 def publish(
     dry_run: bool = False,
     rerolls: int | None = None,
@@ -858,11 +890,17 @@ def publish(
     crosspost: bool = True,
     halt=None,
     word_by_word: bool = False,
+    turbo: bool = False,
+    db: DB | None = None,
+    client: SiteClient | None = None,
+    lock_path=None,
 ) -> int:
     """Publish queued entries (or exactly `entries`), from every board and play mode unless `board` or `mode`
     is given. With `crosspost`, every Strict line that lands (or already holds) its board is followed by the
     question's Golf cross-posts, queued and published in the same run.
     `word_by_word` sends Strict and Casual one word per turn. Golf stays one phrase.
+    `turbo` posts up to TURBO_BOARDS questions at once. A fall-through stays on that question's thread.
+    Golf lines found after a Strict win wait until the numbered batch is done, then run under a banner.
     on_result(entry, result_text) fires per entry."""
     from .config import default_rerolls
 
@@ -870,8 +908,9 @@ def publish(
         rerolls = default_rerolls()
     if long_rerolls is None:
         long_rerolls = 0 if default_rerolls() == 0 else 5
-    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(LOCK_PATH, "w") as lock:
+    path = lock_path or LOCK_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -886,135 +925,190 @@ def publish(
                 sweep_banned(log)
             log("nothing queued. `jevlab vault queue --q <slug> --best` to queue a winner")
             return 0
-        db = DB()
-        client = SiteClient(delay=delay)
+        db = db or DB()
+        client = client or SiteClient(delay=delay)
         me = ((client.viewer().get("player") or {}).get("user") or {}).get("id") or ""
         if not me and not dry_run:
             log("not signed in: put a session cookie in session.json or JEV_COOKIE")
             return 1
         questions = {q["slug"]: q for q in client.menu().get("questions") or []}
-        failures = 0
         entries = list(entries)
-        seen = {board_key(e) + (e["phrase"],) for e in entries}
-        crossposted: set[str] = set()
-        fallbacks: dict[tuple[str, str, str, str], int] = {}
-        wiped: dict[str, set[str]] = {}
+        announced = False
+        stop_lock = threading.Lock()
+        result_lock = threading.Lock()
+        sweep_lock = threading.Lock()
+        extra_lock = threading.Lock()
+        extras: list[dict] = []
+
+        def sweep(board_log, indent: str = "") -> None:
+            """One sweep at a time. It rewrites every vault file, so two questions must not do it together."""
+            with sweep_lock:
+                sweep_banned(board_log, indent)
+
+        def note_stopped() -> None:
+            nonlocal announced
+            with stop_lock:
+                if announced:
+                    return
+                announced = True
+            log("stopped")
+
+        def report(entry: dict, result: str) -> None:
+            if on_result is None:
+                return
+            with result_lock:
+                on_result(entry, result)
 
         def stopped() -> bool:
             return bool(halt and halt())
 
-        for entry in entries:
-            if stopped():
-                log("stopped")
-                break
-            if entry["phrase"] in wiped.get(entry["slug"], ()):
-                log(f"\n== {entry['slug']}: skipped {entry['phrase']}")
-                log("  removed with the other lines scored against the wrong goal")
-                continue
-            game_mode = from_board(entry.get("board"), entry.get("mode"))
-            aimed = f" -> {entry['target']}" if entry.get("target") else ""
-            log(
-                f"\n== {entry['slug']} [{game_mode.label}{aimed}] "
-                f"{entry['p_mean']:.3f}/{entry['units']}{game_mode.unit_abbr}: {entry['phrase']}"
-            )
-            try:
-                result = publish_entry(
-                    db,
-                    client,
-                    entry,
-                    questions,
-                    me,
-                    dry_run,
-                    rerolls,
-                    verify,
-                    log,
-                    long_rerolls,
-                    word_by_word=word_by_word,
-                )
-                log(f"  -> {result}")
-            except BannedPhrase as error:
-                result = f"banned: {error}"
-                log(f"  -> {result}")
-                if error.named:
-                    log(f"  recorded {error.named!r}; its words stay usable")
-                else:
-                    log("  server did not name the span; not adding a ban")
-                if not dry_run:
-                    if error.named:
-                        sweep_banned(log, "  ")
-                    vault.set_status(
-                        entry["slug"],
-                        entry["mode"],
-                        entry["phrase"],
-                        "failed",
-                        entry.get("board") or HIGH_SCORES,
-                        target=entry.get("target") or "",
-                        detail=str(error),
-                    )
-                    key = board_key(entry)
-                    fallback = ban_fall_through(entry, fallbacks.get(key, 0), log)
-                    if fallback is None:
-                        failures += 1
-                    elif stopped():
-                        log("  stopped; the next line stays queued")
-                    else:
-                        fallbacks[key] = fallbacks.get(key, 0) + 1
-                        seen.add(key + (fallback["phrase"],))
-                        entries.append(fallback)
-                else:
-                    failures += 1
-            except WordRejected as error:
-                result = f"rejected: {error}"
-                log(f"  -> {result}")
-                if not dry_run:
-                    key = board_key(entry)
-                    fallback = reject_and_fall_through(entry, error, fallbacks.get(key, 0), log)
-                    if fallback is None:
-                        failures += 1
-                    elif stopped():
-                        log("  stopped; the next line stays queued")
-                    else:
-                        fallbacks[key] = fallbacks.get(key, 0) + 1
-                        seen.add(key + (fallback["phrase"],))
-                        entries.append(fallback)
-                else:
-                    failures += 1
-            except WrongGoal as error:
-                failures += 1
-                result = f"failed: {error}"
-                log(f"  -> {result}")
-                wiped.setdefault(error.slug, set()).update(error.phrases)
-            except (PublishError, SiteError) as error:
-                failures += 1
-                result = f"failed: {error}"
-                log(f"  -> {result}")
-                if not dry_run:
-                    vault.set_status(
-                        entry["slug"],
-                        entry["mode"],
-                        entry["phrase"],
-                        "failed",
-                        entry.get("board") or HIGH_SCORES,
-                        target=entry.get("target") or "",
-                        detail=str(error),
-                    )
-            if on_result:
-                on_result(entry, result)
-            landed = result.startswith("won") or result == "already"
-            if crosspost and not dry_run and landed and entry["mode"] == STRICT and entry["slug"] not in crossposted:
-                crossposted.add(entry["slug"])
-                followups = golf_followups(db, entry["slug"], log)
+        def run_entries(batch: list[dict], board_log) -> int:
+            failures = 0
+            pending = list(batch)
+            seen = {board_key(entry) + (entry["phrase"],) for entry in pending}
+            crossposted: set[str] = set()
+            fallbacks: dict[tuple[str, str, str, str], int] = {}
+            wiped: dict[str, set[str]] = {}
+            for entry in pending:
                 if stopped():
-                    log("  stopped; Golf lines stay queued")
+                    note_stopped()
                     break
-                for golf in followups:
-                    key = board_key(golf) + (golf["phrase"],)
-                    if key not in seen:
-                        seen.add(key)
-                        entries.append(golf)
-            elif stopped():
-                log("stopped")
-                break
+                if entry["phrase"] in wiped.get(entry["slug"], ()):
+                    board_log(f"\n== {entry['slug']}: skipped {entry['phrase']}")
+                    board_log("  removed with the other lines scored against the wrong goal")
+                    continue
+                game_mode = from_board(entry.get("board"), entry.get("mode"))
+                aimed = f" -> {entry['target']}" if entry.get("target") else ""
+                board_log(
+                    f"\n== {entry['slug']} [{game_mode.label}{aimed}] "
+                    f"{entry['p_mean']:.3f}/{entry['units']}{game_mode.unit_abbr}: {entry['phrase']}"
+                )
+                try:
+                    result = publish_entry(
+                        db,
+                        client,
+                        entry,
+                        questions,
+                        me,
+                        dry_run,
+                        rerolls,
+                        verify,
+                        board_log,
+                        long_rerolls,
+                        word_by_word=word_by_word,
+                    )
+                    board_log(f"  -> {result}")
+                except BannedPhrase as error:
+                    result = f"banned: {error}"
+                    board_log(f"  -> {result}")
+                    if error.named:
+                        board_log(f"  recorded {error.named!r}; its words stay usable")
+                    else:
+                        board_log("  server did not name the span; not adding a ban")
+                    if not dry_run:
+                        if error.named:
+                            sweep(board_log, "  ")
+                        vault.set_status(
+                            entry["slug"],
+                            entry["mode"],
+                            entry["phrase"],
+                            "failed",
+                            entry.get("board") or HIGH_SCORES,
+                            target=entry.get("target") or "",
+                            detail=str(error),
+                        )
+                        key = board_key(entry)
+                        fallback = ban_fall_through(entry, fallbacks.get(key, 0), board_log)
+                        if fallback is None:
+                            failures += 1
+                        elif stopped():
+                            board_log("  stopped; the next line stays queued")
+                        else:
+                            fallbacks[key] = fallbacks.get(key, 0) + 1
+                            seen.add(key + (fallback["phrase"],))
+                            pending.append(fallback)
+                    else:
+                        failures += 1
+                except WordRejected as error:
+                    result = f"rejected: {error}"
+                    board_log(f"  -> {result}")
+                    if not dry_run:
+                        key = board_key(entry)
+                        fallback = reject_and_fall_through(entry, error, fallbacks.get(key, 0), board_log)
+                        if fallback is None:
+                            failures += 1
+                        elif stopped():
+                            board_log("  stopped; the next line stays queued")
+                        else:
+                            fallbacks[key] = fallbacks.get(key, 0) + 1
+                            seen.add(key + (fallback["phrase"],))
+                            pending.append(fallback)
+                    else:
+                        failures += 1
+                except WrongGoal as error:
+                    failures += 1
+                    result = f"failed: {error}"
+                    board_log(f"  -> {result}")
+                    wiped.setdefault(error.slug, set()).update(error.phrases)
+                except (PublishError, SiteError) as error:
+                    failures += 1
+                    result = f"failed: {error}"
+                    board_log(f"  -> {result}")
+                    if not dry_run:
+                        vault.set_status(
+                            entry["slug"],
+                            entry["mode"],
+                            entry["phrase"],
+                            "failed",
+                            entry.get("board") or HIGH_SCORES,
+                            target=entry.get("target") or "",
+                            detail=str(error),
+                        )
+                report(entry, result)
+                landed = result.startswith("won") or result == "already"
+                if (
+                    crosspost
+                    and not dry_run
+                    and landed
+                    and entry["mode"] == STRICT
+                    and entry["slug"] not in crossposted
+                ):
+                    crossposted.add(entry["slug"])
+                    followups = golf_followups(db, entry["slug"], board_log)
+                    if stopped():
+                        board_log("  stopped; Golf lines stay queued")
+                        break
+                    for golf in followups:
+                        key = board_key(golf) + (golf["phrase"],)
+                        if key not in seen:
+                            seen.add(key)
+                            with extra_lock:
+                                extras.append(golf)
+                elif stopped():
+                    note_stopped()
+                    break
+            return failures
+
+        if turbo:
+            groups = _slug_groups(entries)
+
+            def run_group(item: tuple[int, list[dict]]) -> int:
+                index, batch = item
+                return run_entries(batch, _tagged(log, index, len(groups)))
+
+            if len(groups) > 1:
+                with ThreadPoolExecutor(min(TURBO_BOARDS, len(groups))) as pool:
+                    failures = sum(pool.map(run_group, enumerate(groups, start=1)))
+            else:
+                failures = run_group((1, groups[0]))
+        else:
+            failures = run_entries(entries, log)
+        if extras:
+            if halt and halt():
+                log("  stopped; Golf lines stay queued")
+            else:
+                log(XPOST_BANNER)
+                failures += run_entries(extras, log)
         if not dry_run:
             sweep_banned(log)
         client.save_session()

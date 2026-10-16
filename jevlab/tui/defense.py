@@ -20,6 +20,7 @@ from ..modes import CASUAL, GOLF
 from .chrome import EditionMark
 from .copyselect import SelectableRichLog
 from .pickers import RunKeys, Setting
+from .publish_log import TURBO_BANNER
 
 
 def _mode_name(play_mode: str) -> str:
@@ -31,6 +32,7 @@ def _mode_name(play_mode: str) -> str:
 
 
 _OPENING = re.compile(r"^(?:DRY RUN: )?defending (\d+) board")
+_MARK = re.compile(r"^\[(\d+/\d+)\] (.*)$")
 
 
 class DefenseLog:
@@ -53,6 +55,13 @@ class DefenseLog:
 
     def _line(self, raw: str) -> Text:
         line = raw.strip()
+        if line.startswith("Turbo is on"):
+            return Text(line, style="bold yellow")
+        if match := _MARK.match(line):
+            text = Text()
+            text.append(f"[{match.group(1)}] ", style="bold cyan")
+            text.append(match.group(2))
+            return text
         if match := _OPENING.match(line):
             self.total = int(match.group(1))
             self.count = 0
@@ -122,6 +131,9 @@ class DefenseScreen(RunKeys, Screen):
                     with Horizontal(classes="opt"):
                         yield Setting("Include casual", False, id="casual", compact=True)
                         yield Static("casual keeps its own word list", classes="hint")
+                    with Horizontal(classes="opt"):
+                        yield Setting("Turbo", False, id="turbo", compact=True)
+                        yield Static("several questions at once; the log is tagged", classes="hint")
                 yield Static(id="def-help")
                 yield SelectionList[str](id="def-picker")
             yield SelectableRichLog(id="def-log", wrap=True, markup=False, max_lines=2000)
@@ -183,19 +195,22 @@ class DefenseScreen(RunKeys, Screen):
             return
         dry = self.query_one("#dry", Checkbox).value
         word_by_word = self.query_one("#by-word", Checkbox).value
+        turbo = self.query_one("#turbo", Checkbox).value
         self.begin_run()
         self.query_one("#defend", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
+        if turbo:
+            self.note(TURBO_BANNER)
         self.note(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
-        self.worker(jobs, dry, word_by_word)
+        self.worker(jobs, dry, word_by_word, turbo)
 
     @work(thread=True, exclusive=True)
-    def worker(self, jobs: list[tuple[str, str]], dry: bool, word_by_word: bool) -> None:
+    def worker(self, jobs: list[tuple[str, str]], dry: bool, word_by_word: bool, turbo: bool) -> None:
         def write(message: str) -> None:
             self.app.call_from_thread(self.note, message)
 
         try:
-            result = defend(jobs, dry_run=dry, log=write, halt=self.gate, word_by_word=word_by_word)
+            result = defend(jobs, dry_run=dry, log=write, halt=self.gate, word_by_word=word_by_word, turbo=turbo)
         except Exception as error:
             write(f"defense crashed: {error!r}")
             result = None

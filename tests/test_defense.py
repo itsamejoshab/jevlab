@@ -495,7 +495,7 @@ def test_home_opens_defense(monkeypatch, tmp_path):
         async with app.run_test(size=(120, 48)) as pilot:
             await pilot.pause()
             button = app.screen.query_one("#defense", Button)
-            assert str(button.label) == "Defense"
+            assert str(button.label) == "Countermeasures"
             app.screen.action_defense()
             await pilot.pause()
             assert isinstance(app.screen, DefenseScreen)

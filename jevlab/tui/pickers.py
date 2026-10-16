@@ -146,10 +146,10 @@ class HomeScreen(Screen):
     """
 
     BINDINGS = [
-        Binding("s", "search", "Search"),
-        Binding("p", "publish", "Publish"),
-        Binding("d", "defense", "Defense"),
-        Binding("r", "refresh", "Refresh snapshot"),
+        Binding("s", "search", "Scan"),
+        Binding("p", "publish", "Launch"),
+        Binding("d", "defense", "Countermeasures"),
+        Binding("r", "refresh", "Download"),
         Binding("q", "app.quit", "Quit"),
     ]
 
@@ -176,10 +176,10 @@ class HomeScreen(Screen):
                 yield Static(id="card-vault", classes="card")
             yield Static(id="home-stats")
             with Horizontal(id="home-buttons"):
-                yield Button("Search", id="search", variant="primary")
-                yield Button("Publish", id="publish", variant="success")
-                yield Button("Defense", id="defense", variant="warning")
-                yield Button("Refresh snapshot", id="refresh")
+                yield Button("Scan", id="search", variant="primary")
+                yield Button("Launch", id="publish", variant="success")
+                yield Button("Countermeasures", id="defense", variant="warning")
+                yield Button("Download", id="refresh")
                 yield Button("Quit", id="quit", variant="error")
             yield SelectableRichLog(id="home-log", wrap=True, markup=False)
         yield Footer()
@@ -239,7 +239,7 @@ class HomeScreen(Screen):
         if not snap:
             for widget in (lead_card, ready_card, vault_card):
                 widget.update(card("—", "awaiting intel"))
-            text.append("No snapshot yet. Press Refresh snapshot first.", style="bold red")
+            text.append("No snapshot yet. Press Download first.", style="bold red")
             self.query_one("#home-stats", Static).update(text)
             return
         rows = standings(db, mode=mode.play_mode, board=mode.board)
@@ -298,7 +298,7 @@ class HomeScreen(Screen):
 
     def action_publish(self) -> None:
         if not self.app.game_mode.publishable:
-            self.notify("Live Mode posts from Search while the round is live", severity="warning")
+            self.notify("Live Mode posts from Scan while the round is live", severity="warning")
             return
         self.app.push_screen(PublishScreen(self.app.game_mode))
 

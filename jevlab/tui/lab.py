@@ -158,9 +158,9 @@ class LabScreen(Screen):
     def __init__(
         self,
         slugs: list[str],
-        budget: int = 3000,
+        budget: int = 7000,
         use_llm: bool = True,
-        max_stall: int = 12,
+        max_stall: int = 6,
         single: bool = False,
         seed: int | None = None,
         escalate: bool = True,

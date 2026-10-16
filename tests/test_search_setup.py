@@ -47,6 +47,9 @@ def test_exclude_choice_hides_choice_questions(monkeypatch, tmp_path):
             assert any("Best flavor" in line for line in shown())
             assert app.screen.query_one("EditionMark").content.plain.endswith(" | Strict Highest Mode")
             assert app.screen.query_one("EditionMark").content.plain.startswith("Scan | ")
+            assert screen.query_one("#budget").value == "7000"
+            assert screen.query_one("#stall").value == "6"
+            assert screen.query_one("#win-extra").value == "500"
             await pilot.click("#no-choice")
             await pilot.pause()
             assert any("Is cereal a soup" in line for line in shown())

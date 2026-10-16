@@ -123,7 +123,7 @@ def test_live_search_keeps_climbing_after_the_call_budget(tmp_path):
     engine.stall = 12
     engine.level = 0
     assert engine.keeps_searching()
-    assert engine.patience() == 12
+    assert engine.patience() == 6
     assert engine.refill_search()
     assert engine.budget == 200
     assert engine.oracle.calls < engine.budget

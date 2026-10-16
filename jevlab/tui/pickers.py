@@ -848,10 +848,10 @@ class SearchSetupScreen(Screen):
             with Horizontal(id="params"):
                 with Vertical(classes="field"):
                     yield Label("ORACLE CALLS / QUESTION")
-                    yield Input("3000", id="budget", type="integer", max_length=7)
+                    yield Input("7000", id="budget", type="integer", max_length=7)
                 with Vertical(classes="field"):
                     yield Label("PATIENCE")
-                    yield Input("12", id="stall", type="integer", max_length=3)
+                    yield Input("6", id="stall", type="integer", max_length=3)
                 with Vertical(classes="field"):
                     yield Label("LLM IDEAS")
                     yield Switch(True, id="llm")
@@ -871,7 +871,7 @@ class SearchSetupScreen(Screen):
                     yield Switch(False, id="win-mode")
                 with Vertical(classes="field"):
                     yield Label("CALLS AFTER LEAD")
-                    yield Input("2000", id="win-extra", type="integer", max_length=6, disabled=True)
+                    yield Input("500", id="win-extra", type="integer", max_length=6, disabled=True)
             with Horizontal(id="actions"):
                 yield Label("select")
                 yield Button("All", id="all")

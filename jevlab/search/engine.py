@@ -710,7 +710,7 @@ class Engine:
 
     def patience(self) -> int:
         """Flat rounds before escalating. Mechanical levels do far more per round, so they get less."""
-        base = self.max_stall or 12
+        base = self.max_stall or 6
         return base if self.level == 0 else max(3, base // 2)
 
     def set_level(self, level: int, reason: str) -> None:

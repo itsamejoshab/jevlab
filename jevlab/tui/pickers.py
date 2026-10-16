@@ -137,8 +137,7 @@ class ConfirmVacuum(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="vacuum-ask"):
             yield Static(
-                "Vacuum reclaims unused space in every edition's databases. "
-                "It can take a long time. Scores are kept."
+                "Vacuum reclaims unused space in every edition's databases. It can take a long time. Scores are kept."
             )
             with Horizontal(id="vacuum-ask-actions"):
                 yield Button("OK", id="ok", variant="warning")

@@ -477,6 +477,12 @@ def gen_user(ctx, archetypes: list[str], count: int, variants_of: list = (), fre
     cap = ctx.engine.grow_cap
     schedule = getattr(ctx.engine, "schedule", None)
     hard_deal = schedule is not None and schedule.hard and schedule.phase == "deal"
+    if hard_deal and schedule.deal_uses_board_words():
+        helpful = ctx.helpful_board_lines()
+        if helpful:
+            lines.append(
+                "Public board lines that raise the score, strongest first. Build from these: " + " | ".join(helpful)
+            )
     if hard_deal:
         span = f"about {cap} words each"
     elif shortest and ctx.engine.one_word_race:

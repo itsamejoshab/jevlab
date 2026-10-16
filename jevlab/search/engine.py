@@ -268,6 +268,21 @@ class LabContext:
         rows = sorted(self.engine.impacts, key=lambda r: -(r.get("averageImpact") or 0))
         return [(r["word"], float(r.get("averageImpact") or 0)) for r in rows[:k]]
 
+    def helpful_board_lines(self) -> list[str]:
+        """Board entries that raise the shown score, strongest first.
+
+        The site's averageImpact already points at that score, for a yes goal and a no goal.
+        Zero and negative entries push the other way and stay out.
+        """
+        ranked = []
+        for row in self.engine.impacts:
+            word = str(row.get("word") or "").strip()
+            impact = float(row.get("averageImpact") or 0)
+            if word and impact > 0:
+                ranked.append((impact, word))
+        ranked.sort(key=lambda item: (-item[0], item[1].casefold()))
+        return [word for _, word in ranked]
+
     def word_pool(self, k: int) -> list[str]:
         ordered: dict[str, None] = {}
         for word in self.pinned:
@@ -976,12 +991,13 @@ class Engine:
                     break
                 pass_calls = self.oracle.calls if self.oracle else 0
                 length = self.schedule.deal_length()
+                if self.schedule.deal_uses_board_words():
+                    detail = f" retrying about {length} words with the board lines that raise the score"
+                else:
+                    detail = f" at about {length} words" if length else ""
                 self.emit(
                     "log",
-                    message=(
-                        "[hard] nothing within 0.05 of the leader; dealing another pass"
-                        + (f" at about {length} words" if length else "")
-                    ),
+                    message="[hard] nothing within 0.05 of the leader; dealing another pass" + detail,
                 )
                 continue
             batch = self.schedule.take_batch()

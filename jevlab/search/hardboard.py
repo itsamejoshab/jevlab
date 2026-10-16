@@ -26,9 +26,12 @@ FRAMES_PER_BATCH = 3
 # Growth edits an existing line. The blank-start beam is not one of these.
 GROWTH_JOBS = ("sweep", "surrogate_bo", "extend")
 # Asked length for a hard generator pass. The site does not cap a phrase at 60 words; 60 is where a
-# stuck deal starts, and each following pass in that same streak asks for HARD_LENGTH_STEP more.
+# stuck deal starts. Each length is tried twice, and the next length asks for HARD_LENGTH_STEP more.
 HARD_LENGTH = 60
 HARD_LENGTH_STEP = 10
+# One ordinary LLM timeout covers about this many words of a generator batch. z.ai was still running
+# when an 80-word ask hit 60s, so the hard-deal wait is one timeout per this many words.
+HARD_TIMEOUT_WORDS = 20
 EDIT_JOBS = GROWTH_JOBS + ("local_edit", "genetic", "gcg", "precision")
 
 
@@ -197,10 +200,20 @@ class HardSchedule:
         return "done"
 
     def deal_length(self) -> int:
-        """Words a hard generator pass should ask for. Zero unless this visit is dealing."""
+        """Words a hard generator pass should ask for. Zero unless this visit is dealing.
+
+        Passes come in pairs: the length stays put for the second try, then grows.
+        """
         if not self.hard or self.phase != "deal" or self.deal_passes < 1:
             return 0
-        return HARD_LENGTH + HARD_LENGTH_STEP * (self.deal_passes - 1)
+        steps = (self.deal_passes - 1) // 2
+        return HARD_LENGTH + HARD_LENGTH_STEP * steps
+
+    def deal_uses_board_words(self) -> bool:
+        """The second try at a length shows the board lines that raise the score."""
+        if not self.hard or self.phase != "deal" or self.deal_passes < 1:
+            return False
+        return self.deal_passes % 2 == 0
 
     def displayed(self, frame: str) -> float | None:
         """Best displayed probability on this frame, whatever tool wrote the line."""

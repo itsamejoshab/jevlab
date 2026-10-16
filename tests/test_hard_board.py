@@ -8,19 +8,22 @@ import json
 import re
 import time
 
+import httpx
 import pytest
 
 from jevlab.config import GEN_MODELS
+from jevlab.llm import LLM
 from jevlab.objective import Leader
 from jevlab.oracle import Score
 from jevlab.rules import RuleError, check_phrase
 from jevlab.search.engine import BudgetExhausted, Engine
-from jevlab.search.hardboard import CATALOG, HardSchedule, ScoredLine
+from jevlab.search.hardboard import CATALOG, HARD_LENGTH, HARD_LENGTH_STEP, HardSchedule, ScoredLine
 from jevlab.search.prompts import gen_user
 from jevlab.search.mechanical import BeamBuild, Grow
 from jevlab.search import memory as lab_memory
 from jevlab.search.probe import Lock
 from jevlab.search.routes import assign
+from jevlab.search.strategies import LLMGenerate
 
 from helpers import make_db
 
@@ -284,10 +287,15 @@ def test_an_empty_generator_pass_does_not_deal_forever(tmp_path):
 
 
 def test_consecutive_hard_passes_ask_for_longer_lines(tmp_path):
+    """Each length is tried twice: plain, then with the board lines that raise the score, then ten more words."""
     eng = engine(tmp_path, "stretch", leader=(0.95, 12))
     assert "mostly 6 to 18" in gen_user(eng.ctx, ["direct"], 4)
-
-    eng.budget = 6
+    eng.impacts = [
+        {"word": "helpline", "averageImpact": 0.4},
+        {"word": "flatline", "averageImpact": 0},
+        {"word": "harmline", "averageImpact": -0.3},
+    ]
+    eng.budget = 8
     eng.oracle = FarOracle()
     eng.schedule = schedule(models=["m1", "m2"], leader=(0.95, 12))
     eng.schedule.counts = eng.memory.generator_counts
@@ -297,11 +305,107 @@ def test_consecutive_hard_passes_ask_for_longer_lines(tmp_path):
         asyncio.run(eng.run_hard_deal())
 
     prompts = [user for _, user in eng.llm.prompts]
-    assert len(prompts) >= 5
-    assert all("about 60 words each" in prompt for prompt in prompts[:4])
-    assert all("about 70 words each" in prompt for prompt in prompts[4:])
+    assert len(prompts) >= 9
+    assert all("about 60 words each" in prompt for prompt in prompts[:8])
     assert "mostly 6 to 18" not in prompts[0]
+    assert "raise the score" not in prompts[0]
+    injected = prompts[4].split("raise the score", 1)[1]
+    assert "helpline" in injected
+    assert "harmline" not in injected
+    assert "flatline" not in injected
+    assert "about 70 words each" in prompts[8]
+    assert "raise the score" not in prompts[8]
     assert check_phrase(" ".join(["alpha"] * 70), eng.choices, eng.length_cap)
+
+    # The site stores averageImpact in the direction of the shown score, including when the goal is no.
+    no = engine(tmp_path, "no-goal", leader=(0.95, 12))
+    no.objective.goal = "no"
+    no.impacts = eng.impacts
+    no.schedule = schedule(models=["m1"], leader=(0.95, 12))
+    no.schedule.begin()
+    no.schedule.deal_passes = 2
+    no.apply_hard_deal_length()
+    text = gen_user(no.ctx, ["direct"], 4)
+    assert "about 60 words each" in text
+    assert "raise the score" in text
+    directed = text.split("raise the score", 1)[1]
+    assert "helpline" in directed
+    assert "harmline" not in directed
+
+
+def test_a_longer_hard_pass_gives_the_model_proportionally_more_time(tmp_path, monkeypatch):
+    """A hard deal waits one ordinary timeout per 20 words, including the first 60-word pass.
+
+    z.ai was still running when an 80-word ask hit 60s, so 80 words gets four minutes and a
+    180-word ask waits longer than the old one-second-per-word scale. The token cap still
+    grows from the 60-word budget. A reply slower than that old scale still comes back.
+    """
+    base = 0.05
+    monkeypatch.setattr("jevlab.llm.LLM_TIMEOUT", base)
+    monkeypatch.setattr("jevlab.config.LLM_TIMEOUT", base)
+    monkeypatch.setattr("jevlab.llm.OPENROUTER_KEY", "test-key")
+    token_budget = 6000
+    seen: list[tuple[int, float]] = []
+    slow = {"on": False}
+
+    async def handler(request):
+        body = json.loads(request.content)
+        seen.append((body["max_tokens"], request.extensions["timeout"]["read"]))
+        if slow["on"]:
+            await asyncio.sleep(base * 4)
+        reply = '{"phrases": [{"tactic": "direct", "text": "alpha beta"}]}'
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": reply}}], "usage": {"cost": 0}},
+        )
+
+    async def call(eng):
+        return await LLMGenerate(["m1"])._call(eng.ctx, "m1", ["direct"], [])
+
+    async def run():
+        llm = LLM()
+        await llm.http.aclose()
+        llm.http = httpx.AsyncClient(
+            base_url="https://openrouter.ai/api/v1",
+            transport=httpx.MockTransport(handler),
+            timeout=base * 2,
+        )
+        try:
+            plain = engine(tmp_path, "plain", leader=(0.95, 12))
+            plain.llm = llm
+            ordinary = await call(plain)
+
+            opening = engine(tmp_path, "opening", leader=(0.95, 12))
+            opening.llm = llm
+            opening.schedule = schedule(models=["m1"], leader=(0.95, 12))
+            opening.schedule.begin()
+            opening.apply_hard_deal_length()
+            first = await call(opening)
+
+            words = HARD_LENGTH * 3
+            stretched = engine(tmp_path, "stretched", leader=(0.95, 12))
+            stretched.llm = llm
+            stretched.schedule = schedule(models=["m1"], leader=(0.95, 12))
+            stretched.schedule.begin()
+            steps = (words - HARD_LENGTH) // HARD_LENGTH_STEP
+            stretched.schedule.deal_passes = 1 + steps * 2
+            stretched.apply_hard_deal_length()
+            assert stretched.schedule.deal_length() == words
+            slow["on"] = True
+            longer = await call(stretched)
+        finally:
+            await llm.http.aclose()
+        return ordinary, first, longer
+
+    ordinary, first, longer = asyncio.run(run())
+    assert ordinary
+    assert first
+    assert seen[0][0] == token_budget
+    assert seen[1][0] == token_budget
+    assert seen[1][1] == pytest.approx(base * (HARD_LENGTH / 20))
+    assert seen[2][0] == token_budget * 3
+    assert seen[2][1] == pytest.approx(base * (HARD_LENGTH * 3 / 20))
+    assert longer
 
 
 def test_a_close_frame_does_not_stretch_the_generator_length(tmp_path):

@@ -7,7 +7,9 @@ import random
 import time
 
 from ..config import EXPENSIVE_MODELS, TIER_LEVEL, TIER_NAMES
+from .. import llm as llm_mod
 from ..llm import LLMError
+from .hardboard import HARD_LENGTH, HARD_TIMEOUT_WORDS
 from ..objective import site_round
 from ..rules import normalize
 from . import prompts
@@ -229,14 +231,25 @@ class LLMGenerate(Strategy):
     ) -> list[tuple[str, str]]:
         n = self.count if count is None else count
         max_tokens = 6000
+        reply_timeout = None
         if ctx.objective.long:
             target = ctx.engine.long_target
             user = prompts.long_chain_user(ctx, archetypes, min(n, max(4, 3600 // max(target, 1))), target)
             max_tokens = 9000
         else:
             user = prompts.gen_user(ctx, archetypes, n, variants, fresh=fresh)
+            schedule = getattr(ctx.engine, "schedule", None)
+            words = schedule.deal_length() if schedule is not None and schedule.hard and schedule.phase == "deal" else 0
+            if words > 0:
+                # One ordinary timeout covers about 20 words. z.ai was still going at 60s on an 80-word ask.
+                if words > HARD_LENGTH:
+                    max_tokens = round(6000 * words / HARD_LENGTH)
+                reply_timeout = llm_mod.LLM_TIMEOUT * words / HARD_TIMEOUT_WORDS
         try:
-            data = await ctx.llm.json(model, prompts.gen_system(ctx), user, temperature=1.0, max_tokens=max_tokens)
+            extra = {} if reply_timeout is None else {"timeout": reply_timeout}
+            data = await ctx.llm.json(
+                model, prompts.gen_system(ctx), user, temperature=1.0, max_tokens=max_tokens, **extra
+            )
         except (LLMError, Exception) as error:  # one bad model reply should not stop the lab
             ctx.log(f"[{self.name} {short(model)}] {error}")
             return []

@@ -102,6 +102,7 @@ class LLM:
         max_tokens: int = 4000,
         json_mode: bool = True,
         reasoning: str | None = None,
+        timeout: float | None = None,
     ) -> str:
         body = {
             "model": model,
@@ -121,9 +122,9 @@ class LLM:
                 body["provider"] = {"sort": PROVIDER_SORT}
         if json_mode:
             body["response_format"] = {"type": "json_object"}
-        timeout = LLM_TIMEOUT * (2 if model == PLAN_MODEL else 1)
+        limit = LLM_TIMEOUT * (2 if model == PLAN_MODEL else 1) if timeout is None else timeout
         try:
-            response = await asyncio.wait_for(self.http.post("/chat/completions", json=body), timeout)
+            response = await asyncio.wait_for(self.http.post("/chat/completions", json=body, timeout=limit), limit)
             if response.status_code in (400, 422) and "valid model" not in response.text:
                 if "mandatory" in response.text and body.get("reasoning", {}).get("effort") == "none":
                     body["reasoning"] = {"effort": "minimal"}
@@ -132,10 +133,10 @@ class LLM:
                 else:
                     body.pop("response_format", None)
                     body.pop("reasoning", None)
-                response = await asyncio.wait_for(self.http.post("/chat/completions", json=body), timeout)
+                response = await asyncio.wait_for(self.http.post("/chat/completions", json=body, timeout=limit), limit)
         except (TimeoutError, asyncio.TimeoutError) as error:
             self.failures += 1
-            raise LLMError(self.failed(model, "timeout", f"no reply after {timeout:.0f}s"), transient=True) from error
+            raise LLMError(self.failed(model, "timeout", f"no reply after {limit:.0f}s"), transient=True) from error
         except httpx.HTTPError as error:
             self.failures += 1
             raise LLMError(self.failed(model, type(error).__name__, str(error)), transient=True) from error
@@ -172,13 +173,16 @@ class LLM:
         max_tokens: int = 4000,
         attempts: int = 3,
         reasoning: str | None = None,
+        timeout: float | None = None,
     ):
         """complete() + extract_json(), retrying unparseable or empty replies and transient HTTP errors
         (timeouts, 429, 5xx). Other 4xx errors are real request problems and fail at once."""
         for attempt in range(attempts):
             try:
                 return extract_json(
-                    await self.complete(model, system, user, temperature, max_tokens, reasoning=reasoning)
+                    await self.complete(
+                        model, system, user, temperature, max_tokens, reasoning=reasoning, timeout=timeout
+                    )
                 )
             except LLMError as error:
                 if not error.transient or attempt == attempts - 1:

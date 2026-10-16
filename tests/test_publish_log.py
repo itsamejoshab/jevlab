@@ -361,6 +361,69 @@ def test_include_me_leading_is_off_until_asked(monkeypatch, tmp_path):
     asyncio.run(check())
 
 
+def test_golf_and_casual_rows_mark_an_imported_estimate(monkeypatch, tmp_path):
+    from jevlab.crosspost import Pick
+    from jevlab.modes import CASUAL_HIGHEST, GOLF_HIGHEST
+
+    golf = [
+        Pick(
+            "borrowed-golf",
+            GOLF_HIGHEST,
+            {"phrase": "borrowed golf line", "p_mean": 0.91, "estimated_from": "jev"},
+            20,
+            None,
+            None,
+            "",
+        ),
+        Pick("measured-golf", GOLF_HIGHEST, {"phrase": "measured golf line", "p_mean": 0.9}, 18, None, None, ""),
+    ]
+    proxy = [
+        Pick(
+            "borrowed-casual",
+            CASUAL_HIGHEST,
+            {"phrase": "borrowed casual line", "p_mean": 0.88, "estimated_from": "kev"},
+            4,
+            None,
+            None,
+            "",
+        )
+    ]
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "t.db"))
+    monkeypatch.setattr("jevlab.tui.pickers.standings", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.crosspost.picks", lambda *args, **kwargs: golf)
+    monkeypatch.setattr("jevlab.crosspost.casual_picks", lambda *args, **kwargs: proxy)
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(PublishScreen(HIGHEST))
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            picker = screen.query_one("#pub-picker")
+            shown = [_prompt(picker.get_option_at_index(i)) for i in range(picker.option_count)]
+            borrowed = next(line for line in shown if "borrowed golf line" in line)
+            measured = next(line for line in shown if "measured golf line" in line)
+            assert borrowed.startswith("Golf Highest")
+            assert not borrowed.startswith("GOLF ")
+            assert "[est(jev)]" in borrowed
+            assert "[est(" not in measured
+            await pilot.click("#casual")
+            await pilot.pause()
+            shown = [_prompt(picker.get_option_at_index(i)) for i in range(picker.option_count)]
+            casual = next(line for line in shown if "borrowed casual line" in line)
+            assert casual.startswith("Casual Highest")
+            assert not casual.startswith("CASUAL ")
+            assert "[est(kev)]" in casual
+
+    asyncio.run(check())
+
+
 def test_casual_proxy_stays_hidden_until_asked(monkeypatch, tmp_path):
     from jevlab.crosspost import Pick
     from jevlab.modes import CASUAL_HIGHEST

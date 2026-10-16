@@ -83,6 +83,26 @@ def test_log_drag_copies_across_lines() -> None:
     _run(check)
 
 
+def test_log_selection_shows_on_top_of_a_colored_line() -> None:
+    from rich.text import Text
+
+    async def check(pilot, app) -> None:
+        log = app.query_one("#log", SelectableRichLog)
+        log.clear()
+        log.write(Text("alpha beta", style="bold green"))
+        await pilot.pause()
+        app.screen.selections = {log: Selection(Offset(0, 0), Offset(5, 0))}
+        await pilot.pause()
+        wanted = app.screen.get_component_rich_style("screen--selection").bgcolor
+        strip = log.render_line(0)
+        selected = next(segment for segment in strip if segment.text.startswith("alpha"))
+        assert selected.style is not None and selected.style.bgcolor == wanted
+        # The offset that hit-testing reads has to survive the highlight.
+        assert selected.style.meta["offset"] == (0, 0)
+
+    _run(check)
+
+
 def test_table_drag_copies_cell_text_and_click_moves_the_row() -> None:
     async def check(pilot, app) -> None:
         table = app.query_one("#table", SelectableDataTable)

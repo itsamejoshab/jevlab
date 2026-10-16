@@ -1161,23 +1161,27 @@ class PublishScreen(RunKeys, Screen):
         for index, pick in enumerate(self.golf_picks):
             entry = pick.entry
             prompt = Text()
-            prompt.append(f"{'GOLF ' + pick.mode.label:<18} ", style="bold magenta")
+            prompt.append(f"{pick.mode.label:<18} ", style="bold magenta")
             prompt.append(
                 f"{entry['p_mean']:.3f}/{pick.units}c  ",
                 style="bold magenta",
             )
             lead = "empty" if pick.leader is None else f"{pick.leader.probability:.2f}/{pick.leader.units}c"
             prompt.append(f"vs {lead}  ", style="yellow")
+            if entry.get("estimated_from"):
+                prompt.append(f"[est({entry['estimated_from']})] ", style="bold cyan")
             prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
             prompt.append(entry["phrase"][:80])
             picker.add_option(Selection(prompt, f"golf:{index}", True))
         for index, pick in enumerate(self.casual_picks):
             entry = pick.entry
             prompt = Text()
-            prompt.append(f"{'CASUAL ' + pick.mode.label:<22} ", style="bold cyan")
+            prompt.append(f"{pick.mode.label:<22} ", style="bold cyan")
             prompt.append(f"{entry['p_mean']:.3f}/{pick.units}w  ", style="bold cyan")
             lead = "empty" if pick.leader is None else f"{pick.leader.probability:.2f}/{pick.leader.units}w"
             prompt.append(f"vs {lead}  ", style="yellow")
+            if entry.get("estimated_from"):
+                prompt.append(f"[est({entry['estimated_from']})] ", style="bold cyan")
             prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
             prompt.append(entry["phrase"][:80])
             picker.add_option(Selection(prompt, f"casual:{index}", True))
@@ -1413,6 +1417,6 @@ class PublishScreen(RunKeys, Screen):
             self.query_one("#publish", Button).disabled = False
             self.query_one("#stop", Button).disabled = True
             self.query_one("#import-go", Button).disabled = False
-            self.reload()
+            self.reload(full=True)
 
         self.app.call_from_thread(done)

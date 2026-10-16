@@ -648,6 +648,8 @@ def publish_entry(
     if objective.shortest and not game_mode.golf:
         log("  rebuilding the chain is safe: each board keeps our best-ever row, so Highest stays as it is")
     if not objective.beats(aim, units, leader):
+        if not dry_run:
+            _drop_failed_estimate(entry, log)
         raise PublishError(f"no longer beats the live leader ({lead})")
     estimated = entry.get("estimated_from")
     if estimated:
@@ -753,7 +755,11 @@ def publish_entry(
     else:
         detail = f"server {best:.2f} after {tries} re-rolls did not beat {lead}"
     # The site score replaces the local estimate, so a later submit does not treat the estimate as still best.
-    vault.apply_site_score(slug, mode, phrase, best, "published" if won else "failed", board, target, detail)
+    # A borrowed score that lost is removed instead. Leaving it as failed would offer the same guess again.
+    if not won and entry.get("estimated_from"):
+        _drop_failed_estimate(entry, log)
+    else:
+        vault.apply_site_score(slug, mode, phrase, best, "published" if won else "failed", board, target, detail)
     if check_error is not None:
         raise check_error
     if won:
@@ -761,6 +767,16 @@ def publish_entry(
     if missed and shown_p is not None:
         return f"missed {target}; Jev picked {picked} ({shown_p:.2f})"
     return f"short {best:.2f}"
+
+
+def _drop_failed_estimate(entry: dict, log) -> None:
+    """Retire a borrowed line that the site did not take. Importing that edition again can restore it."""
+    source = entry.get("estimated_from") or ""
+    if not source:
+        return
+    removed = vault.drop_estimates(entry["slug"], entry["phrase"])
+    if removed:
+        log(f"  dropped the {source} estimate; import it again to retry")
 
 
 def sweep_banned(log, indent: str = "") -> list[dict]:

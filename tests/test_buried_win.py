@@ -31,3 +31,14 @@ def test_a_win_under_ties_stays_a_win_and_is_vaulted(tmp_path, monkeypatch):
     asyncio.run(eng.promote())
     saved = [entry for entry in vault.all_entries() if entry["phrase"] == win]
     assert saved and saved[0]["beats"]
+
+
+def test_a_few_rolls_do_not_mark_the_queue_as_a_win(tmp_path):
+    eng = Engine(make_db(tmp_path, leader=(0.95, 30)), "q", use_llm=False)
+    phrase = " ".join(["gamma"] * 16)
+    eng.archive.add(phrase, Score("s", [0.97, 0.97]), "extend")
+    assert eng.objective.wins(eng.archive.items[phrase].score, 16, eng.leader)
+    item = QueueItem("q", "Is it insufferable")
+    LabScreen.update_item(item, eng)
+    assert item.best == "0.970/16w"
+    assert not item.win

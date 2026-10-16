@@ -926,7 +926,7 @@ class LabScreen(Screen):
         if len(engine.archive):
             best = engine.archive.top_by_board(1)[0]
             item.best = f"{best.p:.3f}/{best.units}w"
-            item.win = engine.winning()
+            item.win = engine.confirmed_win()
         item.calls = engine.oracle.calls if engine.oracle else 0
 
     def render_queue(self) -> None:

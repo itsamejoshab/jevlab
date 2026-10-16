@@ -5,7 +5,7 @@ import json
 import re
 
 from textual.app import App, ComposeResult
-from textual.widgets import Button
+from textual.widgets import Button, Select
 
 from jevlab.db import DB
 from jevlab.defense import QUIET, READY, already_quiet, defend, lexicon, pick_decoys, scan
@@ -474,6 +474,34 @@ def test_defense_log_marks_each_board_with_a_cyan_counter():
     assert "+ database" in word.plain
     again = live.render("\n== third [strict_chain] Shortest")
     assert "[2/2]" in again.plain
+
+
+def test_home_indicator_follows_the_selected_mode(monkeypatch, tmp_path):
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "home.db"))
+
+    class _App(App):
+        def __init__(self):
+            super().__init__()
+            self.game_mode = HIGHEST
+
+        def on_mount(self) -> None:
+            self.push_screen(HomeScreen())
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(120, 48)) as pilot:
+            await pilot.pause()
+            mark = app.screen.query_one("EditionMark")
+            assert mark.content.plain.startswith("Home | ")
+            assert mark.content.plain.endswith(" | Strict Highest Mode")
+            app.screen.query_one("#game-mode", Select).value = "shortest"
+            await pilot.pause()
+            assert app.screen.query_one("EditionMark").content.plain.endswith(" | Strict Shortest Mode")
+
+    asyncio.run(check())
 
 
 def test_home_opens_defense(monkeypatch, tmp_path):

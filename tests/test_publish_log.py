@@ -27,7 +27,7 @@ def test_home_banner_stays_jevlab_and_names_the_theatre(monkeypatch):
     for edition in ("jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "decider", "microsoft"):
         monkeypatch.setattr(pickers, "EDITION", edition)
         assert pickers._banner_word() == "JEVLAB"
-        assert pickers.edition_status() == f"{pickers._theatre()} Mode Activated"
+        assert pickers.edition_status() == f"{pickers._theatre()} Edition Activated"
 
 
 def test_publish_log_groups_a_phrase_and_marks_a_better_roll():
@@ -411,18 +411,24 @@ def test_snapshot_screen_toggles_are_one_line() -> None:
             assert strict.region.y > current.region.y
             assert start.region.y < current.region.y
             mark = screen.query_one("EditionMark")
-            assert "mode" in str(mark.content)
+            from jevlab.tui.chrome import NAMES
+
+            assert mark.content.plain == f"Download | {NAMES.get(EDITION, 'Jev')} Edition"
 
     asyncio.run(check())
 
 
-def test_edition_caption_follows_the_open_edition(monkeypatch):
+def test_edition_caption_names_the_screen_edition_and_mode(monkeypatch):
     from jevlab.tui.chrome import edition_caption
 
-    monkeypatch.setattr("jevlab.config.EDITION", "luna")
-    assert edition_caption().plain == "Luna mode"
+    monkeypatch.setattr("jevlab.config.EDITION", "laya")
+    assert (
+        edition_caption("Countermeasures", "Strict Highest").plain
+        == "Countermeasures | Laya Edition | Strict Highest Mode"
+    )
+    assert edition_caption("Download").plain == "Download | Laya Edition"
     monkeypatch.setattr("jevlab.config.EDITION", "jev")
-    assert edition_caption().plain == "Jev mode"
+    assert edition_caption("Scan", "Live Mode").plain == "Scan | Jev Edition | Live Mode"
 
 
 def test_snapshot_switches_each_edition_then_returns(monkeypatch):

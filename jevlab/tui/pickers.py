@@ -17,7 +17,7 @@ from .. import activity, vault
 from ..boards import Standing, standings
 from ..config import EDITION, EDITIONS, default_rerolls, reroll_gap
 from ..db import DB
-from ..modes import HOME_MODES, GameMode, from_name
+from ..modes import HOME_MODES, LIVE, GameMode, from_name
 from ..objective import site_round
 from ..search.engine import LEVELS
 from .chrome import NAMES, EditionMark
@@ -109,7 +109,7 @@ def dossier() -> Text:
 
 
 def edition_status() -> str:
-    return f"{_theatre()} Mode Activated"
+    return f"{_theatre()} Edition Activated"
 
 
 def card(value: Text | str, caption: str) -> Text:
@@ -154,7 +154,7 @@ class HomeScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Home", self.app.game_mode.label)
         with Vertical(id="home"):
             yield Static(banner(), id="home-banner")
             yield Static(dossier(), id="home-dossier")
@@ -203,6 +203,7 @@ class HomeScreen(Screen):
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "game-mode" and isinstance(event.value, str):
             self.app.game_mode = from_name(event.value)
+            self.query_one(EditionMark).set_mode(self.app.game_mode.label)
             self.update_stats()
         elif event.select.id == "edition" and isinstance(event.value, str) and event.value != EDITION:
             from ..config import activate
@@ -353,7 +354,7 @@ class SnapshotScreen(Screen):
     BINDINGS = [Binding("escape", "back", "back")]
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Download")
         with Horizontal(id="snap-actions"):
             yield Button("Start", id="start", variant="success", compact=True)
             yield Button("Back", id="back", compact=True)
@@ -448,7 +449,7 @@ class LiveSetupScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Scan", LIVE.label)
         yield Static(id="live-help")
         with Vertical(id="live-question"):
             yield Static(id="live-now")
@@ -636,7 +637,7 @@ class SearchSetupScreen(Screen):
         )
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Scan", self.game_mode.label)
         yield Static(id="setup-help")
         yield SelectionList[str](*self.picker_options(), id="picker")
         with Vertical(id="run-panel"):
@@ -959,7 +960,7 @@ class PublishScreen(Screen):
         self._chain_lines = 0
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Launch", self.game_mode.label)
         with Horizontal(id="pub-body"):
             with Vertical(id="pub-side"):
                 with Horizontal(id="pub-actions"):

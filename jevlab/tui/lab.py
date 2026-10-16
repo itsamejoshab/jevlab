@@ -243,7 +243,7 @@ class LabScreen(Screen):
         self.started_at = time.monotonic()
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Lab", self.game_mode.label)
         yield Static(id="lab-header")
         with Horizontal(id="body"):
             with VerticalScroll(id="queue-box"):

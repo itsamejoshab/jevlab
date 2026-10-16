@@ -96,7 +96,8 @@ class DefenseScreen(Screen):
         self.transcript = DefenseLog()
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        mode = getattr(self.app, "game_mode", None)
+        yield EditionMark("Countermeasures", mode.label if mode is not None else None)
         with Horizontal(id="def-body"):
             with Vertical(id="def-side"):
                 with Horizontal(id="def-actions"):

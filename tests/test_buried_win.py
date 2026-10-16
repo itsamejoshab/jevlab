@@ -33,6 +33,20 @@ def test_a_win_under_ties_stays_a_win_and_is_vaulted(tmp_path, monkeypatch):
     assert saved and saved[0]["beats"]
 
 
+def test_the_queue_shows_the_confirmed_line_not_a_one_roll_leader(tmp_path):
+    eng = Engine(make_db(tmp_path, leader=(0.92, 12)), "q", use_llm=False)
+    lucky = " ".join(["alpha"] * 23)
+    eng.archive.add(lucky, Score(lucky, [0.95]), "surrogate_bo")
+    sure = " ".join(["beta"] * 21)
+    eng.archive.add(sure, Score(sure, [0.936] * 5), "surrogate_bo")
+    assert eng.archive.top_by_board(1)[0].phrase == lucky
+    assert eng.objective.wins(eng.archive.items[lucky].score, 23, eng.leader)
+    item = QueueItem("q", "Is it insufferable")
+    LabScreen.update_item(item, eng)
+    assert item.win
+    assert item.best == "0.936/21w"
+
+
 def test_a_few_rolls_do_not_mark_the_queue_as_a_win(tmp_path):
     eng = Engine(make_db(tmp_path, leader=(0.95, 30)), "q", use_llm=False)
     phrase = " ".join(["gamma"] * 16)

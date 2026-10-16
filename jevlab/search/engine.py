@@ -756,14 +756,23 @@ class Engine:
         # Board order can put a lucky high average above a confirmed win.
         return any(self.objective.wins(c.score, c.units, self.leader) for c in self.archive.items.values())
 
-    def confirmed_win(self) -> bool:
-        """A lower bound that beats the leader on at least five samples.
+    def confirmed_leader(self) -> Candidate | None:
+        """The board-best line whose lower bound beats the leader on at least five samples.
 
-        Fewer rolls are resampled and often fall back, so the queue does not call them a win yet.
+        A one-roll line can lead the board and still fall back, so the queue does not show it as the win.
         """
-        return any(
-            c.score.n >= 5 and self.objective.wins(c.score, c.units, self.leader) for c in self.archive.items.values()
-        )
+        found = [
+            cand
+            for cand in self.archive.items.values()
+            if cand.score.n >= 5 and self.objective.wins(cand.score, cand.units, self.leader)
+        ]
+        if not found:
+            return None
+        return max(found, key=lambda cand: (self.objective.score_key(cand.score, cand.units), cand.p))
+
+    def confirmed_win(self) -> bool:
+        """A lower bound that beats the leader on at least five samples."""
+        return self.confirmed_leader() is not None
 
     def unbeatable(self) -> Candidate | None:
         """A one-word line whose every roll rounds to 1.00 tops either board, so no further search can beat it."""

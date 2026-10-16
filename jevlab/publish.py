@@ -573,6 +573,8 @@ def publish_entry(
     verify: bool,
     log,
     long_rerolls: int = 5,
+    *,
+    word_by_word: bool = False,
 ) -> str:
     slug, mode, phrase = entry["slug"], entry["mode"], entry["phrase"]
     board = entry.get("board") or HIGH_SCORES
@@ -657,7 +659,12 @@ def publish_entry(
             log("  no extra re-rolls: this model returns the same score for the same phrase")
     need = leader
     if dry_run:
-        what = f"send {units} characters" if game_mode.golf else f"build {units} words"
+        if game_mode.golf:
+            what = f"send {units} characters"
+        elif word_by_word:
+            what = f"append {units} words one at a time"
+        else:
+            what = f"build {units} words"
         log(f"  dry run: would {what}: {phrase}")
         return "dry-run"
 
@@ -668,7 +675,11 @@ def publish_entry(
         log(f"    = {units}c {best:.2f}")
     else:
         attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
-        attempt, server_p = build_chain(client, attempt, words, log, hold_last=True)
+        # Word by word is one append per word. Otherwise the line goes up as a sentence and the
+        # last word is its own turn, so a re-roll only has to replace that word. Golf stays one phrase.
+        if word_by_word:
+            log("  one word at a time")
+        attempt, server_p = build_chain(client, attempt, words, log, hold_last=not word_by_word)
         turn = last_turn(attempt)
         picked = str((turn or {}).get("choice") or "")
         shown_p = server_p
@@ -846,10 +857,12 @@ def publish(
     mode: str | None = None,
     crosspost: bool = True,
     halt=None,
+    word_by_word: bool = False,
 ) -> int:
     """Publish queued entries (or exactly `entries`), from every board and play mode unless `board` or `mode`
     is given. With `crosspost`, every Strict line that lands (or already holds) its board is followed by the
     question's Golf cross-posts, queued and published in the same run.
+    `word_by_word` sends Strict and Casual one word per turn. Golf stays one phrase.
     on_result(entry, result_text) fires per entry."""
     from .config import default_rerolls
 
@@ -905,7 +918,19 @@ def publish(
                 f"{entry['p_mean']:.3f}/{entry['units']}{game_mode.unit_abbr}: {entry['phrase']}"
             )
             try:
-                result = publish_entry(db, client, entry, questions, me, dry_run, rerolls, verify, log, long_rerolls)
+                result = publish_entry(
+                    db,
+                    client,
+                    entry,
+                    questions,
+                    me,
+                    dry_run,
+                    rerolls,
+                    verify,
+                    log,
+                    long_rerolls,
+                    word_by_word=word_by_word,
+                )
                 log(f"  -> {result}")
             except BannedPhrase as error:
                 result = f"banned: {error}"

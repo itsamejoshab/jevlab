@@ -972,6 +972,9 @@ class PublishScreen(Screen):
                         yield Setting("Dry run", False, id="dry", compact=True)
                         yield Static("nothing is sent", classes="hint")
                     with Horizontal(classes="opt"):
+                        yield Setting("Word by word", False, id="by-word", compact=True)
+                        yield Static("one word per turn on strict and casual", classes="hint")
+                    with Horizontal(classes="opt"):
                         yield Setting("Near-misses", False, id="long", compact=True)
                         yield Static("include long shots", classes="hint")
                     with Horizontal(classes="opt"):
@@ -1256,16 +1259,17 @@ class PublishScreen(Screen):
         except ValueError:
             rerolls = fallback
         dry = self.query_one("#dry", Checkbox).value
+        word_by_word = self.query_one("#by-word", Checkbox).value
         self.busy = True
         self.stop_requested = False
         self.query_one("#publish", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
         self.query_one("#import-go", Button).disabled = True
         self.note(f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
-        self.publish_worker(entries, dry, rerolls)
+        self.publish_worker(entries, dry, rerolls, word_by_word)
 
     @work(thread=True, exclusive=True)
-    def publish_worker(self, entries: list[dict], dry: bool, rerolls: int) -> None:
+    def publish_worker(self, entries: list[dict], dry: bool, rerolls: int, word_by_word: bool) -> None:
         from ..publish import publish
 
         results = []
@@ -1285,6 +1289,7 @@ class PublishScreen(Screen):
                 on_result=on_result,
                 long_rerolls=0 if default_rerolls() == 0 else LONG_REROLLS,
                 halt=lambda: self.stop_requested,
+                word_by_word=word_by_word,
             )
         except Exception as error:
             write(f"publisher crashed: {error!r}")

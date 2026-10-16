@@ -116,6 +116,65 @@ def test_publish_log_chain_and_oracle_stay_on_one_phrase():
     assert miss.endswith("cereal")
 
 
+def test_publish_word_by_word_defaults_off_and_is_sent(monkeypatch, tmp_path):
+    from textual.widgets.selection_list import Selection
+
+    from jevlab.boards import Standing
+    from jevlab.modes import STRICT
+
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "t.db"))
+    monkeypatch.setattr("jevlab.tui.pickers.standings", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.crosspost.picks", lambda *args, **kwargs: [])
+    monkeypatch.setattr("jevlab.activity.log", lambda *args, **kwargs: None)
+    monkeypatch.setattr("jevlab.tui.pickers.vault.set_status", lambda *args, **kwargs: None)
+    calls: list[dict] = []
+
+    def fake_publish(**kwargs):
+        calls.append(kwargs)
+        return 0
+
+    monkeypatch.setattr("jevlab.publish.publish", fake_publish)
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(PublishScreen(HIGHEST))
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            words = screen.query_one("#by-word")
+            assert words.value is False
+            assert str(words.label) == "Word by word"
+            entry = {
+                "slug": "cereal",
+                "mode": STRICT,
+                "phrase": "alpha beta",
+                "p_mean": 0.9,
+                "p_lcb": 0.8,
+                "spread": 0.01,
+                "n": 5,
+                "units": 2,
+                "status": "candidate",
+            }
+            standing = Standing("cereal", "Cereal", "noul", "yes", None, None, entry, False, True)
+            screen.rows = [standing]
+            screen.query_one("#pub-picker").add_option(Selection("cereal", standing.key, True))
+            words.value = True
+            screen.start_publish()
+            for _ in range(20):
+                await pilot.pause()
+                if calls and not screen.busy:
+                    break
+            assert calls[0]["word_by_word"] is True
+
+    asyncio.run(check())
+
+
 def test_publish_screen_chain_words_overwrite_one_line(monkeypatch, tmp_path):
     monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "t.db"))
     monkeypatch.setattr("jevlab.tui.pickers.standings", lambda *args, **kwargs: [])

@@ -252,13 +252,11 @@ def _help(targets: list[DefenseTarget], snap, me: str) -> Text:
             f"{counts[BARE] + counts[BLIND]} with nothing safe to add."
         )
     text.append(
-        "\nThe words list is per play mode, shared by Highest and Shortest, so one Strict pass covers both. "
-        "Each board gets a few more words than that list needs, so one pass still finishes if a banned word is skipped. "
-        "Words in our leading phrase, words already listed here, words already planted, and stop words are skipped. "
-        "A board with 40 or more words is left unchecked when our answer is at most a quarter of the top, "
-        "or at most a quarter of the whole list. "
-        "A decoy that takes a lead stays on the board. Casual has its own list. "
-        "Decoys go up as one sentence, so the words table keeps that sentence as a single row. "
-        "Word by word posts each decoy on its own row.",
+        "\nThe words list is per play mode. Highest and Shortest share it, so one Strict pass covers both. "
+        "Casual has its own. "
+        "A board is left unselected once the list has 40 or more words and our answer is at most "
+        "a quarter of the top 20 by impact, or at most a quarter of the whole list. "
+        "Each pass adds a few more words than that line needs, so it still finishes if a banned word is skipped. "
+        "Words in our leading phrase, words already on the list, words already planted, and stop words are skipped.",
     )
     return text

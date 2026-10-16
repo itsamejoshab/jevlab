@@ -17,13 +17,13 @@ from .. import activity, vault
 from ..boards import Standing, standings
 from ..config import EDITION, EDITIONS, default_rerolls, reroll_gap
 from ..db import DB
-from ..modes import HOME_MODES, GameMode, from_name
+from ..modes import HOME_MODES, LIVE, GameMode, from_name
 from ..objective import site_round
 from ..search.engine import LEVELS
 from .chrome import NAMES, EditionMark
 from .copyselect import SelectableRichLog
 from .lab import LabScreen
-from .publish_log import PublishLog
+from .publish_log import TURBO_BANNER, PublishLog, turbo_countdown
 
 
 def fmt_leader(s: Standing, u: str = "w") -> str:
@@ -109,7 +109,7 @@ def dossier() -> Text:
 
 
 def edition_status() -> str:
-    return f"{_theatre()} Mode Activated"
+    return f"{_theatre()} Edition Activated"
 
 
 def card(value: Text | str, caption: str) -> Text:
@@ -146,15 +146,15 @@ class HomeScreen(Screen):
     """
 
     BINDINGS = [
-        Binding("s", "search", "Search"),
-        Binding("p", "publish", "Publish"),
-        Binding("d", "defense", "Defense"),
-        Binding("r", "refresh", "Refresh snapshot"),
+        Binding("s", "search", "Scan"),
+        Binding("l", "publish", "Launch"),
+        Binding("c", "defense", "Countermeasures"),
+        Binding("d", "refresh", "Sync"),
         Binding("q", "app.quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Home", self.app.game_mode.label)
         with Vertical(id="home"):
             yield Static(banner(), id="home-banner")
             yield Static(dossier(), id="home-dossier")
@@ -176,10 +176,10 @@ class HomeScreen(Screen):
                 yield Static(id="card-vault", classes="card")
             yield Static(id="home-stats")
             with Horizontal(id="home-buttons"):
-                yield Button("Search", id="search", variant="primary")
-                yield Button("Publish", id="publish", variant="success")
-                yield Button("Defense", id="defense", variant="warning")
-                yield Button("Refresh snapshot", id="refresh")
+                yield Button("Scan", id="search", variant="primary")
+                yield Button("Launch", id="publish", variant="success")
+                yield Button("Countermeasures", id="defense", variant="warning")
+                yield Button("Sync", id="refresh")
                 yield Button("Quit", id="quit", variant="error")
             yield SelectableRichLog(id="home-log", wrap=True, markup=False)
         yield Footer()
@@ -203,6 +203,7 @@ class HomeScreen(Screen):
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "game-mode" and isinstance(event.value, str):
             self.app.game_mode = from_name(event.value)
+            self.query_one(EditionMark).set_mode(self.app.game_mode.label)
             self.update_stats()
         elif event.select.id == "edition" and isinstance(event.value, str) and event.value != EDITION:
             from ..config import activate
@@ -239,7 +240,7 @@ class HomeScreen(Screen):
         if not snap:
             for widget in (lead_card, ready_card, vault_card):
                 widget.update(card("—", "awaiting intel"))
-            text.append("No snapshot yet. Press Refresh snapshot first.", style="bold red")
+            text.append("No snapshot yet. Press Sync first.", style="bold red")
             self.query_one("#home-stats", Static).update(text)
             return
         rows = standings(db, mode=mode.play_mode, board=mode.board)
@@ -298,7 +299,7 @@ class HomeScreen(Screen):
 
     def action_publish(self) -> None:
         if not self.app.game_mode.publishable:
-            self.notify("Live Mode posts from Search while the round is live", severity="warning")
+            self.notify("Live Mode posts from Scan while the round is live", severity="warning")
             return
         self.app.push_screen(PublishScreen(self.app.game_mode))
 
@@ -309,14 +310,21 @@ class HomeScreen(Screen):
 SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"))
 
 
-def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log) -> None:
-    """Snapshot each edition on its own database, then come back to the one that was open."""
+def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=None) -> None:
+    """Snapshot each edition on its own database, then come back to the one that was open.
+
+    `halt` is checked before each edition. One edition, once started, runs to the end:
+    stopping halfway would leave a half-written snapshot as the latest one.
+    """
     from ..config import activate
     from ..site.snapshot import take_snapshot
 
     origin = EDITION
     try:
         for edition in editions:
+            if halt and halt():
+                log("stopped")
+                break
             try:
                 log(f"{edition}: opening its database")
                 activate(edition)
@@ -329,8 +337,74 @@ def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log) -> Non
             activate(origin)
 
 
-class SnapshotScreen(Screen):
+class RunKeys:
+    """Space pauses a running job. q stops it and leaves.
+
+    Space is inactive while idle, so a focused list or checkbox can still use it to toggle.
+    """
+
+    pause_message = "paused"
+    leave_message = "stopping"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.busy = False
+        self.paused = False
+        self.stop_requested = False
+        self.leave_after = False
+
+    def gate(self) -> bool:
+        """Block the worker while paused. True means the run should stop."""
+        while self.paused and not self.stop_requested:
+            time.sleep(0.05)
+        return bool(self.stop_requested)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "toggle_pause":
+            return True if self.busy else None
+        return super().check_action(action, parameters)
+
+    def begin_run(self) -> None:
+        self.busy = True
+        self.paused = False
+        self.stop_requested = False
+        self.leave_after = False
+        self.refresh_bindings()
+
+    def finish_run(self) -> bool:
+        """Clear the run. True means the screen is closing and the caller should stop touching it."""
+        leave = self.leave_after
+        self.busy = False
+        self.paused = False
+        self.stop_requested = False
+        self.leave_after = False
+        if leave:
+            self.app.pop_screen()
+            return True
+        self.refresh_bindings()
+        return False
+
+    def action_toggle_pause(self) -> None:
+        if not self.busy:
+            return
+        self.paused = not self.paused
+        self.notify(self.pause_message if self.paused else "resumed")
+
+    def action_leave(self) -> None:
+        if self.busy:
+            self.stop_requested = True
+            self.paused = False
+            self.leave_after = True
+            self.notify(self.leave_message)
+            return
+        self.app.pop_screen()
+
+
+class SnapshotScreen(RunKeys, Screen):
     """Pick editions and play modes. One start snapshots each checked edition in turn."""
+
+    pause_message = "paused before the next edition"
+    leave_message = "stopping after this edition"
 
     CSS = """
     #snap-actions { height: auto; padding: 0 1; margin-bottom: 1; }
@@ -350,10 +424,14 @@ class SnapshotScreen(Screen):
     #snap-log { height: 1fr; border: round $secondary; margin-top: 1; }
     """
 
-    BINDINGS = [Binding("escape", "back", "back")]
+    BINDINGS = [
+        Binding("space", "toggle_pause", "pause/resume", priority=True),
+        Binding("q", "leave", "stop & back", priority=True),
+        Binding("escape", "back", "back"),
+    ]
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Download")
         with Horizontal(id="snap-actions"):
             yield Button("Start", id="start", variant="success", compact=True)
             yield Button("Back", id="back", compact=True)
@@ -375,7 +453,6 @@ class SnapshotScreen(Screen):
             "Strict, Golf, and Casual each fill Highest and Shortest."
         )
         self.query_one("#snap-log").border_title = "snapshot"
-        self.busy = False
 
     def action_back(self) -> None:
         if self.busy:
@@ -400,7 +477,7 @@ class SnapshotScreen(Screen):
         if not modes:
             self.notify("pick at least one play mode", severity="warning")
             return
-        self.busy = True
+        self.begin_run()
         self.query_one("#start", Button).disabled = True
         self.snapshot_worker(editions, modes)
 
@@ -412,10 +489,11 @@ class SnapshotScreen(Screen):
             activity.log("snapshot", message)
             self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
 
-        run_snapshots(editions, modes, write)
+        run_snapshots(editions, modes, write, halt=self.gate)
 
         def done() -> None:
-            self.busy = False
+            if self.finish_run():
+                return
             self.query_one("#start", Button).disabled = False
 
         self.app.call_from_thread(done)
@@ -444,11 +522,12 @@ class LiveSetupScreen(Screen):
 
     BINDINGS = [
         Binding("g", "go", "GO"),
+        Binding("p", "toggle_post", "post on/off", priority=True),
         Binding("escape", "back", "back"),
     ]
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Scan", LIVE.label)
         yield Static(id="live-help")
         with Vertical(id="live-question"):
             yield Static(id="live-now")
@@ -521,7 +600,7 @@ class LiveSetupScreen(Screen):
             text.append("CASUAL: a whole phrase goes up as one hyphenated word on a word-chain round. ")
         text.append("A sentence round submits the phrase in one turn, on the mode the round names. ")
         if not self.query_one("#post", Switch).value:
-            text.append("POST is off: the search runs and nothing is sent. p toggles it during the run.")
+            text.append("POST is off: the search runs and nothing is sent. p toggles posting.")
         self.query_one("#live-help", Static).update(text)
 
     def refresh_round(self) -> None:
@@ -570,6 +649,9 @@ class LiveSetupScreen(Screen):
 
     def action_back(self) -> None:
         self.app.pop_screen()
+
+    def action_toggle_post(self) -> None:
+        self.query_one("#post", Switch).toggle()
 
     def action_go(self) -> None:
         max_level = self.query_one("#max-level", Select).value
@@ -636,7 +718,7 @@ class SearchSetupScreen(Screen):
         )
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Scan", self.game_mode.label)
         yield Static(id="setup-help")
         yield SelectionList[str](*self.picker_options(), id="picker")
         with Vertical(id="run-panel"):
@@ -912,7 +994,9 @@ class Setting(Checkbox):
         super().watch_value()
 
 
-class PublishScreen(Screen):
+class PublishScreen(RunKeys, Screen):
+    pause_message = "paused after the current phrase"
+    leave_message = "stopping after the current phrase, then back"
     CSS = """
     #pub-body { height: 1fr; }
     #pub-side { width: 3fr; height: 1fr; }
@@ -939,6 +1023,8 @@ class PublishScreen(Screen):
     """
 
     BINDINGS = [
+        Binding("space", "toggle_pause", "pause/resume", priority=True),
+        Binding("q", "leave", "stop & back", priority=True),
         Binding("escape", "back", "back"),
     ]
 
@@ -953,13 +1039,11 @@ class PublishScreen(Screen):
         self._rows_long: list[Standing] | None = None
         self._golf_all: list | None = None
         self._casual_all: list | None = None
-        self.busy = False
-        self.stop_requested = False
         self.transcript = PublishLog()
         self._chain_lines = 0
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Launch", self.game_mode.label)
         with Horizontal(id="pub-body"):
             with Vertical(id="pub-side"):
                 with Horizontal(id="pub-actions"):
@@ -972,6 +1056,9 @@ class PublishScreen(Screen):
                         yield Setting("Dry run", False, id="dry", compact=True)
                         yield Static("nothing is sent", classes="hint")
                     with Horizontal(classes="opt"):
+                        yield Setting("Word by word", False, id="by-word", compact=True)
+                        yield Static("one word per turn on strict and casual", classes="hint")
+                    with Horizontal(classes="opt"):
                         yield Setting("Near-misses", False, id="long", compact=True)
                         yield Static("include long shots", classes="hint")
                     with Horizontal(classes="opt"):
@@ -980,6 +1067,9 @@ class PublishScreen(Screen):
                     with Horizontal(classes="opt"):
                         yield Setting("Include casual proxy", False, id="casual", compact=True)
                         yield Static("strict highest on casual boards", classes="hint")
+                    with Horizontal(classes="opt"):
+                        yield Setting("Turbo", False, id="turbo", compact=True)
+                        yield Static("several questions at once; the log is tagged", classes="hint")
                     with Horizontal(classes="opt"):
                         yield Label("Re-rolls")
                         yield Input(str(default_rerolls()), id="rerolls", type="integer", compact=True)
@@ -1071,23 +1161,27 @@ class PublishScreen(Screen):
         for index, pick in enumerate(self.golf_picks):
             entry = pick.entry
             prompt = Text()
-            prompt.append(f"{'GOLF ' + pick.mode.label:<18} ", style="bold magenta")
+            prompt.append(f"{pick.mode.label:<18} ", style="bold magenta")
             prompt.append(
                 f"{entry['p_mean']:.3f}/{pick.units}c  ",
                 style="bold magenta",
             )
             lead = "empty" if pick.leader is None else f"{pick.leader.probability:.2f}/{pick.leader.units}c"
             prompt.append(f"vs {lead}  ", style="yellow")
+            if entry.get("estimated_from"):
+                prompt.append(f"[est({entry['estimated_from']})] ", style="bold cyan")
             prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
             prompt.append(entry["phrase"][:80])
             picker.add_option(Selection(prompt, f"golf:{index}", True))
         for index, pick in enumerate(self.casual_picks):
             entry = pick.entry
             prompt = Text()
-            prompt.append(f"{'CASUAL ' + pick.mode.label:<22} ", style="bold cyan")
+            prompt.append(f"{pick.mode.label:<22} ", style="bold cyan")
             prompt.append(f"{entry['p_mean']:.3f}/{pick.units}w  ", style="bold cyan")
             lead = "empty" if pick.leader is None else f"{pick.leader.probability:.2f}/{pick.leader.units}w"
             prompt.append(f"vs {lead}  ", style="yellow")
+            if entry.get("estimated_from"):
+                prompt.append(f"[est({entry['estimated_from']})] ", style="bold cyan")
             prompt.append(f"{pick.slug[:40]:<40} ", style="bold")
             prompt.append(entry["phrase"][:80])
             picker.add_option(Selection(prompt, f"casual:{index}", True))
@@ -1145,6 +1239,10 @@ class PublishScreen(Screen):
             return
         log = self.query_one("#pub-log", SelectableRichLog)
         follow = log.is_vertical_scroll_end
+        if self.transcript.turbo:
+            log.write(rendered, scroll_end=follow)
+            self._chain_lines = 0
+            return
         one_line = self.transcript.chain is not None and "\n" not in rendered.plain
         if one_line and self.transcript.extends_chain:
             written = log.replace_tail(rendered, self._chain_lines, scroll_end=follow, one_line=True)
@@ -1256,16 +1354,22 @@ class PublishScreen(Screen):
         except ValueError:
             rerolls = fallback
         dry = self.query_one("#dry", Checkbox).value
-        self.busy = True
-        self.stop_requested = False
+        word_by_word = self.query_one("#by-word", Checkbox).value
+        turbo = self.query_one("#turbo", Checkbox).value
+        self.begin_run()
         self.query_one("#publish", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
         self.query_one("#import-go", Button).disabled = True
-        self.note(f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
-        self.publish_worker(entries, dry, rerolls)
+        if turbo:
+            self.transcript.turbo = True
+            self.transcript.slots.clear()
+            self.note(TURBO_BANNER)
+        else:
+            self.note(f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
+        self.publish_worker(entries, dry, rerolls, word_by_word, turbo)
 
     @work(thread=True, exclusive=True)
-    def publish_worker(self, entries: list[dict], dry: bool, rerolls: int) -> None:
+    def publish_worker(self, entries: list[dict], dry: bool, rerolls: int, word_by_word: bool, turbo: bool) -> None:
         from ..publish import publish
 
         results = []
@@ -1277,6 +1381,9 @@ class PublishScreen(Screen):
             results.append((entry, result))
 
         try:
+            if turbo:
+                turbo_countdown(write)
+                write(f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
             publish(
                 dry_run=dry,
                 rerolls=rerolls,
@@ -1284,7 +1391,9 @@ class PublishScreen(Screen):
                 log=write,
                 on_result=on_result,
                 long_rerolls=0 if default_rerolls() == 0 else LONG_REROLLS,
-                halt=lambda: self.stop_requested,
+                halt=self.gate,
+                word_by_word=word_by_word,
+                turbo=turbo,
             )
         except Exception as error:
             write(f"publisher crashed: {error!r}")
@@ -1302,11 +1411,12 @@ class PublishScreen(Screen):
                 )
 
         def done() -> None:
-            self.busy = False
-            self.stop_requested = False
+            self.transcript.turbo = False
+            if self.finish_run():
+                return
             self.query_one("#publish", Button).disabled = False
             self.query_one("#stop", Button).disabled = True
             self.query_one("#import-go", Button).disabled = False
-            self.reload()
+            self.reload(full=True)
 
         self.app.call_from_thread(done)

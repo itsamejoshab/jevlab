@@ -1,0 +1,19 @@
+---
+description: Home-screen button names and the screens they mean
+alwaysApply: true
+---
+
+# Home screen names
+
+The home screen labels are not the code names. When the user says these words, they mean these screens. Do not rename files, commands, or docs to match the labels.
+
+| They say | Screen | Code and commands |
+|---|---|---|
+| Scan | Search | `search`, `SearchSetupScreen` |
+| Launch | Publish | `publish`, `PublishScreen` |
+| Countermeasures | Defense | `defense`, `DefenseScreen` |
+| Download | Refresh snapshot | `snapshot`, `SnapshotScreen` |
+
+Quit is still Quit.
+
+"When I launch" means publishing lines. "Download" means refreshing the snapshot, not saving a file. "When I launch the app" means starting the program.

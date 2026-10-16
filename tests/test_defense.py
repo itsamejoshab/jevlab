@@ -3,17 +3,20 @@
 import asyncio
 import json
 import re
+import threading
+import time
 
 from textual.app import App, ComposeResult
-from textual.widgets import Button
+from textual.widgets import Button, Select
 
 from jevlab.db import DB
-from jevlab.defense import QUIET, READY, already_quiet, defend, lexicon, pick_decoys, scan
+from jevlab.defense import QUIET, READY, DefenseRun, already_quiet, defend, lexicon, pick_decoys, scan
 from jevlab.rules import banned
 from jevlab.rules.banned import BannedPhrase
 from jevlab.modes import HIGHEST
 from jevlab.tui.defense import DefenseLog, DefenseScreen
 from jevlab.tui.pickers import HomeScreen
+from jevlab.tui.publish_log import TURBO_BANNER
 
 
 def _db(tmp_path) -> DB:
@@ -293,6 +296,25 @@ def test_defend_does_not_add_decoys_once_the_answer_is_a_quarter_of_the_list(tmp
     assert any("crowded" in line for line in lines)
 
 
+def test_a_live_crowd_replaces_the_snapshot_so_refresh_stops_calling_it_at_risk(tmp_path):
+    db = _db(tmp_path)
+    _question(db, "q", "The")
+    phrase = " ".join(f"ans{i:02d}" for i in range(19))
+    _lead(db, "q", "highScores", phrase)
+    _impacts(db, "q", [{"word": "ans00", "averageImpact": 0.9}])
+    _impacts(db, "pool", [{"word": "gamma", "averageImpact": 0.5}])
+    before = next(target for target in scan(db) if target.slug == "q")
+    assert before.status == READY
+
+    rows = [{"word": word, "averageImpact": 1 - index * 0.01} for index, word in enumerate(phrase.split())]
+    rows += [{"word": f"decoy{i:02d}", "averageImpact": 0.01} for i in range(57)]
+    site = _Site(phrase=phrase, word_rows=rows)
+    result = defend([("q", "strict_chain")], log=lambda _m: None, db=db, client=site, lock_path=tmp_path / "lock")
+    assert result.posted == 0
+    after = next(target for target in scan(db) if target.slug == "q")
+    assert after.status == QUIET
+
+
 def _reset_bans(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(banned, "PATH", tmp_path / "banned_phrases.json")
     monkeypatch.setattr(banned, "_phrases", {})
@@ -388,6 +410,24 @@ def test_defend_posts_the_whole_cover_in_one_pass(tmp_path):
     assert site.ops[-1] == "clear:"
 
 
+def test_defend_word_by_word_posts_each_decoy_alone(tmp_path):
+    db = _db(tmp_path)
+    _pool(db)
+    site = _Site()
+    lines: list[str] = []
+    result = defend(
+        [("q", "strict_chain")],
+        log=lines.append,
+        db=db,
+        client=site,
+        lock_path=tmp_path / "lock",
+        word_by_word=True,
+    )
+    assert result.posted == 2
+    assert site.ops == ["append:gamma", "append:delta", "clear:"]
+    assert any("one word at a time" in line for line in lines)
+
+
 def test_defend_posts_the_decoys_as_one_sentence_and_does_not_repeat_it(tmp_path):
     db = _db(tmp_path)
     _pool(db)
@@ -458,6 +498,50 @@ def test_defense_log_marks_each_board_with_a_cyan_counter():
     assert "[2/2]" in again.plain
 
 
+def test_defense_log_colors_the_turbo_banner_and_keeps_a_boards_own_mark():
+    log = DefenseLog()
+    banner = log.render(TURBO_BANNER)
+    assert banner.plain == TURBO_BANNER
+    assert any("yellow" in str(span.style) for span in banner.spans)
+    log.render("defending 2 board(s)")
+    shown = log.render("[2/2] == steak [strict_chain] Highest")
+    assert shown.plain.startswith("[2/2] ")
+    assert shown.plain.count("[2/2]") == 1
+    assert log.count == 0
+    mark = next(span for span in shown.spans if "[2/2]" in shown.plain[span.start : span.end])
+    assert "cyan" in str(mark.style)
+    done = log.render("[2/2]   done.")
+    assert "[2/2]" in done.plain and "done." in done.plain
+
+
+def test_home_indicator_follows_the_selected_mode(monkeypatch, tmp_path):
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "home.db"))
+
+    class _App(App):
+        def __init__(self):
+            super().__init__()
+            self.game_mode = HIGHEST
+
+        def on_mount(self) -> None:
+            self.push_screen(HomeScreen())
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(120, 48)) as pilot:
+            await pilot.pause()
+            mark = app.screen.query_one("EditionMark")
+            assert mark.content.plain.startswith("Home | ")
+            assert mark.content.plain.endswith(" | Strict Highest Mode")
+            app.screen.query_one("#game-mode", Select).value = "shortest"
+            await pilot.pause()
+            assert app.screen.query_one("EditionMark").content.plain.endswith(" | Strict Shortest Mode")
+
+    asyncio.run(check())
+
+
 def test_home_opens_defense(monkeypatch, tmp_path):
     monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "home.db"))
 
@@ -477,10 +561,37 @@ def test_home_opens_defense(monkeypatch, tmp_path):
         async with app.run_test(size=(120, 48)) as pilot:
             await pilot.pause()
             button = app.screen.query_one("#defense", Button)
-            assert str(button.label) == "Defense"
+            assert str(button.label) == "Countermeasures"
             app.screen.action_defense()
             await pilot.pause()
             assert isinstance(app.screen, DefenseScreen)
+
+    asyncio.run(check())
+
+
+def test_defense_word_by_word_defaults_off_and_golf_is_marked_gone(monkeypatch, tmp_path):
+    monkeypatch.setattr("jevlab.tui.defense.DB", lambda: DB(tmp_path / "empty.db"))
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(DefenseScreen())
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            words = app.screen.query_one("#by-word")
+            golf = app.screen.query_one("#golf")
+            turbo = app.screen.query_one("#turbo")
+            assert words.value is False
+            assert str(words.label) == "Word by word"
+            assert golf.value is False
+            assert str(golf.label) == "Include golf (no longer on website)"
+            assert turbo.value is False
+            assert str(turbo.label) == "Turbo"
 
     asyncio.run(check())
 
@@ -509,5 +620,214 @@ def test_defense_screen_preselects_only_ready_boards(monkeypatch, tmp_path):
             await pilot.pause()
             selected = set(app.screen.query_one("#def-picker").selected)
             assert selected == {"strict_chain:q", "strict_chain:short"}
+
+    asyncio.run(check())
+
+
+class _ParallelSite:
+    """Two boards. The first append waits until the second board has read its leaderboard."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.ops: list[tuple[str, str]] = []
+        self.attempts: dict[str, dict] = {}
+        self.reads = 0
+        self.second_read = threading.Event()
+        self._append_started = False
+
+    def viewer(self):
+        return {"player": {"user": {"id": "me"}}}
+
+    def menu(self):
+        return {
+            "questions": [
+                {"slug": "a", "revisionId": "ra", "kind": "noul", "goal": "yes"},
+                {"slug": "b", "revisionId": "rb", "kind": "noul", "goal": "yes"},
+            ]
+        }
+
+    def leaderboards(self, _rev, _mode):
+        with self.lock:
+            self.reads += 1
+            if self.reads >= 2:
+                self.second_read.set()
+        rows = [
+            {
+                "userId": "me",
+                "name": "us",
+                "probability": 0.99,
+                "wordCount": 2,
+                "phrase": "alpha beta",
+            }
+        ]
+        return {"leaderboards": {"highScores": rows, "shortestYes": []}}
+
+    def words(self, _rev, _mode):
+        return [{"word": "alpha", "averageImpact": 0.4}, {"word": "beta", "averageImpact": 0.3}]
+
+    def attempt(self, rev, mode):
+        return self._attempt(rev, mode)
+
+    def start(self, rev, mode):
+        return self._attempt(rev, mode)
+
+    def _attempt(self, rev, mode):
+        with self.lock:
+            current = self.attempts.get(rev)
+            if current is None:
+                current = {
+                    "id": rev,
+                    "nextTurn": 1,
+                    "revisionId": rev,
+                    "playMode": mode,
+                    "tokens": [],
+                    "turns": [],
+                }
+                self.attempts[rev] = current
+            return current
+
+    def turn(self, attempt, operation):
+        if operation["kind"] == "append":
+            with self.lock:
+                first = not self._append_started
+                self._append_started = True
+            if first and not self.second_read.wait(2):
+                raise AssertionError("second board did not start reading before the first append returned")
+        with self.lock:
+            rev = attempt["revisionId"]
+            text = operation["kind"] + ":" + str(operation.get("text") or "")
+            self.ops.append((rev, text))
+            tokens = [token for token in attempt.get("tokens") or [] if token.get("active", True)]
+            if operation["kind"] == "clear":
+                tokens = []
+            elif operation["kind"] == "append":
+                tokens.append({"id": f"t{len(self.ops)}", "text": operation["text"], "active": True})
+            updated = dict(attempt)
+            updated["tokens"] = tokens
+            updated["turns"] = list(attempt.get("turns") or []) + [{"id": f"n{len(self.ops)}", "probability": 0.22}]
+            updated["nextTurn"] = int(attempt.get("nextTurn") or 1) + 1
+            self.attempts[rev] = updated
+            return updated, updated["turns"][-1]
+
+
+def test_defend_turbo_posts_two_boards_at_once_and_tags_each_line(tmp_path):
+    db = _db(tmp_path)
+    _impacts(db, "pool", [{"word": "gamma", "averageImpact": 0.8}, {"word": "delta", "averageImpact": 0.5}])
+    site = _ParallelSite()
+    lines: list[str] = []
+    lock = threading.Lock()
+
+    def write(message: str) -> None:
+        with lock:
+            lines.append(message)
+
+    result = defend(
+        [("a", "strict_chain"), ("b", "strict_chain")],
+        log=write,
+        db=db,
+        client=site,
+        lock_path=tmp_path / "lock",
+        turbo=True,
+    )
+    assert result.posted == 4
+    assert result.boards == 2
+    by_rev: dict[str, list[str]] = {}
+    for rev, op in site.ops:
+        by_rev.setdefault(rev, []).append(op)
+    assert by_rev["ra"] == ["append:gamma delta", "clear:"]
+    assert by_rev["rb"] == ["append:gamma delta", "clear:"]
+    text = "\n".join(lines)
+    assert "[1/2]" in text and "[2/2]" in text
+    assert any("[1/2]" in line and "done." in line for line in lines)
+    assert any("[2/2]" in line and "done." in line for line in lines)
+
+
+def test_defense_turbo_log_starts_with_the_warning(monkeypatch, tmp_path):
+    db = _db(tmp_path)
+    _question(db, "q", "Ready")
+    _lead(db, "q", "highScores", "alpha beta")
+    _pool(db)
+    monkeypatch.setattr("jevlab.tui.defense.DB", lambda: db)
+    monkeypatch.setattr("jevlab.activity.log", lambda *_args, **_kwargs: None)
+    pauses: list[float] = []
+    shown: list[list[str]] = []
+    screen_ref: list = []
+    real_sleep = time.sleep
+
+    def ticks(text: str) -> list[str]:
+        return [line.strip() for line in text.splitlines() if line.strip() in {"5", "4", "3", "2", "1"}]
+
+    def log_text() -> str:
+        return "\n".join(line.text for line in screen_ref[0].query_one("#def-log").lines)
+
+    def fake_sleep(seconds: float) -> None:
+        if seconds == 1:
+            pauses.append(seconds)
+            if screen_ref:
+                shown.append(ticks(log_text()))
+            return
+        real_sleep(seconds)
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    seen: list[dict] = []
+    started_after: list[int] = []
+
+    def fake_defend(*_args, **kwargs):
+        started_after.append(len(pauses))
+        seen.append(kwargs)
+        return DefenseRun(0, 0, 0)
+
+    monkeypatch.setattr("jevlab.tui.defense.defend", fake_defend)
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(DefenseScreen())
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            screen_ref.append(screen)
+            assert screen.query_one("#turbo").value is False
+
+            async def settle() -> None:
+                for _ in range(20):
+                    await pilot.pause()
+                    if seen and not screen.busy:
+                        break
+
+            screen.start()
+            await settle()
+            assert seen[0]["turbo"] is False
+            assert pauses == []
+            assert ticks(log_text()) == []
+            assert "Turbo is on" not in log_text()
+
+            pauses.clear()
+            shown.clear()
+            seen.clear()
+            started_after.clear()
+            screen.query_one("#turbo").value = True
+            screen.start()
+            await settle()
+            assert seen[0]["turbo"] is True
+            assert started_after == [5]
+            assert pauses == [1, 1, 1, 1, 1]
+            assert shown == [
+                ["5"],
+                ["5", "4"],
+                ["5", "4", "3"],
+                ["5", "4", "3", "2"],
+                ["5", "4", "3", "2", "1"],
+            ]
+            text = log_text()
+            warning = text.rfind("Turbo is on")
+            started = text.find("defending", warning)
+            assert warning != -1 and started > warning
+            assert ticks(text[warning:started]) == ["5", "4", "3", "2", "1"]
 
     asyncio.run(check())

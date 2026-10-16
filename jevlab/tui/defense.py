@@ -19,7 +19,8 @@ from ..defense import BARE, BLIND, QUIET, READY, DefenseTarget, defend, scan
 from ..modes import CASUAL, GOLF
 from .chrome import EditionMark
 from .copyselect import SelectableRichLog
-from .pickers import Setting
+from .pickers import RunKeys, Setting
+from .publish_log import TURBO_BANNER, _COUNTDOWN, turbo_countdown
 
 
 def _mode_name(play_mode: str) -> str:
@@ -31,6 +32,7 @@ def _mode_name(play_mode: str) -> str:
 
 
 _OPENING = re.compile(r"^(?:DRY RUN: )?defending (\d+) board")
+_MARK = re.compile(r"^\[(\d+/\d+)\] (.*)$")
 
 
 class DefenseLog:
@@ -53,6 +55,13 @@ class DefenseLog:
 
     def _line(self, raw: str) -> Text:
         line = raw.strip()
+        if line.startswith("Turbo is on") or line in _COUNTDOWN:
+            return Text(line, style="bold yellow")
+        if match := _MARK.match(line):
+            text = Text()
+            text.append(f"[{match.group(1)}] ", style="bold cyan")
+            text.append(match.group(2))
+            return text
         if match := _OPENING.match(line):
             self.total = int(match.group(1))
             self.count = 0
@@ -67,7 +76,9 @@ class DefenseLog:
         return Text(raw)
 
 
-class DefenseScreen(Screen):
+class DefenseScreen(RunKeys, Screen):
+    pause_message = "paused after the current word"
+    leave_message = "stopping after the current word, then back"
     CSS = """
     #def-body { height: 1fr; }
     #def-side { width: 3fr; height: 1fr; }
@@ -86,17 +97,20 @@ class DefenseScreen(Screen):
     #def-log { width: 2fr; min-width: 42; max-width: 72; height: 1fr; border: round $secondary; margin-left: 1; }
     """
 
-    BINDINGS = [Binding("escape", "back", "back")]
+    BINDINGS = [
+        Binding("space", "toggle_pause", "pause/resume", priority=True),
+        Binding("q", "leave", "stop & back", priority=True),
+        Binding("escape", "back", "back"),
+    ]
 
     def __init__(self):
         super().__init__()
         self.targets: list[DefenseTarget] = []
-        self.busy = False
-        self.stop_requested = False
         self.transcript = DefenseLog()
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        mode = getattr(self.app, "game_mode", None)
+        yield EditionMark("Countermeasures", mode.label if mode is not None else None)
         with Horizontal(id="def-body"):
             with Vertical(id="def-side"):
                 with Horizontal(id="def-actions"):
@@ -109,11 +123,17 @@ class DefenseScreen(Screen):
                         yield Setting("Dry run", False, id="dry", compact=True)
                         yield Static("nothing is sent", classes="hint")
                     with Horizontal(classes="opt"):
-                        yield Setting("Include golf", False, id="golf", compact=True)
-                        yield Static("golf keeps its own word list", classes="hint")
+                        yield Setting("Word by word", False, id="by-word", compact=True)
+                        yield Static("one row per word on the words table", classes="hint")
+                    with Horizontal(classes="opt"):
+                        yield Setting("Include golf (no longer on website)", False, id="golf", compact=True)
+                        yield Static("leave this off", classes="hint")
                     with Horizontal(classes="opt"):
                         yield Setting("Include casual", False, id="casual", compact=True)
                         yield Static("casual keeps its own word list", classes="hint")
+                    with Horizontal(classes="opt"):
+                        yield Setting("Turbo", False, id="turbo", compact=True)
+                        yield Static("several questions at once; the log is tagged", classes="hint")
                 yield Static(id="def-help")
                 yield SelectionList[str](id="def-picker")
             yield SelectableRichLog(id="def-log", wrap=True, markup=False, max_lines=2000)
@@ -174,20 +194,27 @@ class DefenseScreen(Screen):
             self.notify("nothing selected", severity="warning")
             return
         dry = self.query_one("#dry", Checkbox).value
-        self.busy = True
-        self.stop_requested = False
+        word_by_word = self.query_one("#by-word", Checkbox).value
+        turbo = self.query_one("#turbo", Checkbox).value
+        self.begin_run()
         self.query_one("#defend", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
-        self.note(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
-        self.worker(jobs, dry)
+        if turbo:
+            self.note(TURBO_BANNER)
+        else:
+            self.note(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
+        self.worker(jobs, dry, word_by_word, turbo)
 
     @work(thread=True, exclusive=True)
-    def worker(self, jobs: list[tuple[str, str]], dry: bool) -> None:
+    def worker(self, jobs: list[tuple[str, str]], dry: bool, word_by_word: bool, turbo: bool) -> None:
         def write(message: str) -> None:
             self.app.call_from_thread(self.note, message)
 
         try:
-            result = defend(jobs, dry_run=dry, log=write, halt=lambda: self.stop_requested)
+            if turbo:
+                turbo_countdown(write)
+                write(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
+            result = defend(jobs, dry_run=dry, log=write, halt=self.gate, word_by_word=word_by_word, turbo=turbo)
         except Exception as error:
             write(f"defense crashed: {error!r}")
             result = None
@@ -199,7 +226,8 @@ class DefenseScreen(Screen):
         self.app.call_from_thread(self._done)
 
     def _done(self) -> None:
-        self.busy = False
+        if self.finish_run():
+            return
         self.query_one("#defend", Button).disabled = False
         self.query_one("#stop", Button).disabled = True
         self.reload()
@@ -207,7 +235,7 @@ class DefenseScreen(Screen):
 
 def _row(target: DefenseTarget) -> Text:
     text = Text()
-    tag = {QUIET: "crowded", BARE: "nothing new", BLIND: "no phrase"}.get(target.status, "")
+    tag = {READY: "at-risk", QUIET: "crowded", BARE: "nothing new", BLIND: "no phrase"}.get(target.status, "")
     style = {READY: "bold green", QUIET: "dim"}.get(target.status, "dim")
     text.append(f"{_mode_name(target.play_mode):<7} ", style="bold")
     text.append(f"{'+'.join(target.held):<18} ", style=style)
@@ -217,11 +245,9 @@ def _row(target: DefenseTarget) -> Text:
     if target.status == READY:
         count = len(target.decoys)
         label = f"{count}/{plan.need}" if plan.need and count < plan.need else f"{count:>2}"
-        text.append(
-            f"{plan.ours_in_top}/{plan.top_len or plan.ours_in_top} of the top are our answer  {label} decoys  "
-        )
+        text.append(f"{plan.ours_in_top}/{plan.top_len or plan.ours_in_top} {label} decoys  ")
     elif target.status == QUIET:
-        text.append(f"{plan.answer_words}/{plan.word_count} listed words are our answer  ")
+        text.append(f"{plan.answer_words}/{plan.word_count}  ")
     text.append(f"{target.title[:36]:<36} ", style="bold")
     if target.phrase:
         text.append(target.phrase[:48], style="dim")
@@ -248,11 +274,11 @@ def _help(targets: list[DefenseTarget], snap, me: str) -> Text:
             f"{counts[BARE] + counts[BLIND]} with nothing safe to add."
         )
     text.append(
-        "\nThe words list is per play mode, shared by Highest and Shortest, so one Strict pass covers both. "
-        "Each board gets a few more words than that list needs, so one pass still finishes if a banned word is skipped. "
-        "Words in our leading phrase, words already listed here, words already planted, and stop words are skipped. "
-        "A board with 40 or more words is left unchecked when our answer is at most a quarter of the top, "
-        "or at most a quarter of the whole list. "
-        "A decoy that takes a lead stays on the board. Golf and Casual each have their own list.",
+        "\nThe words list is per play mode. Highest and Shortest share it, so one Strict pass covers both. "
+        "Casual has its own. "
+        "A board is left unselected once the list has 40 or more words and our answer is at most "
+        "a quarter of the top 20 by impact, or at most a quarter of the whole list. "
+        "Each pass adds a few more words than that line needs, so it still finishes if a banned word is skipped. "
+        "Words in our leading phrase, words already on the list, words already planted, and stop words are skipped.",
     )
     return text

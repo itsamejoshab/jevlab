@@ -1,10 +1,16 @@
+import json
+
 import jevlab.config as config
+from jevlab import vault
+from jevlab.db import DB
+from jevlab.modes import CASUAL, GOLF, HIGH_SCORES, STRICT
 from jevlab.objective import Objective
 from jevlab.publish import (
     SENTENCE_WORDS,
     append_texts,
     build_chain,
     pause_for_fresh_score,
+    publish_entry,
     reroll,
     reroll_limits,
     row_listed,
@@ -173,3 +179,106 @@ def test_publish_chain_sends_the_sentence_then_the_last_word():
     assert site.ops[-2].startswith("remove:")
     assert site.ops[-1] == "append:gamma"
     assert [token["text"] for token in attempt["tokens"]] == ["alpha beta", "gamma"]
+
+
+class _Board:
+    """An empty board until the phrase is posted, then our row, so the wait returns at once."""
+
+    def __init__(self, units: int):
+        self.units = units
+        self.appends: list[str] = []
+        self.state = {
+            "revisionId": "r1",
+            "playMode": STRICT,
+            "nextTurn": 1,
+            "tokens": [],
+            "turns": [],
+        }
+
+    def leaderboards(self, revision_id: str, mode: str) -> dict:
+        rows = []
+        if self.appends:
+            rows.append({"userId": "me", "name": "me", "probability": 0.91, "wordCount": self.units})
+        return {"leaderboards": {HIGH_SCORES: rows}}
+
+    def attempt(self, revision_id: str, mode: str):
+        return None
+
+    def start(self, revision_id: str, mode: str) -> dict:
+        self.state = {**self.state, "revisionId": revision_id, "playMode": mode, "tokens": [], "turns": []}
+        return self.state
+
+    def turn(self, attempt, operation):
+        if operation["kind"] == "append":
+            self.appends.append(operation["text"])
+            tokens = [token for token in attempt.get("tokens") or [] if token.get("active", True)]
+            tokens.append({"id": f"t{len(self.appends)}", "text": operation["text"], "active": True})
+        else:
+            tokens = []
+        turn = {"probability": 0.91}
+        self.state = {**attempt, "tokens": tokens, "turns": [turn]}
+        return self.state, turn
+
+
+def _question(db: DB, slug: str = "cereal") -> None:
+    db.execute(
+        "INSERT INTO questions VALUES (?, 0, 'r1', 'Is cereal a soup?', '', 'noul', 'yes', 0.2, 0.5, 'm', ?, ?)",
+        (slug, json.dumps({"state": ""}), json.dumps({"goal": "yes"})),
+    )
+
+
+def _entry(mode: str, phrase: str, units: int) -> dict:
+    saved = vault.save(
+        "cereal",
+        mode,
+        phrase,
+        p_mean=0.91,
+        p_lcb=0.9,
+        spread=0.01,
+        n=5,
+        units=units,
+        leader=None,
+        beats=True,
+        title="cereal",
+    )
+    return saved | {"slug": "cereal", "mode": mode, "board": HIGH_SCORES}
+
+
+def _post(tmp_path, monkeypatch, mode: str, phrase: str, units: int, *, word_by_word: bool) -> list[str]:
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    site = _Board(units)
+    notes: list[str] = []
+    publish_entry(
+        db,
+        site,
+        _entry(mode, phrase, units),
+        {"cereal": {"slug": "cereal", "revisionId": "r1", "goal": "yes", "kind": "noul", "choices": []}},
+        "me",
+        False,
+        0,
+        False,
+        notes.append,
+        word_by_word=word_by_word,
+    )
+    return site.appends
+
+
+def test_publish_word_by_word_appends_each_strict_and_casual_word(tmp_path, monkeypatch):
+    for mode in (STRICT, CASUAL):
+        root = tmp_path / mode
+        root.mkdir()
+        sent = _post(root, monkeypatch, mode, "alpha beta gamma", 3, word_by_word=True)
+        assert sent == ["alpha", "beta", "gamma"]
+
+
+def test_publish_defaults_to_a_sentence_then_the_last_word(tmp_path, monkeypatch):
+    sent = _post(tmp_path, monkeypatch, STRICT, "alpha beta gamma", 3, word_by_word=False)
+    assert sent == ["alpha beta", "gamma"]
+
+
+def test_publish_word_by_word_leaves_golf_as_one_phrase(tmp_path, monkeypatch):
+    phrase = "alpha beta"
+    sent = _post(tmp_path, monkeypatch, GOLF, phrase, len(phrase), word_by_word=True)
+    assert sent == [phrase]

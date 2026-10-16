@@ -192,7 +192,7 @@ def test_decider_edition_defaults(tmp_path):
         "                           ORACLE_CONCURRENCY, ORACLE_MAX_CONCURRENCY, ORACLE_TIMEOUT, TRIAGE_K)\n"
         "assert EDITION == 'decider' and MIRROR\n"
         "assert DATA.name == 'decider'\n"
-        "assert JEV_MODEL == 'perplexity/pplx-decider-v1-27b'\n"
+        "assert JEV_MODEL == 'perplexity/pplx-decider-v1.1-27b'\n"
         "assert ORACLE_BACKENDS == ['openrouter']\n"
         "assert ORACLE_CONCURRENCY == 4 and ORACLE_MAX_CONCURRENCY == 8\n"
         "assert ORACLE_TIMEOUT == 60\n"

@@ -151,10 +151,6 @@ class LabScreen(Screen):
     BINDINGS = [
         Binding("space", "toggle_pause", "pause/resume"),
         Binding("n", "next_question", "next question"),
-        Binding("c", "compress", "compress row"),
-        Binding("r", "resample", "resample row"),
-        Binding("s", "save", "save row"),
-        Binding("v", "queue_row", "queue row"),
         Binding("p", "toggle_post", "post on/off"),
         Binding("q", "leave", "stop & back"),
     ]
@@ -243,7 +239,7 @@ class LabScreen(Screen):
         self.started_at = time.monotonic()
 
     def compose(self) -> ComposeResult:
-        yield EditionMark()
+        yield EditionMark("Lab", self.game_mode.label)
         yield Static(id="lab-header")
         with Horizontal(id="body"):
             with VerticalScroll(id="queue-box"):
@@ -1116,10 +1112,6 @@ class LabScreen(Screen):
         except Exception:
             return None
 
-    def selected(self):
-        phrase = self.selected_phrase()
-        return self.engine.archive.items.get(phrase) if phrase and self.engine else None
-
     def action_toggle_post(self) -> None:
         if not self.live_play or not self.live_session:
             return
@@ -1142,39 +1134,6 @@ class LabScreen(Screen):
             self.log_line("skipping to the next question")
             self.engine.end_reason = "skipped by you"
             self.engine.stop()
-
-    def action_compress(self) -> None:
-        cand = self.selected()
-        if cand:
-            self.log_line(f"compress queued: {cand.phrase}")
-            self.engine.submit(lambda: self.engine.compress_phrase(cand.phrase))
-
-    def action_resample(self, n: int = 10) -> None:
-        cand = self.selected()
-        if cand:
-            self.log_line(f"resample x{n} queued: {cand.phrase}")
-            self.engine.submit(lambda: self.engine.resample(cand.phrase, n))
-
-    def action_save(self) -> None:
-        cand = self.selected()
-        if cand:
-            self.engine.save(cand)
-
-    def action_queue_row(self) -> None:
-        cand = self.selected()
-        if not cand:
-            return
-        if self.live_play:
-            if self.live_session and not self.live_session.post_enabled:
-                self.log_line("[live] posting is off")
-                return
-            self.maybe_post_live()
-            return
-        self.engine.save(cand)
-        vault.set_status(
-            self.engine.slug, self.engine.mode, cand.phrase, "queued", self.engine.board, target=self.engine.target
-        )
-        self.log_line(f"queued for publishing: {cand.phrase}")
 
     def action_leave(self) -> None:
         self.cancelled = True

@@ -85,7 +85,10 @@ def _paint_span(strip: Strip, start: int, end: int, style: RichStyle) -> Strip:
     segments: list[Segment] = []
     if start:
         segments.extend(strip.crop(0, start))
-    segments.extend(strip.crop(start, end).apply_style(style))
+    # The selection style has to sit on top of the line. Underneath, the log's own
+    # background covers it, and the drag looks like it did nothing.
+    selected = strip.crop(start, end)
+    segments.extend(Segment.apply_style(selected, post_style=style))
     if end < width:
         segments.extend(strip.crop(end, width))
     return Strip(segments, width)

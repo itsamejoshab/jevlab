@@ -191,3 +191,110 @@ def test_a_dry_run_does_not_spend_a_local_recheck(tmp_path, monkeypatch):
     assert result == "dry-run"
     assert order == []
     assert vault.load(slug, GOLF, HIGH_SCORES)["entries"][0]["status"] == "candidate"
+
+
+def _estimate(slug: str, phrase: str, p: float, board: str = HIGH_SCORES) -> dict:
+    saved = vault.save(
+        slug,
+        GOLF,
+        phrase,
+        p_mean=p,
+        p_lcb=p,
+        spread=0.01,
+        n=0,
+        units=UNITS,
+        leader=None,
+        beats=True,
+        title=slug,
+        board=board,
+        estimated_from="jev",
+    )
+    return saved | {"slug": slug, "mode": GOLF, "board": board}
+
+
+def test_a_failed_estimate_is_deleted_so_it_is_not_offered_again(tmp_path, monkeypatch):
+    from jevlab.modes import SHORTEST_YES
+
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    slug = "hinge"
+    _question(db, slug)
+    entry = _estimate(slug, PHRASE, 0.97)
+    _estimate(slug, PHRASE, 0.97, SHORTEST_YES)
+    _save(slug, OTHER, 0.80)
+    order: list[str] = []
+    monkeypatch.setattr("jevlab.publish.oracle_check", _oracle(order, 0.10))
+
+    result, notes = _publish(db, _Site(0.20, order), entry, _live(slug), order, 0.10)
+
+    phrases = {item["phrase"] for item in vault.all_entries()}
+    posted = db.all("SELECT status, server FROM publishes")
+    assert result.startswith("short")
+    assert phrases == {OTHER}
+    assert any("dropped the jev estimate" in line for line in notes)
+    assert posted[0]["status"] == "short"
+    assert posted[0]["server"] == 0.20
+
+
+def test_an_estimate_that_no_longer_beats_the_live_leader_is_deleted(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    slug = "hinge"
+    _question(db, slug)
+    entry = _estimate(slug, PHRASE, 0.90)
+    _save(slug, OTHER, 0.80)
+    order: list[str] = []
+
+    class _Ahead(_Site):
+        def leaderboards(self, revision_id: str, mode: str) -> dict:
+            rows = [{"userId": "them", "probability": 0.99, "wordCount": 4, "name": "them"}]
+            return {"leaderboards": {HIGH_SCORES: rows}}
+
+    result, notes = _publish(db, _Ahead(0.20, order), entry, _live(slug), order, 0.10)
+
+    phrases = {item["phrase"] for item in vault.all_entries()}
+    assert result.startswith("failed:")
+    assert "no longer beats" in result
+    assert phrases == {OTHER}
+    assert any("dropped the jev estimate" in line for line in notes)
+    assert order == []
+
+
+def test_a_dry_run_keeps_an_estimate_that_would_lose(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    slug = "hinge"
+    _question(db, slug)
+    entry = _estimate(slug, PHRASE, 0.90)
+    order: list[str] = []
+
+    class _Ahead(_Site):
+        def leaderboards(self, revision_id: str, mode: str) -> dict:
+            rows = [{"userId": "them", "probability": 0.99, "wordCount": 4, "name": "them"}]
+            return {"leaderboards": {HIGH_SCORES: rows}}
+
+    result, _notes = _publish(db, _Ahead(0.20, order), entry, _live(slug), order, 0.10, dry_run=True)
+
+    saved = vault.load(slug, GOLF, HIGH_SCORES)["entries"][0]
+    assert result.startswith("failed:")
+    assert saved["phrase"] == PHRASE
+    assert saved["estimated_from"] == "jev"
+
+
+def test_a_winning_estimate_is_kept_as_this_editions_score(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    slug = "hinge"
+    _question(db, slug)
+    entry = _estimate(slug, PHRASE, 0.97)
+    order: list[str] = []
+    monkeypatch.setattr("jevlab.publish.oracle_check", _oracle(order, 0.10))
+
+    result, notes = _publish(db, _Site(0.99, order), entry, _live(slug), order, 0.10)
+
+    saved = vault.load(slug, GOLF, HIGH_SCORES)["entries"][0]
+    assert result.startswith("won")
+    assert saved["status"] == "published"
+    assert saved["server_p"] == 0.99
+    assert "estimated_from" not in saved
+    assert not any("dropped the jev estimate" in line for line in notes)

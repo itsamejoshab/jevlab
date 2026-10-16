@@ -223,6 +223,49 @@ def queued(board: str | None = None) -> list[dict]:
     return [e for e in all_entries(board) if e.get("status") == "queued"]
 
 
+def drop_estimates(slug: str, phrase: str) -> list[dict]:
+    """Remove imported copies of one phrase. A line this edition measured stays.
+
+    The same borrowed phrase can sit on several boards. A failed attempt retires all of them, so the
+    next publish does not try the estimate again. Importing that edition again can put it back.
+    """
+    removed = []
+    folder = VAULT / slug
+    if not phrase or not folder.exists():
+        return removed
+    for path in sorted(folder.glob("*.json")):
+        mode, file_board = _split(path)
+        if file_board not in BOARDS:
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        kept = []
+        changed = False
+        for entry in data.get("entries") or []:
+            if entry.get("phrase") == phrase and entry.get("estimated_from"):
+                removed.append(
+                    entry
+                    | {
+                        "slug": data.get("slug") or slug,
+                        "mode": data.get("mode") or mode,
+                        "board": file_board,
+                        "target": data.get("target") or "",
+                    }
+                )
+                changed = True
+            else:
+                kept.append(entry)
+        if changed:
+            data["entries"] = kept
+            data.setdefault("slug", slug)
+            data.setdefault("mode", mode)
+            data.setdefault("board", file_board)
+            _write(data)
+    return removed
+
+
 def drop_phrases(slug: str, phrases: set[str]) -> list[dict]:
     """Remove these phrases from every vault file for one question. Returns the removed entries."""
     removed = []

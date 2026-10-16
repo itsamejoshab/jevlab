@@ -655,9 +655,31 @@ def test_publish_turbo_defaults_off_and_the_log_starts_with_the_warning(monkeypa
     monkeypatch.setattr("jevlab.crosspost.picks", lambda *args, **kwargs: [])
     monkeypatch.setattr("jevlab.activity.log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("jevlab.tui.pickers.vault.set_status", lambda *args, **kwargs: None)
+    pauses: list[float] = []
+    shown: list[list[str]] = []
+    screen_ref: list = []
+    real_sleep = time.sleep
+
+    def ticks(text: str) -> list[str]:
+        return [line.strip() for line in text.splitlines() if line.strip() in {"5", "4", "3", "2", "1"}]
+
+    def log_text() -> str:
+        return "\n".join(line.text for line in screen_ref[0].query_one("#pub-log").lines)
+
+    def fake_sleep(seconds: float) -> None:
+        if seconds == 1:
+            pauses.append(seconds)
+            if screen_ref:
+                shown.append(ticks(log_text()))
+            return
+        real_sleep(seconds)
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
     calls: list[dict] = []
+    started_after: list[int] = []
 
     def fake_publish(**kwargs):
+        started_after.append(len(pauses))
         calls.append(kwargs)
         return 0
 
@@ -675,6 +697,7 @@ def test_publish_turbo_defaults_off_and_the_log_starts_with_the_warning(monkeypa
         async with app.run_test(size=(140, 42)) as pilot:
             await pilot.pause()
             screen = app.screen
+            screen_ref.append(screen)
             turbo = screen.query_one("#turbo")
             assert turbo.value is False
             assert str(turbo.label) == "Turbo"
@@ -690,17 +713,49 @@ def test_publish_turbo_defaults_off_and_the_log_starts_with_the_warning(monkeypa
                 "status": "candidate",
             }
             standing = Standing("cereal", "Cereal", "noul", "yes", None, None, entry, False, True)
-            screen.rows = [standing]
-            screen.query_one("#pub-picker").add_option(Selection("cereal", standing.key, True))
+
+            def arm() -> None:
+                screen.rows = [standing]
+                picker = screen.query_one("#pub-picker")
+                picker.clear_options()
+                picker.add_option(Selection("cereal", standing.key, True))
+
+            async def settle() -> None:
+                for _ in range(20):
+                    await pilot.pause()
+                    if calls and not screen.busy:
+                        break
+
+            arm()
+            screen.start_publish()
+            await settle()
+            assert calls[0]["turbo"] is False
+            assert pauses == []
+            assert ticks(log_text()) == []
+            assert "Turbo is on" not in log_text()
+
+            pauses.clear()
+            shown.clear()
+            calls.clear()
+            started_after.clear()
+            arm()
             turbo.value = True
             screen.start_publish()
-            for _ in range(20):
-                await pilot.pause()
-                if calls and not screen.busy:
-                    break
+            await settle()
             assert calls[0]["turbo"] is True
-            text = "\n".join(line.text for line in screen.query_one("#pub-log").lines)
-            assert text.strip().startswith("Turbo is on")
-            assert text.find("Turbo is on") < text.find("line")
+            assert started_after == [5]
+            assert pauses == [1, 1, 1, 1, 1]
+            assert shown == [
+                ["5"],
+                ["5", "4"],
+                ["5", "4", "3"],
+                ["5", "4", "3", "2"],
+                ["5", "4", "3", "2", "1"],
+            ]
+            text = log_text()
+            warning = text.rfind("Turbo is on")
+            started = text.find("re-rolls", warning)
+            assert warning != -1 and started > warning
+            assert ticks(text[warning:started]) == ["5", "4", "3", "2", "1"]
 
     asyncio.run(check())

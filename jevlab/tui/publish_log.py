@@ -9,6 +9,7 @@ result on its own line. Word-by-word chain edits share one line
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 
 from rich.text import Text
@@ -33,6 +34,14 @@ _FALL = re.compile(r"^falling through to the next vault line: (?P<phrase>.*)$")
 _MARK = re.compile(r"^\[(?P<i>\d+)/(?P<n>\d+)\] (?P<body>.*)$")
 
 TURBO_BANNER = "Turbo is on. Up to 8 questions run at once, so this log will be mixed together and harder to follow."
+_COUNTDOWN = ("5", "4", "3", "2", "1")
+
+
+def turbo_countdown(note) -> None:
+    """Leave each digit on screen for a second so the turbo warning can be read."""
+    for mark in _COUNTDOWN:
+        note(mark)
+        time.sleep(1)
 
 
 @dataclass
@@ -130,7 +139,7 @@ class PublishLog:
         return rendered
 
     def _turbo_piece(self, body: str, slot_id: int) -> Text | None:
-        if body.startswith("Turbo is on") or body == "---RUNNING ADD'L XPOST OPS---":
+        if body.startswith("Turbo is on") or body in _COUNTDOWN or body == "---RUNNING ADD'L XPOST OPS---":
             return Text(body, style="bold yellow")
         slot = self.slots.setdefault(slot_id, _PhraseState())
         if found := _HEADER.match(body):

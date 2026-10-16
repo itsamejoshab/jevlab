@@ -20,7 +20,7 @@ from ..modes import CASUAL, GOLF
 from .chrome import EditionMark
 from .copyselect import SelectableRichLog
 from .pickers import RunKeys, Setting
-from .publish_log import TURBO_BANNER
+from .publish_log import TURBO_BANNER, _COUNTDOWN, turbo_countdown
 
 
 def _mode_name(play_mode: str) -> str:
@@ -55,7 +55,7 @@ class DefenseLog:
 
     def _line(self, raw: str) -> Text:
         line = raw.strip()
-        if line.startswith("Turbo is on"):
+        if line.startswith("Turbo is on") or line in _COUNTDOWN:
             return Text(line, style="bold yellow")
         if match := _MARK.match(line):
             text = Text()
@@ -201,7 +201,8 @@ class DefenseScreen(RunKeys, Screen):
         self.query_one("#stop", Button).disabled = False
         if turbo:
             self.note(TURBO_BANNER)
-        self.note(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
+        else:
+            self.note(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
         self.worker(jobs, dry, word_by_word, turbo)
 
     @work(thread=True, exclusive=True)
@@ -210,6 +211,9 @@ class DefenseScreen(RunKeys, Screen):
             self.app.call_from_thread(self.note, message)
 
         try:
+            if turbo:
+                turbo_countdown(write)
+                write(f"{'DRY RUN: ' if dry else ''}defending {len(jobs)} board(s)")
             result = defend(jobs, dry_run=dry, log=write, halt=self.gate, word_by_word=word_by_word, turbo=turbo)
         except Exception as error:
             write(f"defense crashed: {error!r}")

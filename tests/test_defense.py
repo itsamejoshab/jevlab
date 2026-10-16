@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import threading
+import time
 
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Select
@@ -748,9 +749,31 @@ def test_defense_turbo_log_starts_with_the_warning(monkeypatch, tmp_path):
     _pool(db)
     monkeypatch.setattr("jevlab.tui.defense.DB", lambda: db)
     monkeypatch.setattr("jevlab.activity.log", lambda *_args, **_kwargs: None)
+    pauses: list[float] = []
+    shown: list[list[str]] = []
+    screen_ref: list = []
+    real_sleep = time.sleep
+
+    def ticks(text: str) -> list[str]:
+        return [line.strip() for line in text.splitlines() if line.strip() in {"5", "4", "3", "2", "1"}]
+
+    def log_text() -> str:
+        return "\n".join(line.text for line in screen_ref[0].query_one("#def-log").lines)
+
+    def fake_sleep(seconds: float) -> None:
+        if seconds == 1:
+            pauses.append(seconds)
+            if screen_ref:
+                shown.append(ticks(log_text()))
+            return
+        real_sleep(seconds)
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
     seen: list[dict] = []
+    started_after: list[int] = []
 
     def fake_defend(*_args, **kwargs):
+        started_after.append(len(pauses))
         seen.append(kwargs)
         return DefenseRun(0, 0, 0)
 
@@ -768,15 +791,43 @@ def test_defense_turbo_log_starts_with_the_warning(monkeypatch, tmp_path):
         async with app.run_test(size=(160, 40)) as pilot:
             await pilot.pause()
             screen = app.screen
+            screen_ref.append(screen)
+            assert screen.query_one("#turbo").value is False
+
+            async def settle() -> None:
+                for _ in range(20):
+                    await pilot.pause()
+                    if seen and not screen.busy:
+                        break
+
+            screen.start()
+            await settle()
+            assert seen[0]["turbo"] is False
+            assert pauses == []
+            assert ticks(log_text()) == []
+            assert "Turbo is on" not in log_text()
+
+            pauses.clear()
+            shown.clear()
+            seen.clear()
+            started_after.clear()
             screen.query_one("#turbo").value = True
             screen.start()
-            for _ in range(20):
-                await pilot.pause()
-                if seen and not screen.busy:
-                    break
+            await settle()
             assert seen[0]["turbo"] is True
-            text = "\n".join(line.text for line in screen.query_one("#def-log").lines)
-            assert text.strip().startswith("Turbo is on")
-            assert text.find("Turbo is on") < text.find("defending")
+            assert started_after == [5]
+            assert pauses == [1, 1, 1, 1, 1]
+            assert shown == [
+                ["5"],
+                ["5", "4"],
+                ["5", "4", "3"],
+                ["5", "4", "3", "2"],
+                ["5", "4", "3", "2", "1"],
+            ]
+            text = log_text()
+            warning = text.rfind("Turbo is on")
+            started = text.find("defending", warning)
+            assert warning != -1 and started > warning
+            assert ticks(text[warning:started]) == ["5", "4", "3", "2", "1"]
 
     asyncio.run(check())

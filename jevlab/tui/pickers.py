@@ -23,7 +23,7 @@ from ..search.engine import LEVELS
 from .chrome import NAMES, EditionMark
 from .copyselect import SelectableRichLog
 from .lab import LabScreen
-from .publish_log import TURBO_BANNER, PublishLog
+from .publish_log import TURBO_BANNER, PublishLog, turbo_countdown
 
 
 def fmt_leader(s: Standing, u: str = "w") -> str:
@@ -1360,7 +1360,8 @@ class PublishScreen(RunKeys, Screen):
             self.transcript.turbo = True
             self.transcript.slots.clear()
             self.note(TURBO_BANNER)
-        self.note(f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
+        else:
+            self.note(f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
         self.publish_worker(entries, dry, rerolls, word_by_word, turbo)
 
     @work(thread=True, exclusive=True)
@@ -1376,6 +1377,9 @@ class PublishScreen(RunKeys, Screen):
             results.append((entry, result))
 
         try:
+            if turbo:
+                turbo_countdown(write)
+                write(f"{'DRY RUN: ' if dry else ''}publishing {len(entries)} line(s), re-rolls {rerolls}")
             publish(
                 dry_run=dry,
                 rerolls=rerolls,

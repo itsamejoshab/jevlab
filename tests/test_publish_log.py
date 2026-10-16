@@ -546,8 +546,8 @@ def test_snapshot_switches_each_edition_then_returns(monkeypatch):
         pickers.EDITION = edition
         seen.append(("on", edition))
 
-    def take(db, modes, log):
-        seen.append(("snap", pickers.EDITION, db, modes))
+    def take(db, modes, log, section=""):
+        seen.append(("snap", pickers.EDITION, db, modes, section))
 
     monkeypatch.setattr(pickers, "DB", lambda: "db")
     monkeypatch.setattr("jevlab.config.activate", activate)
@@ -557,11 +557,58 @@ def test_snapshot_switches_each_edition_then_returns(monkeypatch):
 
     assert [item for item in seen if item[0] != "log"] == [
         ("on", "kev"),
-        ("snap", "kev", "db", ("strict_chain",)),
+        ("snap", "kev", "db", ("strict_chain",), "1/2"),
         ("on", "laya"),
-        ("snap", "laya", "db", ("strict_chain",)),
+        ("snap", "laya", "db", ("strict_chain",), "2/2"),
         ("on", "jev"),
     ]
+    rules = [item[1] for item in seen if item[0] == "log"]
+    assert rules[0] == "──────────── snapshot · 2 editions · Strict ────────────"
+    assert "──────────── 1/2 · Kev ────────────" in rules
+    assert "──────────── 2/2 · Laya ────────────" in rules
+    assert rules[-1] == "──────────── back to Jev ────────────"
+
+
+def test_snapshot_log_marks_a_failed_edition_and_continues(monkeypatch):
+    from jevlab.tui import pickers
+
+    monkeypatch.setattr(pickers, "EDITION", "jev")
+    seen = []
+
+    def activate(edition):
+        pickers.EDITION = edition
+
+    def take(db, modes, log, section=""):
+        if pickers.EDITION == "kev":
+            raise RuntimeError("menu down")
+        log(f"body {section}")
+
+    monkeypatch.setattr(pickers, "DB", lambda: "db")
+    monkeypatch.setattr("jevlab.config.activate", activate)
+    monkeypatch.setattr("jevlab.site.snapshot.take_snapshot", take)
+    pickers.run_snapshots(("kev", "laya"), ("golf", "word_chain"), lambda message: seen.append(message))
+
+    assert seen[0] == "──────────── snapshot · 2 editions · Golf, Casual ────────────"
+    assert "──────────── 1/2 · Kev · failed ────────────" in seen
+    assert any("menu down" in message for message in seen)
+    assert "body 2/2" in seen
+    assert seen[-1] == "──────────── back to Jev ────────────"
+
+
+def test_snapshot_log_colors_section_rules():
+    from jevlab.site.snapshot import log_rule
+    from jevlab.tui.pickers import snapshot_line
+
+    def styles(message: str) -> str:
+        return " ".join(str(span.style) for span in snapshot_line(message).spans)
+
+    assert "bold cyan" in styles(log_rule("1/3 · Jev"))
+    assert "bold green" in styles(log_rule("1/3 · Jev · done · 4s"))
+    assert "bold red" in styles(log_rule("1/3 · Jev · failed"))
+    assert "bold yellow" in styles(log_rule("stopped · 1/3 finished"))
+    body = styles("  1/3 · Jev · 40/120 · 33% · 12s")
+    assert "dim" in body
+    assert "bold" not in body
 
 
 def _question(db: DB, slug: str, revision: str) -> None:

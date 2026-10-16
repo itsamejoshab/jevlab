@@ -3,7 +3,13 @@
 import json
 
 from jevlab.db import DB
-from jevlab.site.snapshot import take_snapshot
+from jevlab.site.snapshot import (
+    format_elapsed,
+    log_rule,
+    progress_line,
+    rule_title,
+    take_snapshot,
+)
 
 REQUEST = (
     '{"state":"","model":"jev-latest","questions":{"q":{"type":"noul",'
@@ -13,7 +19,9 @@ REQUEST = (
 
 class Menu:
     edition = "jev"
-    asked = []
+
+    def __init__(self):
+        self.asked = []
 
     def menu(self):
         return {
@@ -51,6 +59,15 @@ class Menu:
             "jevRequest": REQUEST,
         }
 
+    def leaderboards(self, _revision, _mode):
+        return {"leaderboards": {}}
+
+    def words(self, _revision, _mode):
+        return None
+
+    def attempt(self, _revision, _mode):
+        return None
+
 
 def test_snapshot_fills_jev_request_the_menu_omits(tmp_path, monkeypatch):
     monkeypatch.setattr("jevlab.site.snapshot.SNAPSHOTS", tmp_path / "snapshots")
@@ -64,3 +81,30 @@ def test_snapshot_fills_jev_request_the_menu_omits(tmp_path, monkeypatch):
     assert client.asked == ["rev-cereal"]
     kept = db.question("already-there")
     assert kept["jev_request"]["model"] == "jev-latest"
+
+
+def test_snapshot_log_names_the_edition_section(tmp_path, monkeypatch):
+    monkeypatch.setattr("jevlab.site.snapshot.SNAPSHOTS", tmp_path / "snapshots")
+    seen = []
+    take_snapshot(DB(tmp_path / "t.db"), Menu(), modes=("strict_chain", "golf"), log=seen.append, section="2/5")
+    text = "\n".join(seen)
+    assert log_rule("Jev") not in text
+    assert "  snapshot 1 · 2 questions · Strict, Golf · anonymous" in seen
+    assert "  jevRequest · 1/1 filled" in seen
+    assert "  fetching 4 boards · 16 at a time" in seen
+    assert any(line.startswith("  2/5 · Jev · 4/4 · 100%") for line in seen)
+    assert any(line.startswith("──────────── 2/5 · Jev · done ·") for line in seen)
+    assert rule_title(next(line for line in seen if "· done ·" in line)) == next(
+        line for line in seen if "· done ·" in line
+    ).removeprefix("──────────── ").removesuffix(" ────────────")
+    assert any(line.startswith("  0 boards · 0 word lists ·") and line.endswith("· 0 failed") for line in seen)
+
+
+def test_progress_line_keeps_the_section_after_the_header_scrolls_away():
+    assert format_elapsed(0) == "0s"
+    assert format_elapsed(65) == "1m 05s"
+    assert format_elapsed(3661) == "1h 01m"
+    assert progress_line("clef-flash", 40, 120, 12, section="3/9") == "  3/9 · Clef-flash · 40/120 · 33% · 12s"
+    assert progress_line("kev", 8, 8, 4, failed=2) == "  Kev · 8/8 · 100% · 4s · 2 failed"
+    assert rule_title(log_rule("1/3 · Jev")) == "1/3 · Jev"
+    assert rule_title("  1/3 · Jev · 40/120 · 33% · 12s") is None

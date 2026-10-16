@@ -396,24 +396,56 @@ def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=N
     stopping halfway would leave a half-written snapshot as the latest one.
     """
     from ..config import activate
-    from ..site.snapshot import take_snapshot
+    from ..site.snapshot import edition_label, log_rule, take_snapshot
 
     origin = EDITION
+    count = len(editions)
+    known = {mode: label for label, mode in SNAPSHOT_MODES}
+    labels = ", ".join(known.get(mode, mode) for mode in modes)
+    noun = "edition" if count == 1 else "editions"
+    log(log_rule(f"snapshot · {count} {noun} · {labels}"))
+    finished = 0
     try:
-        for edition in editions:
+        for index, edition in enumerate(editions, start=1):
             if halt and halt():
-                log("stopped")
+                log(log_rule(f"stopped · {finished}/{count} finished"))
                 break
+            name = edition_label(edition)
+            section = f"{index}/{count}"
+            log(log_rule(f"{section} · {name}"))
             try:
-                log(f"{edition}: opening its database")
                 activate(edition)
-                take_snapshot(DB(), modes=modes, log=log)
+                take_snapshot(DB(), modes=modes, log=log, section=section)
+                finished += 1
             except Exception as error:
-                log(f"{edition} snapshot failed: {error!r}")
+                log(log_rule(f"{section} · {name} · failed"))
+                log(f"  {error!r}")
     finally:
         if EDITION != origin:
-            log(f"back to {origin}")
+            log(log_rule(f"back to {edition_label(origin)}"))
             activate(origin)
+
+
+def snapshot_line(message: str) -> Text:
+    """Timestamp plus the snapshot line. Section rules are the only colored lines."""
+    from ..site.snapshot import rule_title
+
+    line = Text()
+    line.append(f"{time.strftime('%H:%M:%S')} ", style="dim")
+    title = rule_title(message)
+    if title is None:
+        line.append(message)
+        return line
+    if title.startswith("stopped"):
+        style = "bold yellow"
+    elif title.endswith("failed"):
+        style = "bold red"
+    elif " · done · " in title:
+        style = "bold green"
+    else:
+        style = "bold cyan"
+    line.append(message, style=style)
+    return line
 
 
 class RunKeys:
@@ -500,7 +532,10 @@ class SnapshotScreen(RunKeys, Screen):
     #snap-modes { height: 1; padding: 0 1; }
     #snap-editions Label, #snap-modes Label { width: 12; height: 1; text-style: bold; }
     #snap-editions Setting, #snap-modes Setting { margin-right: 2; }
-    #snap-log { height: 1fr; border: round $secondary; margin-top: 1; }
+    #snap-log {
+        height: 1fr; border: round $secondary; margin-top: 1;
+        border-title-color: $secondary; border-title-style: bold; border-title-align: center;
+    }
     """
 
     BINDINGS = [
@@ -566,7 +601,16 @@ class SnapshotScreen(RunKeys, Screen):
 
         def write(message: str) -> None:
             activity.log("snapshot", message)
-            self.app.call_from_thread(log.write, f"{time.strftime('%H:%M:%S')} {message}")
+
+            def paint() -> None:
+                from ..site.snapshot import rule_title
+
+                log.write(snapshot_line(message))
+                title = rule_title(message)
+                if title:
+                    log.border_title = title
+
+            self.app.call_from_thread(paint)
 
         run_snapshots(editions, modes, write, halt=self.gate)
 

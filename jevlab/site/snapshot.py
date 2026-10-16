@@ -12,10 +12,68 @@ from ..db import DB
 from .client import MODES, SiteClient, SiteError, decode_jev_request
 
 BOARD_KEYS = ("highScores", "shortestYes", "byLength", "champions", "winner")
+RULE = "─" * 12
+_MODE_LABEL = {
+    "strict_chain": "Strict",
+    "golf": "Golf",
+    "word_chain": "Casual",
+    "emoji": "Emoji",
+}
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def edition_label(edition: str) -> str:
+    return edition.capitalize()
+
+
+def log_rule(title: str) -> str:
+    """A section divider. The title is what the log panel keeps in its border."""
+    return f"{RULE} {title} {RULE}"
+
+
+def rule_title(message: str) -> str | None:
+    prefix, suffix = f"{RULE} ", f" {RULE}"
+    if message.startswith(prefix) and message.endswith(suffix):
+        return message[len(prefix):-len(suffix)]
+    return None
+
+
+def format_elapsed(seconds: float) -> str:
+    whole = max(0, int(seconds))
+    hours, rem = divmod(whole, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def section_mark(edition: str, section: str = "") -> str:
+    name = edition_label(edition)
+    return f"{section} · {name}" if section else name
+
+
+def mode_labels(modes: tuple[str, ...]) -> str:
+    return ", ".join(_MODE_LABEL.get(mode, mode) for mode in modes)
+
+
+def progress_line(
+    edition: str, index: int, total: int, elapsed: float, failed: int = 0, section: str = ""
+) -> str:
+    """One scan tick that still names its edition after the section header has scrolled away."""
+    pct = (100 * index) // total if total else 0
+    parts = [section_mark(edition, section), f"{index}/{total}", f"{pct}%", format_elapsed(elapsed)]
+    if failed:
+        parts.append(f"{failed} failed")
+    return "  " + " · ".join(parts)
+
+
+def _fetch_errors(results: list[dict]) -> int:
+    return sum(1 for result in results for key in result if key.endswith("_error") and key[:-6] not in result)
 
 
 def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, log) -> list[dict]:
@@ -30,10 +88,10 @@ def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, l
         try:
             full = client.question(revision)
         except SiteError as error:
-            log(f"  {question['slug']}: jevRequest fetch failed ({error})")
+            log(f"  {question['slug']}: jevRequest failed ({error})")
             return revision, None
         except Exception as error:
-            log(f"  {question['slug']}: jevRequest fetch failed ({error!r})")
+            log(f"  {question['slug']}: jevRequest failed ({error!r})")
             return revision, None
         return revision, full if isinstance(full, dict) else None
 
@@ -52,7 +110,7 @@ def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, l
             if full.get(key) is not None:
                 merged[key] = full[key]
         filled.append(merged)
-    log(f"jevRequest filled for {len(found)}/{len(missing)} questions the menu omitted")
+    log(f"  jevRequest · {len(found)}/{len(missing)} filled")
     return filled
 
 
@@ -63,9 +121,13 @@ def take_snapshot(
     modes: tuple[str, ...] = MODES,
     workers: int = 16,
     log=print,
+    section: str = "",
 ) -> int:
     client = client or SiteClient()
     started = time.monotonic()
+    mark = section_mark(client.edition, section)
+    if not section:
+        log(log_rule(mark))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     raw_dir = SNAPSHOTS / stamp
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -74,7 +136,7 @@ def take_snapshot(
     try:
         viewer = client.viewer()
     except SiteError as error:
-        log(f"viewer failed ({error}); continuing signed out")
+        log(f"  viewer failed ({error}); continuing signed out")
         viewer = {}
     me = ((viewer.get("player") or {}).get("user") or {}).get("id") or ""
     (raw_dir / "menu.json").write_text(json.dumps(menu, indent=1))
@@ -103,13 +165,14 @@ def take_snapshot(
             for q in questions
         ],
     )
-    log(f"snapshot {snapshot_id}: {len(questions)} questions x {len(modes)} modes (me={me or 'anonymous'})")
+    modes_bit = f" · {mode_labels(modes)}" if modes else ""
+    log(f"  snapshot {snapshot_id} · {len(questions)} questions{modes_bit} · {me or 'anonymous'}")
     from ..publish import realign_vault_goals
 
     realign_vault_goals(db, previous_goals, {q["slug"] for q in questions}, log)
 
     jobs = [(q, mode) for q in questions for mode in modes]
-    log(f"fetching {len(jobs)} questions, {workers} at a time")
+    log(f"  fetching {len(jobs)} boards · {workers} at a time")
 
     def fetch(job):
         question, mode = job
@@ -138,8 +201,11 @@ def take_snapshot(
     with ThreadPoolExecutor(workers) as pool:
         for index, result in enumerate(pool.map(fetch, jobs), start=1):
             results.append(result)
-            if index % 40 == 0:
-                log(f"  {index}/{len(jobs)} boards")
+            if index % 40 == 0 or index == len(jobs):
+                log(progress_line(
+                    client.edition, index, len(jobs), time.monotonic() - started,
+                    _fetch_errors(results), section,
+                ))
     (raw_dir / "boards.json").write_text(json.dumps(results))
 
     board_rows, word_rows, attempt_rows, score_rows = [], [], [], []
@@ -168,11 +234,15 @@ def take_snapshot(
     db.executemany("INSERT OR REPLACE INTO word_impacts VALUES (?, ?, ?, ?)", word_rows)
     db.executemany("INSERT OR REPLACE INTO attempts VALUES (?, ?, ?, ?)", attempt_rows)
     db.executemany("INSERT OR REPLACE INTO site_scores VALUES (?, ?, ?, ?, ?, ?)", score_rows)
-    errors = sum(1 for r in results for k in r if k.endswith("_error") and k[:-6] not in r)
+    errors = _fetch_errors(results)
+    done = f"{mark} · done · {format_elapsed(time.monotonic() - started)}"
+    if errors:
+        done += f" · {errors} failed"
+    log(log_rule(done))
     log(
-        f"snapshot {snapshot_id} done in {time.monotonic() - started:.0f}s: "
-        f"{len(board_rows)} boards, {len(word_rows)} word lists, {len(attempt_rows)} attempts, "
-        f"{len(score_rows)} site scores, {errors} failed fetches -> {raw_dir}"
+        f"  {len(board_rows)} boards · {len(word_rows)} word lists · {len(attempt_rows)} attempts · "
+        f"{len(score_rows)} scores · {errors} failed"
     )
+    log(f"  saved {raw_dir}")
     return snapshot_id
 

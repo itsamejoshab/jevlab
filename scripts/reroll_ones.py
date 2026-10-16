@@ -187,8 +187,8 @@ def record(db, target: dict, word: str, best: float) -> None:
 def run(args) -> int:
     from jevlab.config import EDITION
     from jevlab.db import DB
-    from jevlab.objective import Objective, site_round
-    from jevlab.publish import LOCK_PATH, WordRejected, wait_for_row
+    from jevlab.objective import site_round
+    from jevlab.publish import LOCK_PATH, WordRejected
     from jevlab.rules.banned import BannedPhrase
     from jevlab.site import SiteClient, SiteError
 
@@ -285,7 +285,6 @@ def run(args) -> int:
                     log(f"  -> {variant} best {best:.2f}  rolls {[round(r, 2) for r in rolls]}")
                 if not rolled:
                     continue
-                wait_for_row(db, client, target["live"], target["mode"], me, best_board, None, Objective("yes"), log)
                 delta = best_board - start
                 if site_round(best_board) > site_round(start):
                     improved += 1

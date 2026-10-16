@@ -11,11 +11,10 @@ from jevlab.publish import (
     build_chain,
     pause_for_fresh_score,
     publish_entry,
+    record_posting,
     reroll,
     reroll_limits,
-    row_listed,
     should_reroll,
-    wait_for_row,
 )
 
 
@@ -55,73 +54,43 @@ def test_noisy_editions_still_chase(monkeypatch):
         assert reroll_limits(0, 5, gamble=False, long_shot=True) == (0, 5)
 
 
-def _row(p: float, units: int = 4, user: str = "me") -> dict:
-    return {"userId": user, "probability": p, "wordCount": units}
-
-
-def test_a_row_is_listed_when_ours_is_at_least_the_score_we_posted():
+def test_a_posting_is_written_onto_the_board_we_already_read():
     objective = Objective("yes")
-    assert row_listed([_row(0.97)], "me", 0.97, 4, objective)
-    assert row_listed([_row(0.99, 40)], "me", 0.90, 4, objective)
-    assert not row_listed([_row(0.97, 40)], "me", 0.97, 4, objective)
-    assert not row_listed([_row(0.97, user="them")], "me", 0.97, 4, objective)
-    assert not row_listed([], "me", 0.97, 4, objective)
+    boards = {"highScores": [{"userId": "them", "probability": 0.50, "wordCount": 40, "name": "them"}]}
+    record_posting(boards, "me", HIGH_SCORES, "", 0.97, 4, "alpha beta", objective)
+    ours = [row for row in boards["highScores"] if row["userId"] == "me"]
+    assert ours == [{"userId": "me", "probability": 0.97, "wordCount": 4, "phrase": "alpha beta"}]
+    assert boards["highScores"][0]["name"] == "them"
 
 
-def test_the_board_is_read_until_the_row_shows_up(monkeypatch):
-    boards = {"highScores": [_row(0.50)]}
-    reads = {"n": 0}
-
-    class Client:
-        def leaderboards(self, revision_id: str, mode: str) -> dict:
-            reads["n"] += 1
-            if reads["n"] >= 3:
-                boards["highScores"] = [_row(0.97)]
-            return {"leaderboards": boards}
-
-    slept: list[float] = []
-    clock = {"t": 0.0}
-    monkeypatch.setattr(
-        "jevlab.publish.time.sleep",
-        lambda seconds: slept.append(seconds) or clock.__setitem__("t", clock["t"] + seconds),
-    )
-    monkeypatch.setattr("jevlab.publish.time.monotonic", lambda: clock["t"])
-    notes: list[str] = []
-
-    class DB:
-        def latest_snapshot(self):
-            return {"id": 1}
-
-        def executemany(self, sql, rows):
-            self.saved = list(rows)
-
-    db = DB()
-    wait_for_row(db, Client(), {"revisionId": "r", "slug": "q"}, "golf", "me", 0.97, 4, Objective("yes"), notes.append)
-    assert reads["n"] == 3
-    assert slept == [0.5, 1.0]
-    assert any("listed" in note for note in notes)
-    assert db.saved
+def test_a_worse_posting_leaves_the_row_we_hold():
+    objective = Objective("yes")
+    boards = {"highScores": [{"userId": "me", "probability": 0.99, "wordCount": 40, "phrase": "kept", "name": "me"}]}
+    record_posting(boards, "me", HIGH_SCORES, "", 0.90, 4, "alpha beta", objective)
+    assert boards["highScores"] == [
+        {"userId": "me", "probability": 0.99, "wordCount": 40, "phrase": "kept", "name": "me"}
+    ]
 
 
-def test_a_board_that_never_lists_the_row_stops_at_the_cap(monkeypatch):
-    class Client:
-        def leaderboards(self, revision_id: str, mode: str) -> dict:
-            return {"leaderboards": {"highScores": [_row(0.10)]}}
+def test_a_better_posting_replaces_our_row_and_keeps_the_name():
+    boards = {"highScores": [{"userId": "me", "probability": 0.80, "wordCount": 10, "phrase": "old", "name": "me"}]}
+    record_posting(boards, "me", HIGH_SCORES, "", 0.91, 4, "alpha beta", Objective("yes"))
+    assert boards["highScores"] == [
+        {"userId": "me", "probability": 0.91, "wordCount": 4, "phrase": "alpha beta", "name": "me"}
+    ]
 
-    clock = {"t": 0.0}
 
-    def sleep(seconds: float) -> None:
-        clock["t"] += seconds
+def test_a_zero_score_on_an_empty_board_adds_no_row():
+    boards: dict = {"highScores": []}
+    record_posting(boards, "me", HIGH_SCORES, "", 0.0, 4, "alpha beta", Objective("yes"))
+    assert boards["highScores"] == []
 
-    monkeypatch.setattr("jevlab.publish.time.sleep", sleep)
-    monkeypatch.setattr("jevlab.publish.time.monotonic", lambda: clock["t"])
-    notes: list[str] = []
-    wait_for_row(
-        None, Client(), {"revisionId": "r", "slug": "q"}, "golf", "me", 0.97, 4, Objective("yes"), notes.append
-    )
-    assert clock["t"] <= 20.0
-    assert clock["t"] >= 19.0
-    assert any("had not listed" in note for note in notes)
+
+def test_a_short_zero_does_not_replace_a_qualifying_shortest_row():
+    objective = Objective("yes", board="shortestYes")
+    boards = {"shortestYes": [{"userId": "me", "probability": 0.80, "wordCount": 10, "phrase": "kept"}]}
+    record_posting(boards, "me", "shortestYes", "", 0.0, 3, "nope", objective)
+    assert boards["shortestYes"][0]["phrase"] == "kept"
 
 
 def test_only_microsoft_waits_between_rerolls(monkeypatch):
@@ -182,7 +151,7 @@ def test_publish_chain_sends_the_sentence_then_the_last_word():
 
 
 class _Board:
-    """An empty board until the phrase is posted, then our row, so the wait returns at once."""
+    """The board read before the phrase is sent. The posting is recorded from the turn, not a later read."""
 
     def __init__(self, units: int):
         self.units = units

@@ -48,6 +48,7 @@ from .advanced import GCGSwap, Genetic, SurrogateBO
 from .archive import ARCHETYPES, Archive, Candidate
 from .boosters import Boosters
 from .chains import PROBE_TOP, RECIPES, ChainAblate, ChainCompact, ChainLibrary, LongChain, Probe, observed_ceiling
+from .hardboard import HARD_LINE, HardSchedule, ScoredLine, credit_generator_count
 from .mechanical import BeamBuild, Drift, Extend, Grow, PrecisionClimb, ProbeClimb, ScenarioJoin, SingleWord, Sweep
 from .probe import Lock
 from .scheduler import Scheduler
@@ -125,6 +126,11 @@ class LabContext:
             singles = self.single_word_lines(k)
             if singles:
                 return singles
+        frames = self.engine.kept_archetypes()
+        if frames is not None:
+            pool = [c for c in self.archive.items.values() if c.archetype in frames]
+            pool.sort(key=lambda c: c.fitness, reverse=True)
+            return pool[:k]
         if not self.fresh:
             return self.archive.top(k)
         new = self.archive.top_session(k // 2)
@@ -138,6 +144,13 @@ class LabContext:
     def log(self, message: str) -> None:
         self.engine.emit("log", message=message)
 
+    def restrict(self, cands: list) -> list:
+        """During a hard visit's growth, edits stay on the frames the schedule kept."""
+        frames = self.engine.kept_archetypes()
+        if frames is None:
+            return list(cands)
+        return [c for c in cands if c.archetype in frames]
+
     def climb_roots(self, k: int) -> list[Candidate]:
         """Lines to climb from. On Highest below the leader, the board's tie-break on length does not matter
         yet; the best dithered mean does, discounted by its noise so one lucky roll does not lead. Winning or
@@ -148,10 +161,18 @@ class LabContext:
             singles = self.single_word_lines(k)
             if singles:
                 return singles
+        frames = self.engine.kept_archetypes()
         if self.objective.shortest or self.engine.winning():
-            return self.archive.top_by_board(k)
+            lines = self.archive.top_by_board(len(self.archive) if frames is not None else k)
+            if frames is not None:
+                lines = [c for c in lines if c.archetype in frames]
+            return lines[:k]
         cap = self.engine.grow_cap
-        pool = [c for c in self.archive.items.values() if c.units <= cap]
+        pool = [
+            c
+            for c in self.archive.items.values()
+            if c.units <= cap and (frames is None or c.archetype in frames)
+        ]
         return sorted(pool, key=lambda c: -(c.p - noise_sd(c.p) / c.score.n**0.5))[:k]
 
     def writer_model(self) -> str:
@@ -463,6 +484,7 @@ class Engine:
         self.probe_lock = Lock()
         self.probe_force = False
         self.probe_gate = asyncio.Lock()
+        self.schedule: HardSchedule | None = None
         self.last_trained = 0
         self.training = False
         self.train_task: asyncio.Future | None = None
@@ -526,6 +548,7 @@ class Engine:
             if not before:
                 persist.append((self.oracle.qkey, phrase, origin, parent, time.time(), cand.archetype))
                 self.round_new.append(cand)
+                self.credit_generator(origin, cand.archetype)
             if improved:
                 self.origin_wins[origin] = self.origin_wins.get(origin, 0) + 1
                 self.emit("best", phrase=phrase, p=cand.p, units=cand.units, n=cand.score.n, origin=origin)
@@ -590,18 +613,18 @@ class Engine:
                     "and toward the least-tried tactics"
                 ),
             )
-            start = min(self.memory.level, self.max_level) if self.escalate and not self.long else 0
-            if self.plateau and self.escalate:
-                start = max(1, start)
+            start = self.opening_level()
             if start:
                 why = f"last run stalled at L{self.memory.level}; resuming there"
                 if self.plateau and self.memory.level < start:
                     why = "plateau: straight to precision climbing"
                 self.set_level(start, why)
-        if self.llm is not None:
+        # A hard visit deals its frames itself. Prefetch would probe and lock a writer first.
+        if self.llm is not None and not self.on_hard_board():
             for strategy in self.strategies.values():
                 if isinstance(strategy, LLMGenerate) and strategy.unlocked(self.ctx):
                     strategy.prefetch(self.ctx)
+        self.open_hard_schedule()
 
     def restore_memory(self) -> None:
         mem = self.memory
@@ -720,6 +743,194 @@ class Engine:
     def word_stage(self) -> bool:
         return any(c.units <= WORD_STAGE for c in self.roots())
 
+    def highest_yes_no(self) -> bool:
+        """Strict Highest yes/no, outside the long-chain regime."""
+        return self.objective.kind == "noul" and not self.objective.shortest and not self.long
+
+    def we_lead(self) -> bool:
+        """Our published row is ahead of the other leader. A tie is not already leading."""
+        lead = self.leader
+        if lead is None:
+            return False
+        if lead.ours:
+            return True
+        ours = self.our_best
+        if ours is None:
+            return False
+        return self.objective.leader_key(ours) > self.objective.leader_key(lead)
+
+    def on_hard_board(self) -> bool:
+        """Highest yes/no, a leader who is not us, displayed probability at least 0.90."""
+        if not self.highest_yes_no():
+            return False
+        lead = self.leader
+        if lead is None or lead.ours or self.we_lead():
+            return False
+        return site_round(lead.probability) >= HARD_LINE
+
+    def on_hard_visit(self) -> bool:
+        sched = self.schedule
+        return sched is not None and sched.hard and sched.phase != "off"
+
+    def hard_editing(self) -> bool:
+        sched = self.schedule
+        return sched is not None and sched.hard and sched.phase in ("grow", "compress")
+
+    def kept_archetypes(self) -> set[str] | None:
+        if not self.hard_editing():
+            return None
+        return set(self.schedule.growth_frames)
+
+    def opening_level(self) -> int:
+        """Stored ladder step to resume. A hard board starts at the deal, not at sweep or beam."""
+        if not self.fresh or not self.escalate or self.long or self.on_hard_board():
+            return 0
+        start = min(self.memory.level, self.max_level)
+        if self.plateau:
+            start = max(1, start)
+        return start
+
+    def should_enter_plateau(self, past_lines: int) -> bool:
+        """Plateau is the old long-leader climb. A hard board uses the deal instead."""
+        return (
+            self.plateau_candidate
+            and not self.on_hard_board()
+            and (self.memory.runs > 0 or past_lines >= 500)
+        )
+
+    def open_hard_schedule(self) -> HardSchedule:
+        self.schedule = HardSchedule.from_engine(self)
+        self.schedule.begin()
+        if self.schedule.phase == "grow":
+            self.open_growth_room()
+        return self.schedule
+
+    def refresh_hard_lines(self) -> None:
+        if self.schedule is None:
+            return
+        self.schedule.lines = [
+            ScoredLine(cand.archetype, cand.origin, cand.p, cand.units, cand.phrase)
+            for cand in self.archive.items.values()
+        ]
+
+    def credit_generator(self, origin: str, archetype: str) -> None:
+        credit_generator_count(self.memory.generator_counts, origin, archetype)
+
+    def open_growth_room(self) -> None:
+        """A kept line that is still behind may grow past the leader's word count."""
+        if not self.hard_editing() or self.leader is None:
+            return
+        frames = self.kept_archetypes() or set()
+        target = site_round(self.leader.probability)
+        behind = any(
+            cand.archetype in frames and site_round(cand.p) < target for cand in self.archive.items.values()
+        )
+        if not behind:
+            return
+        room = self.leader.units + 2
+        if self.length_cap < room or self.grow_cap < room:
+            self.length_cap = max(self.length_cap, room)
+            self.grow_cap = max(self.grow_cap, room)
+
+    def highest_may_compress(self, cand) -> bool:
+        """Highest compresses a line only once its displayed probability meets the leader.
+
+        On a hard visit that waits until the growth phase of the same visit has finished.
+        Being at least as long as the leader is not enough.
+        """
+        lead = self.leader
+        if lead is not None and site_round(cand.p) < site_round(lead.probability):
+            return False
+        if self.on_hard_board():
+            return self.schedule is not None and self.schedule.phase == "compress"
+        return True
+
+    def _generator_arm(self, model: str) -> LLMGenerate:
+        arms = [s for s in self.strategies.values() if isinstance(s, LLMGenerate)]
+        for arm in arms:
+            if model in arm.models:
+                return arm
+        if not arms:
+            raise RuntimeError("no generator is configured")
+        return arms[0]
+
+    async def _execute_deal_batch(self, batch) -> None:
+        """One assigned batch. No probe, no lock, no tier gate, no dear-model skip."""
+        arm = self._generator_arm(batch.model)
+        proposals = await arm._call(self.ctx, batch.model, list(batch.frames), [])
+        who = batch.model.split("/")[-1]
+        if not proposals:
+            self.emit(
+                "log",
+                message=f"[hard] {who} returned nothing for {', '.join(batch.frames)}; the assignment is used",
+            )
+            return
+        self.emit(
+            "log",
+            message=f"[hard] {who} wrote {len(proposals)} lines for {', '.join(batch.frames)}",
+        )
+        await self.evaluate([(text, arm.name, "", tactic) for text, tactic in proposals])
+
+    def _close_hard_deal(self) -> None:
+        self.refresh_hard_lines()
+        self.schedule.finish_deal()
+        self.stall = 0
+        if self.schedule.phase == "grow":
+            self.open_growth_room()
+            self.emit(
+                "log",
+                message="[hard] growing " + ", ".join(self.schedule.growth_frames),
+            )
+        elif self.schedule.phase == "done":
+            self.end_reason = "hard board: nothing within 0.05 and frames remain unwritten"
+            self.emit("log", message=f"moving on: {self.end_reason}")
+
+    async def run_hard_deal(self) -> int:
+        """Every batch assigned for this visit. A new best does not cancel the rest or drop the ladder."""
+        if self.schedule is None or self.schedule.phase != "deal":
+            return 0
+        ran = 0
+        while self.schedule.phase == "deal":
+            batch = self.schedule.take_batch()
+            if batch is None:
+                self._close_hard_deal()
+                break
+            arm = self._generator_arm(batch.model)
+            elites_before = dict(self.archive.elites)
+            calls_before = self.oracle.calls if self.oracle else 0
+            best_before = self.archive.best().fitness if len(self.archive) else float("-inf")
+            top_before = self.archive.top_by_board(5)
+            self.round_new = []
+            self.current_strategy = arm.name
+            self.emit("round", round=self.rounds + 1, strategy=arm.name)
+            try:
+                await self._execute_deal_batch(batch)
+            except BudgetExhausted:
+                raise
+            except Exception as error:
+                # A failed batch still used its frames. The rest of the deal keeps going.
+                self.emit("log", message=f"[hard] batch failed: {error!r}")
+            ran += 1
+            self.rounds += 1
+            best_after = self.archive.best().fitness if len(self.archive) else best_before
+            gain = 0.0 if best_before == float("-inf") else best_after - best_before
+            calls = (self.oracle.calls - calls_before) if self.oracle else 0
+            new_elites = sum(1 for cell, phrase in self.archive.elites.items() if elites_before.get(cell) != phrase)
+            novel = self.count_novel(top_before)
+            self.scheduler.update(arm.name, gain, calls, new_elites, novel)
+            if not self.schedule.batches:
+                self._close_hard_deal()
+        return ran
+
+    def hard_stall_action(self) -> str:
+        """A flat hard visit opens compression after growth, and never climbs the ladder."""
+        sched = self.schedule
+        if sched is None or not sched.hard or sched.phase not in ("grow", "compress"):
+            return ""
+        if sched.phase == "grow" and sched.growth_rounds > 0:
+            return "compress"
+        return "hold"
+
     def allowed(self, name: str) -> bool:
         if self.one_word_race and name == "boosters":
             return False
@@ -727,7 +938,14 @@ class Engine:
         if self.one_word_race and name in {"precision", "sweep", "local_edit", "genetic", "gcg", "surrogate_bo"}:
             if not any(c.units == 1 for c in self.archive.items.values()):
                 return False
+        # Highest yes/no never builds a line one word at a time from nothing. Shortest yes still can.
+        if name in ("beam", "grow") and self.highest_yes_no():
+            return False
+        if name == "extend" and self.hard_editing():
+            return True
         if name in ("extend", "grow", "drift", "probe_climb", "scenario_join"):
+            if self.on_hard_visit():
+                return False
             return self.plateau
         if name == "beam" and self.plateau:
             return False
@@ -880,7 +1098,7 @@ class Engine:
 
     async def seed_archive(self) -> None:
         past = history(self.db, self.question["jev_request"], self.target)
-        if self.plateau_candidate and (self.memory.runs > 0 or len(past) >= 500):
+        if self.should_enter_plateau(len(past)):
             self.enter_plateau(f"{len(past)} lines and {self.memory.runs} earlier runs on this board")
         origins = {
             r["state"]: dict(r)
@@ -1313,15 +1531,32 @@ class Engine:
                 await self.paused.wait()
                 if self.stopping:
                     break
+                if self.schedule is not None and self.schedule.phase == "done":
+                    if not self.end_reason:
+                        self.end_reason = "hard board: nothing within 0.05 and frames remain unwritten"
+                    self.emit("log", message=f"moving on: {self.end_reason}")
+                    break
+                if self.on_hard_visit() and self.schedule.phase == "deal":
+                    try:
+                        await self.run_hard_deal()
+                    except BudgetExhausted:
+                        if self.stopping or not self.idle_when_done:
+                            self.end_reason = self.end_reason or ("stopped" if self.stopping else self.budget_reason())
+                            break
+                    if self.schedule.phase == "done":
+                        break
+                    continue
                 available = {
                     name for name, s in self.strategies.items() if self.allowed(name) and s.available(self.ctx)
                 }
+                if self.on_hard_visit():
+                    available = {name for name in available if name in self.schedule.jobs()}
                 if not available:
                     self.emit("log", message="no strategy available; add a phrase or enable the LLM")
                     await asyncio.sleep(2)
                     continue
                 name = self.scheduler.choose(available)
-                if self.plateau and not self.scheduler.forced:
+                if self.plateau and not self.scheduler.forced and not self.on_hard_visit():
                     # A plateau walk pays off only when it lands, too late for the bandit, so it gets fixed
                     # shares. Scenario joins take one until they run dry and probe climbing the other while it
                     # has a claim; a fresh grown line only reached ~0.92 by 49 words on the hard boards, so grow
@@ -1356,6 +1591,8 @@ class Engine:
                 if self._credit_halt():
                     break
                 self.rounds += 1
+                if self.on_hard_visit() and self.schedule.phase == "grow":
+                    self.schedule.note_growth_round()
                 best_after = self.archive.best().fitness if len(self.archive) else best_before
                 gain = best_after - best_before if best_before != float("-inf") else 0.0
                 if self.long:
@@ -1378,7 +1615,7 @@ class Engine:
                 else:
                     progressed = gain > 1e-9 and self.archive.best().phrase != leader_before
                 self.stall = 0 if progressed else self.stall + 1
-                if progressed and self.level > 0:
+                if progressed and self.level > 0 and not self.on_hard_visit():
                     self.set_level(0, f"new best from {name} at L{self.level}; back to normal search")
                 if self.scheduler.forced == "compress":
                     self.scheduler.forced = None
@@ -1397,6 +1634,26 @@ class Engine:
                     self.stall = 0
                     self.scheduler.boost = {"chain": 1.5, "llm_gen": 1.3}
                     self.emit("log", message=f"[chains] {flat}; favouring new chains and writers")
+                elif (
+                    self.stall >= self.patience()
+                    and self.rounds >= self.min_rounds
+                    and self.hard_stall_action()
+                ):
+                    flat = f"{self.stall} rounds without a better line"
+                    if self.hard_stall_action() == "compress":
+                        self.schedule.finish_growth()
+                        self.stall = 0
+                        self.emit(
+                            "log",
+                            message=f"[hard] growth went flat ({flat}); a line that has caught the leader can be compressed",
+                        )
+                        continue
+                    if self.max_stall:
+                        self.end_reason = f"hard board ({flat})"
+                        self.emit("log", message=f"moving on: {self.end_reason}")
+                        break
+                    self.stall = 0
+                    continue
                 elif self.stall >= self.patience() and self.rounds >= self.min_rounds:
                     flat = f"{self.stall} rounds without a better line"
                     room = self.remaining() > 0 or self.keeps_searching()

@@ -30,6 +30,9 @@ class RunMemory:
     grow_gains: dict = field(default_factory=dict)  # plateau mode: word -> [total score change, appends]
     drift: str = ""  # plateau mode: where the walk along the top level stands
     probe: dict = field(default_factory=dict)  # plateau mode: probe climb's claim and line
+    # Generator-batch lines labeled with a catalog frame. Not style_stats: edits that inherit a
+    # frame do not count, and a restart keeps dealing from this field.
+    generator_counts: dict = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, text: str | None) -> "RunMemory":

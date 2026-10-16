@@ -447,11 +447,16 @@ class LocalEdit(Strategy):
             top = []
         if not top:
             top = ctx.parents(8) if ctx.fresh else ctx.archive.top(8, min_n=1)
+        top = ctx.restrict(top)
+        if not top:
+            return None
         weights = [1.0 / (1 + i) / (1 + self.expanded.get(c.phrase, 0)) ** 2 for i, c in enumerate(top)]
         return ctx.rng.choices(top, weights)[0]
 
     async def run(self, ctx) -> None:
         parent = self.pick_parent(ctx)
+        if parent is None:
+            return
         self.expanded[parent.phrase] = self.expanded.get(parent.phrase, 0) + 1
         words = parent.words
         alts = await ctx.alternatives(words)
@@ -542,6 +547,9 @@ class Compress(Strategy):
             return cand.units <= WORD_STAGE and (
                 ctx.objective.at_ceiling(cand.p) or lead is None or site_round(cand.p) >= site_round(lead.probability)
             )
+        if ctx.objective.kind == "noul":
+            # Highest: length alone does not open compression. Hard visits also wait until after growth.
+            return ctx.engine.highest_may_compress(cand)
         return lead is None or site_round(cand.p) >= site_round(lead.probability) or cand.units >= lead.units
 
     def available(self, ctx) -> bool:

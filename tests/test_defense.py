@@ -295,6 +295,25 @@ def test_defend_does_not_add_decoys_once_the_answer_is_a_quarter_of_the_list(tmp
     assert any("crowded" in line for line in lines)
 
 
+def test_a_live_crowd_replaces_the_snapshot_so_refresh_stops_calling_it_at_risk(tmp_path):
+    db = _db(tmp_path)
+    _question(db, "q", "The")
+    phrase = " ".join(f"ans{i:02d}" for i in range(19))
+    _lead(db, "q", "highScores", phrase)
+    _impacts(db, "q", [{"word": "ans00", "averageImpact": 0.9}])
+    _impacts(db, "pool", [{"word": "gamma", "averageImpact": 0.5}])
+    before = next(target for target in scan(db) if target.slug == "q")
+    assert before.status == READY
+
+    rows = [{"word": word, "averageImpact": 1 - index * 0.01} for index, word in enumerate(phrase.split())]
+    rows += [{"word": f"decoy{i:02d}", "averageImpact": 0.01} for i in range(57)]
+    site = _Site(phrase=phrase, word_rows=rows)
+    result = defend([("q", "strict_chain")], log=lambda _m: None, db=db, client=site, lock_path=tmp_path / "lock")
+    assert result.posted == 0
+    after = next(target for target in scan(db) if target.slug == "q")
+    assert after.status == QUIET
+
+
 def _reset_bans(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(banned, "PATH", tmp_path / "banned_phrases.json")
     monkeypatch.setattr(banned, "_phrases", {})

@@ -400,6 +400,20 @@ def scan(db: DB, include_casual: bool = False, include_golf: bool = False) -> li
     )
 
 
+def _store_impacts(db: DB, slug: str, mode: str, impacts: list[dict]) -> None:
+    """Keep the local word list in step with the live one defend just read.
+
+    The picker is drawn from this table. A crowded live list has to land here, or Refresh
+    keeps showing the snapshot from before those words existed.
+    """
+    row = db.one("SELECT snapshot_id FROM word_impacts WHERE slug = ? AND mode = ?", (slug, mode))
+    snapshot_id = row["snapshot_id"] if row else 0
+    db.execute(
+        "INSERT OR REPLACE INTO word_impacts (slug, mode, snapshot_id, rows) VALUES (?, ?, ?, ?)",
+        (slug, mode, snapshot_id, json.dumps(impacts)),
+    )
+
+
 def _remember(db: DB, slug: str, mode: str, word: str) -> None:
     db.execute(
         "INSERT OR REPLACE INTO defense_words (slug, mode, word, at) VALUES (?, ?, ?, ?)",
@@ -587,6 +601,7 @@ def _defend_one(
     try:
         payload = client.leaderboards(live["revisionId"], mode).get("leaderboards") or {}
         impacts = [row for row in (client.words(live["revisionId"], mode) or []) if isinstance(row, dict)]
+        _store_impacts(db, slug, mode, impacts)
     except SiteError as error:
         log(f"\n== {slug} [{mode}] {error}")
         return DefenseRun(0, 0, 1)

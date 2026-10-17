@@ -37,7 +37,7 @@ def log_rule(title: str) -> str:
 def rule_title(message: str) -> str | None:
     prefix, suffix = f"{RULE} ", f" {RULE}"
     if message.startswith(prefix) and message.endswith(suffix):
-        return message[len(prefix):-len(suffix)]
+        return message[len(prefix) : -len(suffix)]
     return None
 
 
@@ -61,9 +61,7 @@ def mode_labels(modes: tuple[str, ...]) -> str:
     return ", ".join(_MODE_LABEL.get(mode, mode) for mode in modes)
 
 
-def progress_line(
-    edition: str, index: int, total: int, elapsed: float, failed: int = 0, section: str = ""
-) -> str:
+def progress_line(edition: str, index: int, total: int, elapsed: float, failed: int = 0, section: str = "") -> str:
     """One scan tick that still names its edition after the section header has scrolled away."""
     pct = (100 * index) // total if total else 0
     parts = [section_mark(edition, section), f"{index}/{total}", f"{pct}%", format_elapsed(elapsed)]
@@ -74,6 +72,21 @@ def progress_line(
 
 def _fetch_errors(results: list[dict]) -> int:
     return sum(1 for result in results for key in result if key.endswith("_error") and key[:-6] not in result)
+
+
+# Rows that belong to a question the menu used to list. A full refresh drops these with the question.
+_QUESTION_TABLES = ("questions", "boards", "word_impacts", "attempts", "site_scores", "defense_words")
+
+
+def _drop_absent(db: DB, live_slugs: set[str], log) -> None:
+    """Remove local questions the live menu no longer lists, and the rows stored for them."""
+    gone = sorted({row["slug"] for row in db.all("SELECT slug FROM questions")} - live_slugs)
+    if not gone:
+        return
+    rows = [(slug,) for slug in gone]
+    for table in _QUESTION_TABLES:
+        db.executemany(f"DELETE FROM {table} WHERE slug = ?", rows)
+    log(f"  removed {len(gone)} question(s) no longer on the menu")
 
 
 def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, log) -> list[dict]:
@@ -148,7 +161,8 @@ def take_snapshot(
     )
     snapshot_id = cursor.lastrowid
 
-    questions = [q for q in menu.get("questions") or [] if not slugs or q["slug"] in slugs]
+    menu_questions = [q for q in menu.get("questions") or [] if q.get("slug")]
+    questions = [q for q in menu_questions if not slugs or q["slug"] in slugs]
     questions = fill_jev_requests(client, questions, workers, log)
     previous_goals = {row["slug"]: row["goal"] or "yes" for row in db.all("SELECT slug, goal FROM questions")}
     db.executemany(
@@ -158,9 +172,18 @@ def take_snapshot(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         [
             (
-                q["slug"], snapshot_id, q.get("revisionId"), q.get("title"), q.get("instructions"),
-                q.get("kind"), q.get("goal"), q.get("baselineProbability"), q.get("yesThreshold"),
-                q.get("modelVersion"), json.dumps(decode_jev_request(q.get("jevRequest"))), json.dumps(q),
+                q["slug"],
+                snapshot_id,
+                q.get("revisionId"),
+                q.get("title"),
+                q.get("instructions"),
+                q.get("kind"),
+                q.get("goal"),
+                q.get("baselineProbability"),
+                q.get("yesThreshold"),
+                q.get("modelVersion"),
+                json.dumps(decode_jev_request(q.get("jevRequest"))),
+                json.dumps(q),
             )
             for q in questions
         ],
@@ -170,6 +193,9 @@ def take_snapshot(
     from ..publish import realign_vault_goals
 
     realign_vault_goals(db, previous_goals, {q["slug"] for q in questions}, log)
+    # A refresh of named slugs, or an empty menu, is not a full picture of what left.
+    if not slugs and menu_questions:
+        _drop_absent(db, {q["slug"] for q in menu_questions}, log)
 
     jobs = [(q, mode) for q in questions for mode in modes]
     log(f"  fetching {len(jobs)} boards · {workers} at a time")
@@ -202,10 +228,16 @@ def take_snapshot(
         for index, result in enumerate(pool.map(fetch, jobs), start=1):
             results.append(result)
             if index % 40 == 0 or index == len(jobs):
-                log(progress_line(
-                    client.edition, index, len(jobs), time.monotonic() - started,
-                    _fetch_errors(results), section,
-                ))
+                log(
+                    progress_line(
+                        client.edition,
+                        index,
+                        len(jobs),
+                        time.monotonic() - started,
+                        _fetch_errors(results),
+                        section,
+                    )
+                )
     (raw_dir / "boards.json").write_text(json.dumps(results))
 
     board_rows, word_rows, attempt_rows, score_rows = [], [], [], []
@@ -228,7 +260,14 @@ def take_snapshot(
             for turn in attempt.get("turns") or []:
                 if turn.get("cumulativeState") and turn.get("probability") is not None:
                     score_rows.append(
-                        (slug, mode, turn["cumulativeState"], turn["probability"], "turn", turn.get("completedAt") or seen)
+                        (
+                            slug,
+                            mode,
+                            turn["cumulativeState"],
+                            turn["probability"],
+                            "turn",
+                            turn.get("completedAt") or seen,
+                        )
                     )
     db.executemany("INSERT OR REPLACE INTO boards VALUES (?, ?, ?, ?, ?)", board_rows)
     db.executemany("INSERT OR REPLACE INTO word_impacts VALUES (?, ?, ?, ?)", word_rows)
@@ -245,4 +284,3 @@ def take_snapshot(
     )
     log(f"  saved {raw_dir}")
     return snapshot_id
-

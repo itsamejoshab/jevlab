@@ -4,9 +4,10 @@ Separate from the lab on purpose: it never imports the search engine. For
 each queued entry it re-reads the live board, confirms the vault estimate
 still wins, then builds the chain with TURN operations. The board keeps a
 player's best-ever phrase, so the requested re-rolls always run, even after
-a win: a later roll can score higher. A re-roll removes and re-adds the last
-word. Editions whose score does not move (config.DETERMINISTIC_EDITIONS)
-default to 0 and skip the automatic chase past that request. Microsoft waits
+a win: a later roll can score higher. A rounded 1.00 cannot be beaten, so
+that line stops. A re-roll removes and re-adds the last word. Editions whose
+score does not move (config.DETERMINISTIC_EDITIONS) default to 0 and skip the
+automatic chase past that request. Microsoft waits
 before each re-roll, because an immediate repeat is a cached score.
 
 The local oracle is not asked before those rolls. A win is the site's score.
@@ -276,8 +277,18 @@ def reroll_limits(rerolls: int, long_rerolls: int, *, gamble: bool, long_shot: b
     return asked, ceiling
 
 
-def should_reroll(done: int, asked: int, ceiling: int, ahead: bool) -> bool:
-    """Spend `asked` re-rolls even after a win. Rolls past that, up to `ceiling`, continue only while short."""
+def at_top(p: float) -> bool:
+    """A rounded 1.00. The same line cannot show anything higher."""
+    return site_round(p) >= 1.0 - 1e-9
+
+
+def should_reroll(done: int, asked: int, ceiling: int, ahead: bool, best: float = 0.0) -> bool:
+    """Spend `asked` re-rolls even after a win. Rolls past that, up to `ceiling`, continue only while short.
+
+    A rounded 1.00 ends the request. Another roll of this same line cannot raise what the board shows.
+    """
+    if at_top(best):
+        return False
     if done >= ceiling:
         return False
     if ahead and done >= asked:
@@ -645,23 +656,28 @@ def publish_entry(
         shown_p = server_p
         best = credited(turn, target) if target else (server_p if server_p is not None else 0.0)
     tries = 0
-    if asked:
+    ahead = objective.beats(best, units, need)
+    if at_top(best) and should_reroll(0, asked, ceiling, ahead):
+        log(f"  {site_round(best):.2f} is the top score; no re-rolls")
+    elif asked:
         how = "re-scoring the phrase" if game_mode.golf else "re-rolling the last word"
         extra = f", then up to {ceiling} while short" if ceiling > asked else ""
         log(f"  {how} {asked} time(s); the board keeps the best score{extra}")
-    while should_reroll(tries, asked, ceiling, objective.beats(best, units, need)):
+    while should_reroll(tries, asked, ceiling, objective.beats(best, units, need), best):
         tries += 1
         if game_mode.golf:
             pause_for_fresh_score(log)
             p = golf_try(client, live, words[0], log, target)
         else:
-            attempt, raw = reroll(client, attempt, log)
+            attempt, rolled = reroll(client, attempt, log)
             turn = last_turn(attempt)
             picked = str((turn or {}).get("choice") or "")
-            shown_p = raw
-            p = credited(turn, target) if target else raw
+            shown_p = rolled
+            p = credited(turn, target) if target else rolled
         best = max(best, p)
         log(f"    re-roll {tries}: {p:.2f} (best {best:.2f})")
+        if at_top(best) and should_reroll(tries, asked, ceiling, objective.beats(best, units, need)):
+            log(f"  {site_round(best):.2f} is the top score; stopping re-rolls")
     won = objective.beats(best, units, need)
     missed = bool(target and picked and picked != target and not won)
     if missed and shown_p is not None:

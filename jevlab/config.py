@@ -61,7 +61,8 @@ OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_BASE = os.environ.get("OPENROUTER_BASE", "https://openrouter.ai/api/v1")
 TYPESAFE_KEY = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("TYPESAFE_KEY") or "").strip()
 TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1")
-# `typesafe/jev-latest` is rejected; the bare id is what the site sends too, and Typesafe's own API takes it.
+# The site's request says `jev-latest`. Typesafe's alias still answers as jev-1.13.0, so the oracle
+# sends that host `jev-1.14.0`. OpenRouter gets `typesafe/jev-1.14` (`typesafe/jev-latest` does not exist).
 # Each id is the `model` in that edition's site `jevRequest`, except Luna: the site says `gpt-6-luna`,
 # and OpenRouter maps that bare id onto `typesafe/gpt-6-luna`, which does not exist. The route that
 # answers is `openai/gpt-6-luna-decisions`. Decider's route is `perplexity/pplx-decider-v1.1-27b`.

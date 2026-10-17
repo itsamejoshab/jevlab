@@ -24,6 +24,14 @@ def test_requested_rerolls_run_after_a_win():
     assert not should_reroll(3, asked=3, ceiling=3, ahead=True)
 
 
+def test_a_perfect_score_stops_rerolls():
+    assert not should_reroll(0, asked=5, ceiling=5, ahead=True, best=1.0)
+    assert not should_reroll(2, asked=5, ceiling=12, ahead=False, best=1.0)
+    assert not should_reroll(0, asked=5, ceiling=5, ahead=True, best=0.996)
+    assert should_reroll(0, asked=5, ceiling=5, ahead=True, best=0.99)
+    assert should_reroll(1, asked=5, ceiling=5, ahead=True, best=0.99)
+
+
 def test_extra_budget_continues_only_while_short():
     assert not should_reroll(3, asked=3, ceiling=12, ahead=True)
     assert should_reroll(3, asked=3, ceiling=12, ahead=False)
@@ -153,8 +161,9 @@ def test_publish_chain_sends_the_sentence_then_the_last_word():
 class _Board:
     """The board read before the phrase is sent. The posting is recorded from the turn, not a later read."""
 
-    def __init__(self, units: int):
+    def __init__(self, units: int, probability: float = 0.91):
         self.units = units
+        self.probability = probability
         self.appends: list[str] = []
         self.state = {
             "revisionId": "r1",
@@ -184,7 +193,7 @@ class _Board:
             tokens.append({"id": f"t{len(self.appends)}", "text": operation["text"], "active": True})
         else:
             tokens = []
-        turn = {"probability": 0.91}
+        turn = {"probability": self.probability}
         self.state = {**attempt, "tokens": tokens, "turns": [turn]}
         return self.state, turn
 
@@ -251,3 +260,84 @@ def test_publish_word_by_word_leaves_golf_as_one_phrase(tmp_path, monkeypatch):
     phrase = "alpha beta"
     sent = _post(tmp_path, monkeypatch, GOLF, phrase, len(phrase), word_by_word=True)
     assert sent == [phrase]
+
+
+def test_a_perfect_score_spends_no_further_rerolls(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    site = _Board(3, probability=1.0)
+    notes: list[str] = []
+    result = publish_entry(
+        db,
+        site,
+        _entry(STRICT, "alpha beta gamma", 3),
+        {"cereal": {"slug": "cereal", "revisionId": "r1", "goal": "yes", "kind": "noul", "choices": []}},
+        "me",
+        False,
+        5,
+        False,
+        notes.append,
+    )
+    assert result.startswith("won")
+    assert site.appends == ["alpha beta", "gamma"]
+    assert any("no re-rolls" in line for line in notes)
+
+
+class _TopsOnReroll(_Board):
+    """The build stays short. The first re-roll of the last word comes back at 1.00."""
+
+    def __init__(self):
+        super().__init__(3, probability=0.4)
+        self.appended = 0
+
+    def turn(self, attempt, operation):
+        if operation["kind"] == "append":
+            self.appended += 1
+            if self.appended >= 3:
+                self.probability = 1.0
+        return super().turn(attempt, operation)
+
+
+def test_hitting_a_perfect_score_stops_the_remaining_rerolls(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    site = _TopsOnReroll()
+    notes: list[str] = []
+    result = publish_entry(
+        db,
+        site,
+        _entry(STRICT, "alpha beta gamma", 3),
+        {"cereal": {"slug": "cereal", "revisionId": "r1", "goal": "yes", "kind": "noul", "choices": []}},
+        "me",
+        False,
+        5,
+        False,
+        notes.append,
+    )
+    assert result.startswith("won")
+    assert site.appends == ["alpha beta", "gamma", "gamma"]
+    assert any("stopping re-rolls" in line for line in notes)
+
+
+def test_a_reroll_still_records_the_posted_board(tmp_path, monkeypatch):
+    """The re-roll score must not replace the board copy the posting is written onto."""
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    site = _Board(3)
+    result = publish_entry(
+        db,
+        site,
+        _entry(STRICT, "alpha beta gamma", 3),
+        {"cereal": {"slug": "cereal", "revisionId": "r1", "goal": "yes", "kind": "noul", "choices": []}},
+        "me",
+        False,
+        1,
+        False,
+        lambda _message: None,
+    )
+    assert result.startswith("won")
+    rows = db.board("cereal", STRICT, HIGH_SCORES)
+    assert rows == [{"userId": "me", "probability": 0.91, "wordCount": 3, "phrase": "alpha beta gamma"}]

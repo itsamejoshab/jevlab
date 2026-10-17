@@ -86,6 +86,21 @@ def build_request(question_request: dict, state: str, model: str = "") -> dict:
     return request
 
 
+def host_model(backend: str, model: str) -> str:
+    """The id this host will score as the current Jev checkpoint.
+
+    Typesafe's `jev-latest` still answers as jev-1.13.0. `jev-1.14.0` is the 1.14 checkpoint it serves.
+    OpenRouter has no `typesafe/jev-latest`. `typesafe/jev-1.14` answers as typesafe/jev-1.14-20261014.
+    """
+    if model != "jev-latest":
+        return model
+    if backend == "typesafe":
+        return "jev-1.14.0"
+    if backend == "openrouter":
+        return "typesafe/jev-1.14"
+    return model
+
+
 def request_hash(request: dict) -> str:
     return hashlib.sha256(json.dumps(request, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -411,7 +426,9 @@ class Oracle:
             throttled = False
             t0 = time.monotonic()
             try:
-                response = await backend.http.post("/systemone", json=request)
+                posted = dict(request)
+                posted["model"] = host_model(backend.name, request.get("model") or "")
+                response = await backend.http.post("/systemone", json=posted)
                 if response.status_code == 200:
                     body = response.json()
                     answer = (body.get("answers") or {}).get("q") or next(

@@ -29,6 +29,15 @@ uv run python scripts/route_bakeoff.py --set tough
 uv run python scripts/route_bakeoff.py --summarize
 ```
 
+## `rescore_vault.py`
+
+One pass over the Jev vault after a checkpoint change. Each phrase is scored on the current model, older samples for that phrase are removed, and the vault numbers are rewritten from the current samples. A second run finishes anything the first run did not.
+
+```bash
+uv run python scripts/rescore_vault.py --dry-run
+uv run python scripts/rescore_vault.py
+```
+
 ## `experiments/`
 
 Arguments are positional. `SLUG` is a question slug and `LEAD` is the board leader's word count.

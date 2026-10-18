@@ -227,7 +227,15 @@ class LLMGenerate(Strategy):
         return [name for i, name in enumerate(chosen) if i != drop] + [pick]
 
     async def _call(
-        self, ctx, model: str, archetypes: list[str], variants: list[str], fresh: bool = False, count: int | None = None
+        self,
+        ctx,
+        model: str,
+        archetypes: list[str],
+        variants: list[str],
+        fresh: bool = False,
+        count: int | None = None,
+        *,
+        deal: bool = True,
     ) -> list[tuple[str, str]]:
         n = self.count if count is None else count
         max_tokens = 6000
@@ -239,7 +247,8 @@ class LLMGenerate(Strategy):
         else:
             user = prompts.gen_user(ctx, archetypes, n, variants, fresh=fresh)
             schedule = getattr(ctx.engine, "schedule", None)
-            words = schedule.deal_length() if schedule is not None and schedule.hard and schedule.phase == "deal" else 0
+            hard_deal = deal and schedule is not None and schedule.hard and schedule.phase == "deal"
+            words = schedule.deal_length() if hard_deal else 0
             if words > 0:
                 # One ordinary timeout covers about 20 words. z.ai was still going at 60s on an 80-word ask.
                 if words > HARD_LENGTH:

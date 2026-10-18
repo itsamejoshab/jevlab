@@ -151,6 +151,7 @@ class LabScreen(Screen):
     BINDINGS = [
         Binding("space", "toggle_pause", "pause/resume"),
         Binding("n", "next_question", "next question"),
+        Binding("m", "nudge", "nudge"),
         Binding("p", "toggle_post", "post on/off"),
         Binding("q", "leave", "stop & back"),
     ]
@@ -238,6 +239,7 @@ class LabScreen(Screen):
         self.dirty = True
         self.cancelled = False
         self.started_at = time.monotonic()
+        self._nudge_when_ready = False
 
     def compose(self) -> ComposeResult:
         yield EditionMark("Lab", self.game_mode.label)
@@ -330,7 +332,7 @@ class LabScreen(Screen):
                 item.state, item.reason = "error", str(error)
                 self.log_line(f"skip {item.slug}: {error}")
                 continue
-            self.engine = engine
+            self.adopt_engine(engine)
             self.show_yes_line()
             lead = engine.leader
             item.leader = f"{lead.probability:.2f}/{lead.units}w" if lead else "empty"
@@ -449,7 +451,7 @@ class LabScreen(Screen):
                     await asyncio.sleep(session.poll_interval())
                     continue
                 engine.leader = session.leader
-                self.engine = engine
+                self.adopt_engine(engine)
                 self.show_yes_line()
                 self.run_worker(self._run_live_engine(engine, gen), name=f"live-engine-{gen}")
                 self.gap_logged = not live_now
@@ -634,6 +636,10 @@ class LabScreen(Screen):
             )
         elif kind == "status":
             self.status = d["status"]
+        elif kind == "nudge":
+            if not d.get("armed"):
+                self._nudge_when_ready = False
+            self._show_nudge(bool(d.get("armed")))
         elif kind == "level":
             oracle = self.engine.oracle if self.engine else None
             self.level_marks.append((oracle.calls if oracle else 0, d["level"]))
@@ -733,6 +739,8 @@ class LabScreen(Screen):
     # Rendering.
 
     def refresh_view(self) -> None:
+        armed = self._nudge_when_ready or bool(self.engine and self.engine.nudge_armed)
+        self._show_nudge(armed)
         self.render_header()
         self.render_queue()
         if self.timeline_dirty:
@@ -749,6 +757,7 @@ class LabScreen(Screen):
         self.render_insight()
 
     def render_header(self) -> None:
+        self.calibration = calibration_status()
         engine = self.engine
         header = Text()
         if engine is None:
@@ -1138,6 +1147,26 @@ class LabScreen(Screen):
         else:
             self.engine.resume()
             self.log_line("resumed")
+
+    def adopt_engine(self, engine: Engine) -> None:
+        self.engine = engine
+        if self._nudge_when_ready:
+            engine.request_nudge()
+            self._nudge_when_ready = False
+        self._show_nudge(engine.nudge_armed)
+
+    def _show_nudge(self, on: bool) -> None:
+        if not self.is_mounted:
+            return
+        self.query_one(EditionMark).set_nudge(on)
+
+    def action_nudge(self) -> None:
+        if self.engine is None:
+            self._nudge_when_ready = True
+        else:
+            self.engine.request_nudge()
+        self._show_nudge(True)
+        self.log_line("[nudge] armed; it runs at the next break")
 
     def action_next_question(self) -> None:
         if self.engine and self.engine.status != "stopped":

@@ -50,6 +50,40 @@ class DealBatch:
     frames: tuple[str, ...]
 
 
+def nudge_batches(models: list[str]) -> list[DealBatch]:
+    """One generator sweep. Every model writes, and every catalog tactic is assigned.
+
+    Tactics go out in catalog order, up to three per batch. Models go in the order
+    given and then round-robin. A model that has not written by the time the catalog
+    is covered still gets a batch, after that cover, so the first pass stays disjoint.
+    """
+    ordered: list[str] = []
+    for model in models:
+        if model not in ordered:
+            ordered.append(model)
+    if not ordered:
+        return []
+    frames = list(CATALOG)
+    batches: list[DealBatch] = []
+    index = 0
+    slot = 0
+    while index < len(frames):
+        chunk = tuple(frames[index : index + FRAMES_PER_BATCH])
+        index += len(chunk)
+        batches.append(DealBatch(ordered[slot % len(ordered)], chunk))
+        slot += 1
+    seen = {batch.model for batch in batches}
+    cursor = 0
+    for model in ordered:
+        if model in seen:
+            continue
+        count = min(FRAMES_PER_BATCH, len(frames))
+        chunk = tuple(frames[(cursor + offset) % len(frames)] for offset in range(count))
+        cursor += count
+        batches.append(DealBatch(model, chunk))
+    return batches
+
+
 def generator_origin(origin: str) -> bool:
     """A line written by a generator batch. Edits that inherit a frame label are not."""
     return str(origin).startswith("llm:")

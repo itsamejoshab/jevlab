@@ -48,7 +48,7 @@ from .advanced import GCGSwap, Genetic, SurrogateBO
 from .archive import ARCHETYPES, Archive, Candidate
 from .boosters import Boosters
 from .chains import PROBE_TOP, RECIPES, ChainAblate, ChainCompact, ChainLibrary, LongChain, Probe, observed_ceiling
-from .hardboard import HARD_LINE, HardSchedule, ScoredLine, credit_generator_count
+from .hardboard import HARD_LINE, HardSchedule, ScoredLine, credit_generator_count, nudge_batches
 from .mechanical import BeamBuild, Drift, Extend, Grow, PrecisionClimb, ProbeClimb, ScenarioJoin, SingleWord, Sweep
 from .probe import Lock
 from .scheduler import Scheduler
@@ -541,6 +541,7 @@ class Engine:
         self.probe_force = False
         self.probe_gate = asyncio.Lock()
         self.schedule: HardSchedule | None = None
+        self.nudge_armed = False
         self.last_trained = 0
         self.training = False
         self.train_task: asyncio.Future | None = None
@@ -937,22 +938,70 @@ class Engine:
             raise RuntimeError("no generator is configured")
         return arms[0]
 
-    async def _execute_deal_batch(self, batch) -> None:
-        """One assigned batch. No probe, no lock, no tier gate, no dear-model skip."""
+    async def _execute_deal_batch(self, batch, *, tag: str = "hard", deal: bool = True) -> None:
+        """One assigned batch. No probe, no lock, no tier gate, no dear-model skip.
+
+        `deal` asks for the hard visit's long lines. A nudge leaves that off, so the
+        board keeps its ordinary length.
+        """
         arm = self._generator_arm(batch.model)
-        proposals = await arm._call(self.ctx, batch.model, list(batch.frames), [])
+        proposals = await arm._call(self.ctx, batch.model, list(batch.frames), [], deal=deal)
         who = batch.model.split("/")[-1]
         if not proposals:
             self.emit(
                 "log",
-                message=f"[hard] {who} returned nothing for {', '.join(batch.frames)}; the assignment is used",
+                message=f"[{tag}] {who} returned nothing for {', '.join(batch.frames)}; the assignment is used",
             )
             return
         self.emit(
             "log",
-            message=f"[hard] {who} wrote {len(proposals)} lines for {', '.join(batch.frames)}",
+            message=f"[{tag}] {who} wrote {len(proposals)} lines for {', '.join(batch.frames)}",
         )
         await self.evaluate([(text, arm.name, "", tactic) for text, tactic in proposals])
+
+    async def run_nudge(self) -> None:
+        """One generator sweep: every model, every tactic, then the search continues.
+
+        It does not open a hard visit, move the ladder, or touch the probe lock.
+        """
+        from ..config import GEN_MODELS
+
+        if self.llm is None:
+            self.emit("log", message="[nudge] generators are off")
+            return
+        batches = nudge_batches(list(GEN_MODELS))
+        if not batches:
+            self.emit("log", message="[nudge] no generator models")
+            return
+        tactics = {frame for batch in batches for frame in batch.frames}
+        models = {batch.model for batch in batches}
+        self.emit(
+            "log",
+            message=f"[nudge] {len(models)} models, {len(tactics)} tactics, {len(batches)} batches",
+        )
+        for batch in batches:
+            if self.stopping:
+                return
+            await self.paused.wait()
+            if self.stopping:
+                return
+            arm = self._generator_arm(batch.model)
+            self.current_strategy = arm.name
+            self.emit("round", round=self.rounds + 1, strategy=arm.name)
+            try:
+                await self._execute_deal_batch(batch, tag="nudge", deal=False)
+            except BudgetExhausted:
+                raise
+            except Exception as error:
+                self.emit("log", message=f"[nudge] batch failed: {error!r}")
+
+    def _kick_nudge(self) -> bool:
+        """Start a waiting nudge. The indicator goes out as the sweep begins."""
+        if not self.nudge_armed:
+            return False
+        self.nudge_armed = False
+        self.emit("nudge", armed=False)
+        return True
 
     def _close_hard_deal(self) -> None:
         self.refresh_hard_lines()
@@ -975,6 +1024,9 @@ class Engine:
         ran = 0
         pass_calls = self.oracle.calls if self.oracle else 0
         while self.schedule.phase == "deal":
+            if self._kick_nudge():
+                await self.run_nudge()
+                continue
             self.apply_hard_deal_length()
             if await self.confirm_contenders():
                 continue
@@ -1637,6 +1689,9 @@ class Engine:
         self.ctx.pinned.discard(word)
         self.ctx.banned.discard(word.casefold())
 
+    def request_nudge(self) -> None:
+        self.nudge_armed = True
+
     def force(self, name: str | None) -> None:
         self.scheduler.forced = name if name in self.strategies else None
 
@@ -1750,6 +1805,16 @@ class Engine:
                         self.end_reason = "hard board: generator pass scored nothing"
                     self.emit("log", message=f"moving on: {self.end_reason}")
                     break
+                if self._kick_nudge():
+                    try:
+                        await self.run_nudge()
+                    except BudgetExhausted:
+                        if self.stopping or not self.idle_when_done:
+                            self.end_reason = self.end_reason or ("stopped" if self.stopping else self.budget_reason())
+                            break
+                    if self.stopping:
+                        break
+                    continue
                 try:
                     if await self.confirm_contenders():
                         continue

@@ -31,11 +31,15 @@ def mode_phrase(label: str) -> str:
     return f"{text} Mode"
 
 
-def edition_caption(screen: str, mode: str | None = None) -> Text:
+def edition_caption(screen: str, mode: str | None = None, *, nudge: bool = False) -> Text:
     parts = [screen, f"{edition_name()} Edition"]
     if mode:
         parts.append(mode_phrase(mode))
-    return Text(" | ".join(parts), style="dim", justify="right")
+    text = Text(" | ".join(parts), style="dim", justify="right")
+    if nudge:
+        text.append("  ")
+        text.append("NUDGE", style="bold black on yellow")
+    return text
 
 
 class EditionMark(Static):
@@ -55,7 +59,14 @@ class EditionMark(Static):
 
     def __init__(self, screen: str, mode: str | None = None) -> None:
         self._screen = screen
+        self._mode = mode
+        self._nudge = False
         super().__init__(edition_caption(screen, mode))
 
     def set_mode(self, mode: str | None) -> None:
-        self.update(edition_caption(self._screen, mode))
+        self._mode = mode
+        self.update(edition_caption(self._screen, mode, nudge=self._nudge))
+
+    def set_nudge(self, on: bool) -> None:
+        self._nudge = on
+        self.update(edition_caption(self._screen, self._mode, nudge=on))

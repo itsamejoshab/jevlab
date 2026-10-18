@@ -20,6 +20,7 @@ _RECHECK = 2.0
 _QUOTED = re.compile(r'"([^"]+)"\s+is banned', re.IGNORECASE)
 
 _phrases: dict[str, dict] = {}
+_needles: list[tuple[str, tuple[str, ...]]] = []
 _mtime: float | None = None
 _checked = 0.0
 
@@ -49,17 +50,35 @@ def tokens(phrase: str) -> list[str]:
     return [word for word in re.split(r"[\s\-]+", (phrase or "").casefold()) if word]
 
 
-def _contains_span(phrase: str, span: str) -> bool:
-    hay = tokens(phrase)
-    needle = tokens(span)
-    if not needle or len(needle) > len(hay):
-        return False
+def _contains_tokens(hay: list[str], needle: tuple[str, ...]) -> bool:
     width = len(needle)
-    return any(hay[i : i + width] == needle for i in range(len(hay) - width + 1))
+    if not width or width > len(hay):
+        return False
+    last = len(hay) - width + 1
+    for start in range(last):
+        if hay[start] != needle[0]:
+            continue
+        if width == 1 or all(hay[start + offset] == needle[offset] for offset in range(1, width)):
+            return True
+    return False
+
+
+def _remember(phrases: dict[str, dict], mtime: float | None) -> dict[str, dict]:
+    global _phrases, _needles, _mtime
+    _phrases = phrases
+    _mtime = mtime
+    needles = []
+    for key, row in phrases.items():
+        span = row.get("phrase") or key
+        needle = tuple(tokens(span))
+        if needle:
+            needles.append((span, needle))
+    _needles = needles
+    return _phrases
 
 
 def _refresh(force: bool = False) -> dict[str, dict]:
-    global _phrases, _mtime, _checked
+    global _checked
     now = time.monotonic()
     if not force and now - _checked < _RECHECK:
         return _phrases
@@ -67,14 +86,13 @@ def _refresh(force: bool = False) -> dict[str, dict]:
     try:
         mtime = PATH.stat().st_mtime
     except FileNotFoundError:
-        _phrases, _mtime = {}, None
-        return _phrases
+        return _remember({}, None)
     if mtime != _mtime:
         try:
-            _phrases = json.loads(PATH.read_text()).get("phrases") or {}
+            loaded = json.loads(PATH.read_text()).get("phrases") or {}
         except (OSError, json.JSONDecodeError):
             return _phrases
-        _mtime = mtime
+        return _remember(loaded, mtime)
     return _phrases
 
 
@@ -86,13 +104,21 @@ def contains(phrase: str) -> bool:
     return hit(phrase) != ""
 
 
-def hit(phrase: str) -> str:
-    """The stored span inside `phrase`, or empty when none of them occur."""
-    current = _refresh()
-    for key, row in current.items():
-        span = row.get("phrase") or key
-        if _contains_span(phrase, span):
-            return span
+def hit(phrase: str, span: str = "") -> str:
+    """The stored span inside `phrase`, or empty when none of them occur.
+
+    `span` tests that one phrase and skips the rest. A sweep after a new ban has only that span to apply.
+    """
+    hay = tokens(phrase)
+    if not hay:
+        return ""
+    if span:
+        needle = tuple(tokens(span))
+        return span if _contains_tokens(hay, needle) else ""
+    _refresh()
+    for named, needle in _needles:
+        if _contains_tokens(hay, needle):
+            return named
     return ""
 
 

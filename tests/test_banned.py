@@ -100,3 +100,21 @@ def test_drop_banned_clears_every_vault_then_the_next_line_can_publish(tmp_path,
     banned._phrases = {}
     banned._mtime = None
     banned._checked = 0.0
+
+
+def test_a_new_ban_sweeps_only_that_span(tmp_path, monkeypatch):
+    _reset_bans(tmp_path, monkeypatch)
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    _save("alpha", "in this logic game", 0.99)
+    _save("alpha", "rule one must pour milk", 0.97)
+    _save("beta", "a clean winner", 0.80)
+    banned.note("banned_phrase", '"in this logic" is banned.')
+    banned.note("banned_phrase", '"rule one must" is banned.')
+
+    removed = vault.drop_banned("rule one must")
+
+    assert {e["phrase"] for e in removed} == {"rule one must pour milk"}
+    assert {e["phrase"] for e in vault.all_entries()} == {"in this logic game", "a clean winner"}
+    banned._phrases = {}
+    banned._mtime = None
+    banned._checked = 0.0

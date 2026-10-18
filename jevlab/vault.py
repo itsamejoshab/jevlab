@@ -305,11 +305,12 @@ def drop_phrases(slug: str, phrases: set[str]) -> list[dict]:
     return removed
 
 
-def drop_banned() -> list[dict]:
+def drop_banned(span: str = "") -> list[dict]:
     """Remove every entry whose phrase contains a span the server has named.
 
     One banned span can sit inside lines on other questions, modes, and boards. Those lines keep a
     high score, so the next search or queue picks them again. Returns the removed entries.
+    `span` checks only the phrase just banned. The full list is for a sweep that is not tied to one new ban.
     """
     from .rules.banned import hit
 
@@ -327,7 +328,7 @@ def drop_banned() -> list[dict]:
         kept = []
         changed = False
         for entry in data.get("entries") or []:
-            if hit(entry.get("phrase") or ""):
+            if hit(entry.get("phrase") or "", span):
                 removed.append(
                     entry
                     | {

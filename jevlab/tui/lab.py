@@ -585,7 +585,7 @@ class LabScreen(Screen):
         except BannedPhrase as error:
             self.skipped_phrases.add(phrase)
             if error.named:
-                removed = vault.drop_banned()
+                removed = vault.drop_banned(error.named)
                 self.log_line(
                     f"[live] banned {error.named!r}; removed {len(removed)} vault line(s); its words stay usable"
                 )

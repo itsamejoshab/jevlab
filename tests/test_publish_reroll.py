@@ -2,6 +2,7 @@ import json
 
 import jevlab.config as config
 from jevlab import vault
+from jevlab.boards import standings
 from jevlab.db import DB
 from jevlab.modes import CASUAL, GOLF, HIGH_SCORES, STRICT
 from jevlab.objective import Objective
@@ -341,3 +342,108 @@ def test_a_reroll_still_records_the_posted_board(tmp_path, monkeypatch):
     assert result.startswith("won")
     rows = db.board("cereal", STRICT, HIGH_SCORES)
     assert rows == [{"userId": "me", "probability": 0.91, "wordCount": 3, "phrase": "alpha beta gamma"}]
+
+
+class _Held:
+    """The live board already has our row. Nothing is posted."""
+
+    def leaderboards(self, revision_id: str, mode: str) -> dict:
+        return {
+            "leaderboards": {
+                HIGH_SCORES: [
+                    {
+                        "userId": "me",
+                        "name": "Zach",
+                        "phrase": "Mikey Begaa",
+                        "choice": "Michael Begay",
+                        "probability": 1,
+                        "wordCount": 2,
+                    }
+                ]
+            }
+        }
+
+
+def test_already_saves_the_live_board_and_drops_equal_vault_lines(tmp_path, monkeypatch):
+    """A line we already hold must leave the publish list, including its equal siblings."""
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    db.execute("INSERT INTO snapshots (taken_at, edition, me, raw_dir) VALUES ('t', 'jev', 'me', '')")
+    choices = [{"option": "Michael Begay"}, {"option": "Jennifer Yazzie"}]
+    db.execute(
+        "INSERT INTO questions VALUES (?, 0, 'r1', 'Which applicant do you want to schedule an interview with?', "
+        "'', 'choice', 'yes', 0.2, 0.5, 'm', ?, ?)",
+        ("applicant", json.dumps({"state": ""}), json.dumps({"choices": choices, "ranked": False})),
+    )
+    target = "Michael Begay"
+    held = vault.save(
+        "applicant",
+        STRICT,
+        "mike begaa",
+        p_mean=1.0,
+        p_lcb=1.0,
+        spread=0.0,
+        n=5,
+        units=2,
+        leader=None,
+        beats=True,
+        title="applicant",
+        target=target,
+    )
+    vault.save(
+        "applicant",
+        STRICT,
+        "MIKE Begaa",
+        p_mean=1.0,
+        p_lcb=1.0,
+        spread=0.0,
+        n=5,
+        units=2,
+        leader=None,
+        beats=True,
+        title="applicant",
+        target=target,
+    )
+    vault.save(
+        "applicant",
+        STRICT,
+        "one",
+        p_mean=1.0,
+        p_lcb=1.0,
+        spread=0.0,
+        n=5,
+        units=1,
+        leader=None,
+        beats=True,
+        title="applicant",
+        target=target,
+    )
+    live = {
+        "applicant": {
+            "slug": "applicant",
+            "revisionId": "r1",
+            "goal": "yes",
+            "kind": "choice",
+            "choices": choices,
+        }
+    }
+    result = publish_entry(
+        db,
+        _Held(),
+        held | {"slug": "applicant", "mode": STRICT, "board": HIGH_SCORES, "target": target},
+        live,
+        "me",
+        False,
+        0,
+        False,
+        lambda _message: None,
+    )
+    row = next(
+        item
+        for item in standings(db, mode=STRICT, board=HIGH_SCORES, targets=True)
+        if item.slug == "applicant" and item.target == target
+    )
+    assert result == "already"
+    assert db.board("applicant", STRICT, HIGH_SCORES)[0]["phrase"] == "Mikey Begaa"
+    assert row.entry_beats is True
+    assert row.best_entry["phrase"] == "one"

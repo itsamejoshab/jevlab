@@ -593,8 +593,11 @@ def publish_entry(
         default=None,
     )
     estimate = float(entry["p_mean"])
+    # The list offers a recorded site score ahead of the vault estimate. Judge the live board the same way.
+    recorded = vault.site_p(entry)
+    basis = recorded if recorded is not None else estimate
     gamble = objective.shortest and bool(entry.get("gamble")) and (leader is None or units < leader.units)
-    aim = max(estimate, objective.entry_p(entry, leader)) if gamble else estimate
+    aim = max(basis, objective.entry_p(entry, leader)) if gamble else basis
     where = f"{board} for {target!r}" if target else board
     lead = f"{leader.probability:.2f}/{leader.units}{u} {leader.name}" if leader else "empty board"
     log(
@@ -605,6 +608,9 @@ def publish_entry(
     if ours and objective.leader_key(Leader(float(ours["probability"]), int(ours["wordCount"]))) >= objective.key(
         aim, units
     ):
+        if not dry_run:
+            # The Launch list is this snapshot. Without the live row, the next vault line still looks ready.
+            store_boards(db, live, mode, raw)
         vault.set_status(
             slug, mode, phrase, "published", board, target=target, detail="our board row is already as good"
         )
@@ -614,6 +620,8 @@ def publish_entry(
     if not objective.beats(aim, units, leader):
         if not dry_run:
             _drop_failed_estimate(entry, log)
+            # The Launch list reads this snapshot. Without the live leader, the line still looks ready.
+            store_boards(db, live, mode, raw)
         raise PublishError(f"no longer beats the live leader ({lead})")
     estimated = entry.get("estimated_from")
     if estimated:
@@ -752,9 +760,12 @@ def _drop_failed_estimate(entry: dict, log) -> None:
         log(f"  dropped the {source} estimate; import it again to retry")
 
 
-def sweep_banned(log, indent: str = "") -> list[dict]:
-    """Delete vault lines that contain a named ban, on every question and board."""
-    removed = vault.drop_banned()
+def sweep_banned(log, indent: str = "", span: str = "") -> list[dict]:
+    """Delete vault lines that contain a named ban, on every question and board.
+
+    `span` is the phrase just recorded. The sweep then looks for that phrase only.
+    """
+    removed = vault.drop_banned(span)
     if removed:
         shown = "; ".join(e["phrase"] for e in removed[:5])
         more = f" (+{len(removed) - 5})" if len(removed) > 5 else ""
@@ -929,10 +940,10 @@ def publish(
         extra_lock = threading.Lock()
         extras: list[dict] = []
 
-        def sweep(board_log, indent: str = "") -> None:
+        def sweep(board_log, indent: str = "", span: str = "") -> None:
             """One sweep at a time. It rewrites every vault file, so two questions must not do it together."""
             with sweep_lock:
-                sweep_banned(board_log, indent)
+                sweep_banned(board_log, indent, span)
 
         def note_stopped() -> None:
             nonlocal announced
@@ -996,7 +1007,7 @@ def publish(
                         board_log("  server did not name the span; not adding a ban")
                     if not dry_run:
                         if error.named:
-                            sweep(board_log, "  ")
+                            sweep(board_log, "  ", error.named)
                         vault.set_status(
                             entry["slug"],
                             entry["mode"],

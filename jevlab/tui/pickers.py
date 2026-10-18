@@ -232,6 +232,30 @@ class HomeScreen(Screen):
         self.tick()
         self.set_interval(1, self.tick)
         self.update_stats()
+        self.calibrate_if_due()
+
+    @work(thread=True, exclusive=True, group="calibrate", exit_on_error=False)
+    def calibrate_if_due(self) -> None:
+        """A saved snapshot can already hold site scores. Check the oracle without another command."""
+        from ..calibrate import ensure_calibration
+
+        def write(message: str) -> None:
+            def paint() -> None:
+                if not self.is_mounted:
+                    return
+                log = self.query_one("#home-log", SelectableRichLog)
+                log.display = True
+                log.write(f"{time.strftime('%H:%M:%S')} {message}")
+
+            try:
+                self.app.call_from_thread(paint)
+            except Exception:
+                pass
+
+        try:
+            ensure_calibration(DB(), log=write)
+        except Exception as exc:
+            write(f"calibration failed: {exc}")
 
     def tick(self) -> None:
         self.query_one("#home").border_subtitle = f" SECURE TERMINAL 7  ·  {time.strftime('%H:%M:%S')} "
@@ -416,6 +440,12 @@ def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=N
                 activate(edition)
                 take_snapshot(DB(), modes=modes, log=log, section=section)
                 finished += 1
+                try:
+                    from ..calibrate import ensure_calibration
+
+                    ensure_calibration(DB(), log=log)
+                except Exception as error:
+                    log(f"  calibration failed: {error!r}")
             except Exception as error:
                 log(log_rule(f"{section} · {name} · failed"))
                 log(f"  {error!r}")

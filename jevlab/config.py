@@ -30,6 +30,8 @@ EDITIONS = ("jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "de
 # Jev moved on back-to-back reads (0.32–0.34). Kev moved on back-to-back reads (0.8966–0.898).
 # Microsoft repeated a cached value when asked immediately, then moved after a 20s gap (0.32–0.38).
 DETERMINISTIC_EDITIONS = frozenset({"laya", "clef", "clef-flash", "clef-omni", "luna", "decider"})
+# Clef's site scores with the 27B. Search scores with local clef-flash, so the oracle is an estimate.
+ESTIMATE_EDITIONS = frozenset({"clef"})
 # Re-rolls to ask for on an edition whose score can move. Deterministic editions ask for none.
 NOISY_REROLLS = 5
 # Microsoft returns the previous score when the same phrase is submitted again immediately.
@@ -160,6 +162,7 @@ def _push_edition() -> None:
         "jevlab.netlog": {"DATA": DATA},
         "jevlab.publish": {"DATA": DATA},
         "jevlab.site.snapshot": {"SNAPSHOTS": SNAPSHOTS},
+        "jevlab.calibrate": {"CALIBRATION_PATH": DATA / "calibration.json"},
         "jevlab.site.client": {"EDITION": EDITION},
         "jevlab.oracle": {
             "JEV_MODEL": JEV_MODEL,

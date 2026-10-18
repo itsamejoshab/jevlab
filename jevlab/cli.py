@@ -62,22 +62,31 @@ def cmd_install_clef(_args) -> int:
 
 
 def cmd_snapshot(args) -> int:
+    from .calibrate import ensure_calibration
     from .db import DB
     from .site.snapshot import take_snapshot
 
     slugs = [question_slug(s) for s in args.q] if args.q else None
     modes = tuple(mode_name(m) for m in args.modes) if args.modes else None
     kwargs = {"modes": modes} if modes else {}
-    take_snapshot(DB(), slugs=slugs, workers=args.workers, **kwargs)
+    db = DB()
+    take_snapshot(db, slugs=slugs, workers=args.workers, **kwargs)
+    try:
+        ensure_calibration(db, log=print)
+    except Exception as error:
+        print(f"calibration failed: {error!r}", file=sys.stderr)
     return 0
 
 
 def cmd_calibrate(args) -> int:
     import asyncio
 
-    from .calibrate import calibrate
+    from .calibrate import calibrate, same_model_as_site
     from .db import DB
 
+    if same_model_as_site():
+        print("calibration n/a: this edition scores with the same model as the site")
+        return 0
     slugs = [question_slug(s) for s in args.q] if args.q else None
     report = asyncio.run(calibrate(DB(), slugs, per_question=args.per_question, n=args.n))
     return 0 if report else 1
@@ -518,7 +527,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.set_defaults(func=cmd_install_clef)
 
-    p = sub.add_parser("snapshot", help="pull questions, boards, word impacts, and our attempts into jevlab/data/jev.db")
+    p = sub.add_parser(
+        "snapshot", help="pull questions, boards, word impacts, and our attempts into jevlab/data/jev.db"
+    )
     p.add_argument("--q", nargs="*", help="limit to these slugs or play URLs")
     p.add_argument("--modes", nargs="*", help="strict casual golf emoji (default all)")
     p.add_argument("--workers", type=int, default=16)

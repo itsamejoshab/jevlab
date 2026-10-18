@@ -861,13 +861,14 @@ class LabScreen(Screen):
         ]
         if self.live_play and self.live_session and not self.live_session.post_enabled:
             inside.append("POST OFF")
-        if netlog.counts:
-            worst = [
-                f"{svc} {status.replace('HTTP ', '')}x{n} {where.split('.')[0]}"
-                for (svc, where, status), n in netlog.counts.most_common(2)
-            ]
-            conc = f" conc {int(oracle.limiter.limit)}" if oracle else ""
-            inside.append("NET ERR " + ", ".join(worst) + conc)
+        concurrency = None
+        if oracle:
+            concurrency = (
+                int(oracle.limiter.limit),
+                sum(b.limiter.maximum for b in oracle.limiter.backends),
+            )
+        if line := netlog.live_line(concurrency):
+            inside.append(line)
         if engine.win_extra:
             inside.insert(
                 4,

@@ -222,6 +222,7 @@ class LabScreen(Screen):
         self.plan_mode = ""
         self.plan_focus: list[str] = []
         self.plan_bans: list[str] = []
+        self.plan_pins: list[str] = []
         self.plan_at = 0.0
         self.plans = 0
         self.calibration = calibration_status()
@@ -296,7 +297,14 @@ class LabScreen(Screen):
             self.bests = 0
             self.last_best_calls = 0
             self.last_best_time = time.monotonic()
-            self.plan, self.plan_mode, self.plan_focus, self.plan_bans, self.plans = "", "", [], [], 0
+            self.plan, self.plan_mode, self.plan_focus, self.plan_bans, self.plan_pins, self.plans = (
+                "",
+                "",
+                [],
+                [],
+                [],
+                0,
+            )
             self.query_one("#feed", RichLog).clear()
             self.timeline.clear()
             self.timeline_dirty = True
@@ -473,7 +481,7 @@ class LabScreen(Screen):
         self.bests = 0
         self.last_best_calls = 0
         self.last_best_time = time.monotonic()
-        self.plan, self.plan_mode, self.plan_focus, self.plan_bans, self.plans = "", "", [], [], 0
+        self.plan, self.plan_mode, self.plan_focus, self.plan_bans, self.plan_pins, self.plans = "", "", [], [], [], 0
         self.query_one("#feed", RichLog).clear()
         self.timeline.clear()
         self.timeline_dirty = True
@@ -615,9 +623,11 @@ class LabScreen(Screen):
             self.plan_mode = d.get("mode") or ""
             self.plan_focus = list(d.get("focus") or [])
             self.plan_bans = list(d.get("ban") or [])
+            self.plan_pins = list(d.get("pin") or [])
             self.plan_at = time.monotonic()
             self.plans += 1
-            self.log_line(f"[planner] {self.plan_mode or '-'}: {self.plan}")
+            pinned = f"  pinned {', '.join(self.plan_pins)}" if self.plan_pins else ""
+            self.log_line(f"[planner] {self.plan_mode or '-'}: {self.plan}{pinned}")
         elif kind == "surrogate":
             self.surrogate = (
                 f"{d['embedder']} ρ {d['phrase_rho']:.2f} phrase / {d['word_rho']:.2f} word, {d['n']:,} lines"
@@ -837,6 +847,9 @@ class LabScreen(Screen):
         if self.plan_bans:
             tail.append("  banned ", style="dim")
             tail.append(", ".join(self.plan_bans), style="red")
+        if self.plan_pins:
+            tail.append("  pinned ", style="dim")
+            tail.append(", ".join(self.plan_pins), style=colour)
         space = max(room - len(line) - len(tail), 20)
         directive = self.plan if len(self.plan) <= space else self.plan[: space - 1].rstrip() + "…"
         line.append(directive, style=f"italic {colour}")

@@ -1390,6 +1390,8 @@ class Engine:
             return
         self.ctx.directive = str(data.get("directive") or "")[:400]
         self.ctx.focus = [f for f in data.get("focus") or [] if f in ARCHETYPES]
+        pinned = self.pins_worth_keeping(data.get("pin") or [])
+        self.ctx.pinned = set(pinned)
         protected = {p.casefold() for p in self.ctx.pinned} | set(FUNCTION_WORDS)
         for cand in self.archive.top_by_board(5):
             protected |= {w.casefold() for w in cand.words}
@@ -1399,6 +1401,7 @@ class Engine:
                 self.ctx.banned.add(word.casefold())
                 applied.append(word)
         data["ban"] = applied
+        data["pin"] = pinned
         mode = str(data.get("mode") or "")
         self.scheduler.boost = {
             "explore": {"llm_gen": 2.0, "surrogate_bo": 1.3},
@@ -1416,6 +1419,55 @@ class Engine:
         seeds = [(str(p), "planner", "", "other") for p in data.get("seed_phrases") or []]
         if seeds:
             await self.evaluate(seeds)
+
+    def pins_worth_keeping(self, requested) -> list[str]:
+        """Planner pins that the lines near the best actually share.
+
+        A pin is required in every later phrase, so a suggestion is kept only when
+        the word is in the best line, is not a function word or a ban, and appears
+        in a strict majority of the top lines within 0.02 of the best. At most three,
+        in the order the planner named them. The caller replaces the pin set.
+        """
+        if isinstance(requested, str):
+            requested = [requested]
+        elif not isinstance(requested, list):
+            return []
+        top = self.archive.top_by_board(5)
+        if not top:
+            return []
+        best = top[0]
+        surface: dict[str, str] = {}
+        for word in best.words:
+            surface.setdefault(word.casefold(), word)
+        group = [best] + [cand for cand in top[1:] if best.p - cand.p <= 0.02]
+        counts: dict[str, int] = {}
+        for cand in group:
+            for word in {w.casefold() for w in cand.words}:
+                counts[word] = counts.get(word, 0) + 1
+        need = len(group) // 2 + 1
+        kept: list[str] = []
+        seen: set[str] = set()
+        for raw in requested:
+            if len(kept) >= 3:
+                break
+            if not isinstance(raw, str):
+                continue
+            text = raw.strip()
+            key = text.casefold()
+            if not key or key in seen or " " in text:
+                continue
+            if key in FUNCTION_WORDS or key in self.ctx.banned:
+                continue
+            form = surface.get(key)
+            if form is None or counts.get(key, 0) < need:
+                continue
+            try:
+                check_word(form)
+            except RuleError:
+                continue
+            seen.add(key)
+            kept.append(form)
+        return kept
 
     # Promotion and vault.
 

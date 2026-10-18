@@ -409,7 +409,9 @@ def realign_vault_goals(db: DB, previous: dict[str, str], slugs: set[str] | None
     question that already has vault lines is checked too: a live search can store P(yes) while the
     snapshot goal was already `no`.
     """
-    vaulted = {entry["slug"] for entry in vault.all_entries()}
+    by_slug: dict[str, list[dict]] = {}
+    for entry in vault.all_entries():
+        by_slug.setdefault(entry["slug"], []).append(entry)
     removed: set[str] = set()
     for row in db.all("SELECT slug, goal, kind FROM questions"):
         slug = row["slug"]
@@ -419,24 +421,28 @@ def realign_vault_goals(db: DB, previous: dict[str, str], slugs: set[str] | None
         old = (previous.get(slug) or "").casefold()
         kind = (row["kind"] or "noul").casefold()
         changed = bool(old) and old != site
-        if kind != "noul" or (not changed and slug not in vaulted):
+        if kind != "noul" or (not changed and slug not in by_slug):
             continue
         if changed:
             log(f"  {slug}: goal {old!r} -> {site!r}")
         question = db.question(slug)
         if question:
-            removed |= forget_wrong_goal(db, question, site, log)
+            removed |= forget_wrong_goal(db, question, site, log, by_slug.get(slug, []))
     return removed
 
 
-def forget_wrong_goal(db: DB, question: dict, site_goal: str, log) -> set[str]:
-    """Drop vault lines, and the guesses behind them, that were scored against the opposite of `site_goal`."""
+def forget_wrong_goal(db: DB, question: dict, site_goal: str, log, entries: list[dict] | None = None) -> set[str]:
+    """Drop vault lines, and the guesses behind them, that were scored against the opposite of `site_goal`.
+
+    `entries` is that question's vault lines, already loaded. When omitted, only this question's folder is read.
+    """
     slug = question["slug"]
     qkey = question_key(question["jev_request"]) if question.get("jev_request") else ""
     means = _raw_means(db, qkey) if qkey else {}
+    rows = vault.entries_for(slug) if entries is None else entries
     phrases = {
         entry["phrase"]
-        for entry in vault.all_entries()
+        for entry in rows
         if entry["slug"] == slug
         and entry["phrase"] in means
         and _scored_wrong(float(entry["p_mean"]), means[entry["phrase"]], site_goal)
@@ -845,7 +851,11 @@ def golf_followups(db: DB, slug: str, log) -> list[dict]:
     if found:
         queue(db, found)
         log(f"  cross-posting {len(found)} line(s) to Golf")
-    return [e for e in vault.queued() if e["mode"] == GOLF and e["slug"] == slug]
+    return [
+        entry
+        for entry in vault.entries_for(slug)
+        if entry["slug"] == slug and entry["mode"] == GOLF and entry.get("status") == "queued"
+    ]
 
 
 def _tagged(log, index: int, total: int):

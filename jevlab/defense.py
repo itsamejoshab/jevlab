@@ -222,12 +222,17 @@ def pick_decoys(
     top_n: int,
     choices: list | None = None,
 ) -> list[str]:
-    """Up to `top_n` new words. Skips our phrase, words already on the board, stop words, and illegal tokens."""
+    """Up to `top_n` new words. Skips phrases, our words, words already on the board, stop words, and illegal tokens."""
     out: list[str] = []
     seen: set[str] = set()
     for word in ranked:
         key = fold(word)
-        if not key or key in seen or key in present or key in protected or key in STOPWORDS or hit(key):
+        if not key or key in seen or key in present or key in protected or key in STOPWORDS:
+            continue
+        # check_word rejects a phrase, and hit() would slide it across every stored ban.
+        if len(tokens(word)) > 1:
+            continue
+        if hit(key):
             continue
         try:
             clean = check_word(word)

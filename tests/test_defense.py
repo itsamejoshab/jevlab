@@ -83,6 +83,26 @@ def test_pick_decoys_skips_our_words_words_already_there_and_answer_fragments():
     assert decoys == ["gamma", "epsilon"]
 
 
+def test_pick_decoys_skips_a_multi_word_candidate(monkeypatch):
+    """A phrase is not a decoy, even when the other checks would allow it. A single word still is."""
+    checked = []
+
+    def record(phrase, span=""):
+        checked.append(phrase)
+        return "secret" if phrase == "secret" else ""
+
+    monkeypatch.setattr("jevlab.defense.hit", record)
+    monkeypatch.setattr("jevlab.defense.check_word", lambda word: word.strip())
+    decoys = pick_decoys(
+        ["red herring", "secret", "gamma", "well-known"],
+        present=set(),
+        protected=set(),
+        top_n=5,
+    )
+    assert decoys == ["gamma"]
+    assert checked == ["secret", "gamma"]
+
+
 def test_already_quiet_only_when_the_board_is_crowded_and_our_words_are_buried():
     assert not already_quiet(0, 0, 0)
     assert not already_quiet(0, 10, 39)

@@ -21,6 +21,8 @@ _QUOTED = re.compile(r'"([^"]+)"\s+is banned', re.IGNORECASE)
 
 _phrases: dict[str, dict] = {}
 _needles: list[tuple[str, tuple[str, ...]]] = []
+# Spans grouped by their first token, in the same order as `_needles`.
+_by_first: dict[str, list[tuple[int, str, tuple[str, ...]]]] = {}
 _mtime: float | None = None
 _checked = 0.0
 
@@ -50,30 +52,42 @@ def tokens(phrase: str) -> list[str]:
     return [word for word in re.split(r"[\s\-]+", (phrase or "").casefold()) if word]
 
 
+def _matches_at(hay: list[str], start: int, needle: tuple[str, ...]) -> bool:
+    width = len(needle)
+    if not width or width > len(hay) - start:
+        return False
+    if hay[start] != needle[0]:
+        return False
+    return width == 1 or all(hay[start + offset] == needle[offset] for offset in range(1, width))
+
+
 def _contains_tokens(hay: list[str], needle: tuple[str, ...]) -> bool:
     width = len(needle)
     if not width or width > len(hay):
         return False
     last = len(hay) - width + 1
     for start in range(last):
-        if hay[start] != needle[0]:
-            continue
-        if width == 1 or all(hay[start + offset] == needle[offset] for offset in range(1, width)):
+        if _matches_at(hay, start, needle):
             return True
     return False
 
 
 def _remember(phrases: dict[str, dict], mtime: float | None) -> dict[str, dict]:
-    global _phrases, _needles, _mtime
+    global _phrases, _needles, _by_first, _mtime
     _phrases = phrases
     _mtime = mtime
     needles = []
+    by_first: dict[str, list[tuple[int, str, tuple[str, ...]]]] = {}
     for key, row in phrases.items():
         span = row.get("phrase") or key
         needle = tuple(tokens(span))
-        if needle:
-            needles.append((span, needle))
+        if not needle:
+            continue
+        ordinal = len(needles)
+        needles.append((span, needle))
+        by_first.setdefault(needle[0], []).append((ordinal, span, needle))
     _needles = needles
+    _by_first = by_first
     return _phrases
 
 
@@ -116,10 +130,25 @@ def hit(phrase: str, span: str = "") -> str:
         needle = tuple(tokens(span))
         return span if _contains_tokens(hay, needle) else ""
     _refresh()
-    for named, needle in _needles:
-        if _contains_tokens(hay, needle):
+    # One pass over the phrase. Each word is compared only with spans that start with it.
+    # The lowest stored ordinal wins, which is the span the old full scan would return.
+    found: int | None = None
+    named = ""
+    for index, word in enumerate(hay):
+        bucket = _by_first.get(word)
+        if not bucket:
+            continue
+        for ordinal, candidate, needle in bucket:
+            if found is not None and ordinal >= found:
+                break
+            if not _matches_at(hay, index, needle):
+                continue
+            found = ordinal
+            named = candidate
+            break
+        if found == 0:
             return named
-    return ""
+    return named
 
 
 def add(span: str, detail: str = "") -> None:

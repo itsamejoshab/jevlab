@@ -269,17 +269,35 @@ def best_saved(question: dict, entries: list[dict]) -> dict | None:
     return best
 
 
-def saved_line(question: dict) -> dict | None:
-    """Vault line to fire the moment this live question is recognized."""
-    from . import vault
-    from .modes import HIGH_SCORES, STRICT
+def _open_strict(entries: list[dict]) -> list[dict]:
+    from .modes import STRICT
 
-    entries = [
+    return [
         entry
-        for entry in vault.all_entries(HIGH_SCORES)
-        if entry.get("mode") == STRICT and entry.get("status") not in ("dropped", "rejected")
+        for entry in entries
+        if entry.get("board") == HIGH_SCORES
+        and entry.get("mode") == STRICT
+        and entry.get("status") not in ("dropped", "rejected")
     ]
-    return best_saved(question, entries)
+
+
+def saved_line(question: dict) -> dict | None:
+    """Vault line to fire the moment this live question is recognized.
+
+    The question's own folder is enough when it already has a line. A recycled round keeps the title
+    and gets a new slug, so a miss also looks for that title under the slug the line was saved with.
+    """
+    from . import vault
+
+    slug = question.get("slug") or ""
+    found = best_saved(question, _open_strict(vault.entries_for(slug)) if slug else [])
+    if found is not None:
+        return found
+    title = " ".join((question.get("title") or "").casefold().split())
+    if not title:
+        return None
+    rest = [entry for entry in _open_strict(vault.all_entries(HIGH_SCORES)) if entry.get("slug") != slug]
+    return best_saved(question, rest)
 
 
 def post_phrase(client, question: dict, play_mode: str, phrase: str, log, stop_at: float | None = None) -> float:

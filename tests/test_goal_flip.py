@@ -19,10 +19,10 @@ def test_goal_flipped_is_the_complement_within_one_hundredth():
     assert not goal_flipped(0.50, 0.50)
 
 
-def _question(db: DB, slug: str, goal: str) -> dict:
+def _question(db: DB, slug: str, goal: str, request: dict | None = None) -> dict:
     db.execute(
         "INSERT INTO questions VALUES (?, 0, 'r1', 'Is it rude?', '', 'noul', ?, 0.2, 0.5, 'm', ?, ?)",
-        (slug, goal, json.dumps(REQUEST), json.dumps({"goal": goal})),
+        (slug, goal, json.dumps(REQUEST if request is None else request), json.dumps({"goal": goal})),
     )
     return db.question(slug)
 
@@ -153,3 +153,57 @@ def test_snapshot_refresh_cleans_inverted_lines_when_the_goal_already_matches(tm
 
     assert removed == {WRONG}
     assert {entry["phrase"] for entry in vault.all_entries()} == {RIGHT}
+
+
+def test_snapshot_refresh_drops_each_questions_wrong_goal_lines_in_one_vault_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    other = {
+        "state": "",
+        "model": "jev-latest",
+        "questions": {"q": {"type": "noul", "instructions": "Is it kind?"}},
+    }
+    held = {
+        "state": "",
+        "model": "jev-latest",
+        "questions": {"q": {"type": "noul", "instructions": "Is it fair?"}},
+    }
+    hinge = _question(db, "hinge", "no")
+    second = _question(db, "other", "no", other)
+    untouched = _question(db, "held", "no", held)
+    for question in (hinge, second, untouched):
+        _save(question["slug"], WRONG, 0.978)
+        _save(question["slug"], RIGHT, 0.896)
+        _samples(db, question_key(question["jev_request"]), WRONG, [0.98, 0.97, 0.98])
+        _samples(db, question_key(question["jev_request"]), RIGHT, [0.10, 0.11, 0.10])
+    reads = {"n": 0}
+    original = vault.all_entries
+
+    def counting(*args, **kwargs):
+        reads["n"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(vault, "all_entries", counting)
+
+    removed = realign_vault_goals(db, {"hinge": "yes", "other": "yes"}, {"hinge", "other"}, lambda _m: None)
+
+    assert reads["n"] == 1
+    assert removed == {WRONG}
+    left = {(entry["slug"], entry["phrase"]) for entry in vault.all_entries()}
+    assert left == {("hinge", RIGHT), ("other", RIGHT), ("held", WRONG), ("held", RIGHT)}
+    assert (
+        db.all(
+            "SELECT state FROM oracle_samples WHERE qkey = ? AND state = ?", (question_key(hinge["jev_request"]), WRONG)
+        )
+        == []
+    )
+    assert (
+        db.all(
+            "SELECT state FROM oracle_samples WHERE qkey = ? AND state = ?",
+            (question_key(second["jev_request"]), WRONG),
+        )
+        == []
+    )
+    assert db.one(
+        "SELECT state FROM oracle_samples WHERE qkey = ? AND state = ?", (question_key(untouched["jev_request"]), WRONG)
+    )

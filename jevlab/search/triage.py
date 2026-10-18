@@ -101,8 +101,8 @@ def rank_candidates(db: DB, slug: str, objective: Objective, leader: Leader | No
     for e in vault.load(slug, STRICT, objective.board, target)["entries"]:
         if e.get("estimated_from") and e.get("status") not in ("rejected", "dropped"):
             offer(e["phrase"], f"{EDITION}-vault", float(e.get("jev_p") or e["p_mean"]), True, True)
-    for e in vault.all_entries(root=JEV_VAULT):
-        if e["slug"] == slug and e["mode"] == STRICT and (e.get("target") or "") == target \
+    for e in vault.entries_for(slug, root=JEV_VAULT):
+        if e["mode"] == STRICT and (e.get("target") or "") == target \
                 and e.get("status") not in ("rejected", "dropped"):
             offer(e["phrase"], "jev-vault", float(e["p_mean"]), True)
     if jev is not None:

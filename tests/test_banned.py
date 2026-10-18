@@ -8,6 +8,8 @@ from jevlab.rules import banned
 def _reset_bans(tmp_path, monkeypatch):
     monkeypatch.setattr(banned, "PATH", tmp_path / "banned_phrases.json")
     banned._phrases = {}
+    banned._needles = []
+    banned._by_first = {}
     banned._mtime = None
     banned._checked = 0.0
 
@@ -59,6 +61,8 @@ def test_banned_phrase_records_only_the_named_span(tmp_path, monkeypatch):
     assert not banned.contains("rejected")
     assert list(banned.phrases()) == ["in this logic"]
     banned._phrases = {}
+    banned._needles = []
+    banned._by_first = {}
     banned._mtime = None
     banned._checked = 0.0
 
@@ -98,6 +102,8 @@ def test_drop_banned_clears_every_vault_then_the_next_line_can_publish(tmp_path,
     assert nxt["status"] == "queued"
     assert sweep_banned(logs.append) == []
     banned._phrases = {}
+    banned._needles = []
+    banned._by_first = {}
     banned._mtime = None
     banned._checked = 0.0
 
@@ -116,5 +122,29 @@ def test_a_new_ban_sweeps_only_that_span(tmp_path, monkeypatch):
     assert {e["phrase"] for e in removed} == {"rule one must pour milk"}
     assert {e["phrase"] for e in vault.all_entries()} == {"in this logic game", "a clean winner"}
     banned._phrases = {}
+    banned._needles = []
+    banned._by_first = {}
+    banned._mtime = None
+    banned._checked = 0.0
+
+
+def test_a_line_is_banned_only_when_the_words_are_consecutive(tmp_path, monkeypatch):
+    _reset_bans(tmp_path, monkeypatch)
+    banned.note("banned_phrase", '"in this logic" is banned.')
+    banned.note("banned_phrase", '"in other words" is banned.')
+
+    assert banned.hit("prefix in this logic suffix") == "in this logic"
+    assert banned.hit("in-this-logic") == "in this logic"
+    assert banned.hit("in other words today") == "in other words"
+    assert banned.hit("in this logic", "in other words") == ""
+    assert banned.hit("see in other words", "in other words") == "in other words"
+    assert not banned.contains("in logic this")
+    assert not banned.contains("in this other logic")
+    assert not banned.contains("in this words")
+    assert not banned.contains("in")
+    assert not banned.contains("logic")
+    banned._phrases = {}
+    banned._needles = []
+    banned._by_first = {}
     banned._mtime = None
     banned._checked = 0.0

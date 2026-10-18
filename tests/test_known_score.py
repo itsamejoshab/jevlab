@@ -6,7 +6,7 @@ from jevlab import vault
 from jevlab.boards import standings
 from jevlab.crosspost import casual_picks, picks
 from jevlab.db import DB
-from jevlab.modes import GOLF, GOLF_HIGHEST, HIGH_SCORES, STRICT
+from jevlab.modes import GOLF, GOLF_HIGHEST, HIGH_SCORES, SHORTEST_YES, STRICT
 
 PHRASE = "Accounts blur Ledgers Zig debit credit two phase pending transfers Pick"
 FRESH = "edge sqlite filesystem"
@@ -36,7 +36,15 @@ def _db(tmp_path) -> DB:
     return db
 
 
-def _save(slug: str, mode: str, phrase: str, p: float, units: int) -> None:
+def _save(
+    slug: str,
+    mode: str,
+    phrase: str,
+    p: float,
+    units: int,
+    board: str = HIGH_SCORES,
+    target: str = "",
+) -> None:
     vault.save(
         slug,
         mode,
@@ -49,7 +57,8 @@ def _save(slug: str, mode: str, phrase: str, p: float, units: int) -> None:
         leader=None,
         beats=True,
         title=slug,
-        board=HIGH_SCORES,
+        board=board,
+        target=target,
     )
 
 
@@ -151,3 +160,122 @@ def test_crosspost_reads_the_vault_once_and_keeps_every_empty_board(tmp_path, mo
     assert reads["n"] == 1
     assert golf == {(slug, mode, phrase) for slug in slugs for mode in ("golf-highest", "golf-shortest")}
     assert casual == {(slug, mode, phrase) for slug in slugs for mode in ("casual-highest", "casual-shortest")}
+
+
+def test_entries_for_reads_one_slug_and_matches_all_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    _save("alpha", STRICT, "alpha line", 0.9, 2)
+    _save("alpha", STRICT, "short line", 0.8, 2, board=SHORTEST_YES)
+    _save("alpha", STRICT, "aimed north", 0.7, 2, target="North")
+    _save("beta", STRICT, "beta line", 0.99, 2)
+    (tmp_path / "vault" / "alpha" / "note.extra.json").write_text(
+        json.dumps(
+            {
+                "slug": "alpha",
+                "mode": "note",
+                "entries": [{"phrase": "not a board", "p_mean": 1, "status": "candidate"}],
+            }
+        )
+    )
+    (tmp_path / "vault" / "bare").mkdir()
+
+    got = vault.entries_for("alpha")
+    assert got == [entry for entry in vault.all_entries() if entry["slug"] == "alpha"]
+    assert {entry["phrase"] for entry in got} == {"alpha line", "short line", "aimed north"}
+    assert {entry["slug"] for entry in got} == {"alpha"}
+    aimed = next(entry for entry in got if entry["phrase"] == "aimed north")
+    assert aimed["target"] == "North"
+    assert aimed["mode"] == STRICT
+    short = next(entry for entry in got if entry["phrase"] == "short line")
+    assert short["board"] == SHORTEST_YES
+    assert vault.entries_for("bare") == []
+    assert vault.entries_for("missing") == []
+    assert vault.entries_for("alpha", root=tmp_path / "elsewhere") == []
+    assert vault.entries_for("alpha", root=tmp_path / "vault") == got
+
+
+def _question(db: DB, slug: str) -> None:
+    db.execute(
+        "INSERT INTO questions VALUES (?, 0, 'r1', ?, '', 'noul', 'yes', 0.2, 0.5, 'm', '{}', '{}')",
+        (slug, slug),
+    )
+
+
+def test_picks_for_one_slug_does_not_need_the_other(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    for slug, phrase in (("alpha", "alpha beta gamma"), ("beta", "delta epsilon zeta")):
+        _question(db, slug)
+        _save(slug, STRICT, phrase, 0.9, 3)
+    next((tmp_path / "vault" / "beta").glob("*.json")).write_text("{")
+
+    found = picks(db, slugs=["alpha"])
+
+    assert {pick.slug for pick in found} == {"alpha"}
+    assert {pick.entry["phrase"] for pick in found} == {"alpha beta gamma"}
+
+
+def test_golf_followups_returns_queued_golf_lines_for_that_slug(tmp_path, monkeypatch):
+    from jevlab.publish import golf_followups
+
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    for slug in ("alpha", "beta"):
+        _question(db, slug)
+        _save(slug, STRICT, "alpha beta gamma", 0.9, 3)
+    next((tmp_path / "vault" / "beta").glob("*.json")).write_text("{")
+
+    got = golf_followups(db, "alpha", lambda _message: None)
+
+    assert got
+    assert {entry["slug"] for entry in got} == {"alpha"}
+    assert all(entry["mode"] == GOLF and entry["status"] == "queued" for entry in got)
+
+
+def test_standings_filters_a_passed_list_to_its_board_and_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db, "edge")
+    _save("edge", STRICT, "alpha beta", 0.70, 2)
+    _save("edge", STRICT, "gamma delta epsilon", 0.99, 3, board=SHORTEST_YES)
+    _save("edge", GOLF, "zeta eta theta", 0.98, 3)
+
+    loaded = vault.all_entries()
+    direct = {row.slug: row.best_entry["phrase"] for row in standings(db, mode=STRICT, board=HIGH_SCORES)}
+    passed = {
+        row.slug: row.best_entry["phrase"] for row in standings(db, mode=STRICT, board=HIGH_SCORES, entries=loaded)
+    }
+
+    assert direct == passed == {"edge": "alpha beta"}
+
+
+def test_rank_candidates_offers_a_jev_vault_line_for_that_slug(tmp_path, monkeypatch):
+    from jevlab.objective import objective_for
+    from jevlab.search import triage
+
+    jev_root = tmp_path / "jev"
+    monkeypatch.setattr(vault, "VAULT", jev_root)
+    _save("asked", STRICT, "quiet river", 0.91, 2)
+    _save("asked", STRICT, "gone phrase", 0.99, 2)
+    vault.set_status("asked", STRICT, "gone phrase", "rejected", HIGH_SCORES)
+    _save("asked", GOLF, "golf phrase", 0.99, 2)
+    _save("other", STRICT, "loud storm", 0.99, 2)
+    (jev_root / "asked" / "note.extra.json").write_text("{")
+    next((jev_root / "other").glob("*.json")).write_text("{")
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "local")
+    monkeypatch.setattr(triage, "JEV_VAULT", jev_root)
+    db = DB(tmp_path / "t.db")
+    request = {"state": "", "model": "m", "questions": {"q": {"type": "noul", "instructions": "Asked?"}}}
+    db.execute(
+        "INSERT INTO questions VALUES (?, 0, 'r1', 'Asked', '', 'noul', 'yes', 0.2, 0.5, 'm', ?, '{}')",
+        ("asked", json.dumps(request)),
+    )
+
+    found = triage.rank_candidates(db, "asked", objective_for(db.question("asked")), None, 5)
+
+    phrases = {item.phrase: item for item in found}
+    assert "quiet river" in phrases
+    assert phrases["quiet river"].source == "jev-vault"
+    assert "loud storm" not in phrases
+    assert "gone phrase" not in phrases
+    assert "golf phrase" not in phrases

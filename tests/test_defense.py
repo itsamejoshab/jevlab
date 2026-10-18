@@ -338,6 +338,8 @@ def test_a_live_crowd_replaces_the_snapshot_so_refresh_stops_calling_it_at_risk(
 def _reset_bans(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(banned, "PATH", tmp_path / "banned_phrases.json")
     monkeypatch.setattr(banned, "_phrases", {})
+    monkeypatch.setattr(banned, "_needles", [])
+    monkeypatch.setattr(banned, "_by_first", {})
     monkeypatch.setattr(banned, "_mtime", None)
     monkeypatch.setattr(banned, "_checked", 0.0)
 

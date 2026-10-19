@@ -627,7 +627,7 @@ class Oracle:
         return {state: Score(state, list(self._cached(keys[state]))) for state in unique}
 
     def _duplicate(self, key: str, copies: int) -> None:
-        """Repeat a stored local reading so a later run sees the same sample count, without another forward."""
+        """Repeat a stored reading so a later run sees the same sample count, without another forward or API call."""
         row = self.db.one(
             "SELECT model, state, noul, answer, latency_ms, qkey FROM oracle_samples "
             "WHERE request_hash = ? ORDER BY rowid DESC LIMIT 1",
@@ -645,15 +645,28 @@ class Oracle:
 
     async def score(self, states: list[str], n: int = 1, qkey: str | None = None) -> dict[str, Score]:
         """Top every state up to n samples. Duplicate states are scored once. `qkey` files the samples under
-        another key, so measurement lines stay out of the question's history."""
+        another key, so measurement lines stay out of the question's history.
+
+        A deterministic edition repeats one reading until `n` is filled. Search still asks for five
+        samples before it trusts a line; those copies are not extra API calls.
+        """
         if self.limiter.backends and all(backend.local for backend in self.limiter.backends):
             return await self._score_local(states, n, qkey)
+        from .config import DETERMINISTIC_EDITIONS, EDITION
+
+        deterministic = EDITION in DETERMINISTIC_EDITIONS
         unique = list(dict.fromkeys(states))
         keys = {s: request_hash(build_request(self.question_request, s)) for s in unique}
         tasks = []
         for state in unique:
-            need = n - len(self._cached(keys[state]))
-            tasks.extend(self._one(state, qkey) for _ in range(max(need, 0)))
+            have = len(self._cached(keys[state]))
+            if have >= n:
+                continue
+            if deterministic:
+                if have == 0:
+                    tasks.append(self._one(state, qkey))
+            else:
+                tasks.extend(self._one(state, qkey) for _ in range(n - have))
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             from .llm import key_denied
@@ -664,6 +677,11 @@ class Oracle:
             fatal = [r for r in results if isinstance(r, OracleError) and "HTTP 4" in str(r)]
             if fatal:
                 raise fatal[0]
+        if deterministic:
+            for state in unique:
+                have = len(self._cached(keys[state]))
+                if 0 < have < n:
+                    self._duplicate(keys[state], n - have)
         return {s: Score(s, list(self._cached(keys[s]))) for s in unique}
 
     async def score_one(self, state: str, n: int = 1) -> Score:

@@ -1,4 +1,4 @@
-"""Clef scores through a local Hugging Face checkpoint, with weights kept outside the repo."""
+"""Clef-flash scores through a local Hugging Face checkpoint, with weights kept outside the repo."""
 
 import asyncio
 from pathlib import Path
@@ -66,13 +66,13 @@ def test_4bit_refuses_cpu(monkeypatch):
 
 def test_local_oracle_fills_every_sample_from_one_forward(tmp_path, monkeypatch):
     monkeypatch.setattr("jevlab.oracle.ORACLE_BACKENDS", ["huggingface"])
-    monkeypatch.setattr("jevlab.config.EDITION", "clef")
+    monkeypatch.setattr("jevlab.config.EDITION", "clef-flash")
     calls = []
 
     def predict_many(states, questions):
         calls.append((list(states), questions))
         return [
-            {"model": "clef", "answers": {"q": {"type": "noul", "noul": 0.4}}, "usage": {}}
+            {"model": "clef-flash", "answers": {"q": {"type": "noul", "noul": 0.4}}, "usage": {}}
             for _ in states
         ]
 

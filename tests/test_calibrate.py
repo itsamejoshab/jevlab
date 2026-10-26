@@ -74,8 +74,11 @@ def _recording_oracle(calls: list):
     return Oracle
 
 
-def _download(monkeypatch, db, calls, edition="jev"):
+def _download(monkeypatch, db, calls, edition="jev", estimate=False):
     monkeypatch.setattr("jevlab.config.EDITION", edition)
+    if estimate:
+        # Force the stand-in calibration path even though no edition currently needs it.
+        monkeypatch.setattr("jevlab.config.ESTIMATE_EDITIONS", frozenset({edition}))
     monkeypatch.setattr("jevlab.calibrate.Oracle", _recording_oracle(calls))
     monkeypatch.setattr("jevlab.config.activate", lambda edition=None: edition)
     monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: db)
@@ -106,19 +109,19 @@ def test_download_calibrates_site_scores_once(tmp_path, monkeypatch):
     Site.kind = "noul"
     db = DB(tmp_path / "t.db")
     calls: list = []
-    _download(monkeypatch, db, calls, edition="clef")
+    _download(monkeypatch, db, calls, edition="stand-in", estimate=True)
 
     status = calibration_status()
     assert status.startswith("cal MAE")
     assert "n=1" in status
     assert json.loads(report.read_text())["pairs"] == 1
 
-    _download(monkeypatch, db, calls, edition="clef")
+    _download(monkeypatch, db, calls, edition="stand-in", estimate=True)
     assert calls.count("open") == 1
     assert json.loads(report.read_text())["pairs"] == 1
 
     Site.probability = 0.8
-    _download(monkeypatch, db, calls, edition="clef")
+    _download(monkeypatch, db, calls, edition="stand-in", estimate=True)
     assert calls.count("open") == 2
     assert calibration_status().startswith("cal MAE")
 
@@ -173,7 +176,7 @@ def test_download_without_comparable_scores_stays_uncalibrated(tmp_path, monkeyp
     Site.kind = "choice"
     db = DB(tmp_path / "t.db")
     calls: list = []
-    _download(monkeypatch, db, calls, edition="clef")
+    _download(monkeypatch, db, calls, edition="stand-in", estimate=True)
     assert calibration_status() == "uncalibrated"
     assert calls == []
     assert not report.exists()

@@ -30,8 +30,8 @@ EDITIONS = ("jev", "kev", "laya", "clef", "clef-flash", "clef-omni", "luna", "de
 # Jev moved on back-to-back reads (0.32–0.34). Kev moved on back-to-back reads (0.8966–0.898).
 # Microsoft repeated a cached value when asked immediately, then moved after a 20s gap (0.32–0.38).
 DETERMINISTIC_EDITIONS = frozenset({"laya", "clef", "clef-flash", "clef-omni", "luna", "decider"})
-# Clef's site scores with the 27B. Search scores with local clef-flash, so the oracle is an estimate.
-ESTIMATE_EDITIONS = frozenset({"clef"})
+# Editions whose local oracle is a stand-in for the site model. Empty: every edition scores with its real model.
+ESTIMATE_EDITIONS = frozenset()
 # Re-rolls to ask for on an edition whose score can move. Deterministic editions ask for none.
 NOISY_REROLLS = 5
 # Microsoft returns the previous score when the same phrase is submitted again immediately.
@@ -71,16 +71,15 @@ TYPESAFE_BASE = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1"
 # (the previous route was `perplexity/pplx-decider-v1.1-27b`). OpenRouter has no endpoints left
 # for `perplexity/pplx-decider-v1-27b`. Kev, Luna, and
 # Decider are OpenRouter /systemone models.
-# Laya, Clef, and Clef-flash are scored in-process. Laya's id is its Hugging Face repo. The Clef site asks
-# for the 27B model; local estimates use clef-flash, the smallest published checkpoint. Clef-flash on the
-# site is that same checkpoint, so it shares the local install. Clef-omni's weights are public (about 70 GB,
-# ~64 GB of GPU in bf16) and do not fit this machine, so it goes to OpenRouter. Microsoft has not published
-# weights; OpenRouter serves microsoft/microsoft-decision-1.
+# Laya and Clef-flash are scored in-process. Laya's id is its Hugging Face repo. Clef-flash on the site is
+# the 9B checkpoint, so local scoring uses that same install. Clef (27B) and Clef-omni go to OpenRouter
+# (`cloudflare/clef`, `cloudflare/clef-omni`); the site's bare ids are `clef` and `clef-omni`. Microsoft has
+# not published weights; OpenRouter serves microsoft/microsoft-decision-1.
 EDITION_MODELS = {
     "jev": "jev-latest",
     "kev": "jaredpalmer/kev-4b",
     "laya": "convaiinnovations/laya",
-    "clef": "clef-flash",
+    "clef": "cloudflare/clef",
     "clef-flash": "clef-flash",
     "clef-omni": "cloudflare/clef-omni",
     "luna": "openai/gpt-6-luna-decisions",
@@ -95,16 +94,16 @@ JEV_SOURCE_MODEL = os.environ.get("JEV_SOURCE_MODEL", "jev-latest")
 # Weights for the local Laya oracle. This stays outside the repo; `jevlab install-laya` downloads them here.
 LAYA_CACHE = Path(os.environ.get("JEV_LAYA_CACHE", Path.home() / ".cache" / "jevlab" / "huggingface")).expanduser()
 LAYA_DEVICE = os.environ.get("JEV_LAYA_DEVICE", "").strip()
-# Hugging Face repo for `jevlab install-clef`. Clef-flash is the 9B checkpoint. `Cloudflare/clef` is the 27B
-# model the site scores with.
+# Hugging Face repo for `jevlab install-clef`. Clef-flash is the 9B checkpoint used by the clef-flash edition.
+# The clef edition scores the 27B through OpenRouter (`cloudflare/clef`).
 CLEF_REPO = os.environ.get("JEV_CLEF_REPO", "Cloudflare/clef-flash")
-# Weights for the local Clef oracle. Same cache root as Laya, still outside the repo.
+# Weights for the local Clef-flash oracle. Same cache root as Laya, still outside the repo.
 CLEF_CACHE = Path(os.environ.get("JEV_CLEF_CACHE", Path.home() / ".cache" / "jevlab" / "huggingface")).expanduser()
 CLEF_DEVICE = os.environ.get("JEV_CLEF_DEVICE", "").strip()
 # auto: bf16 on a ~28GB GPU, 4-bit on a GPU with about 8GB, otherwise the checkpoint split across GPU, RAM, and disk.
 CLEF_QUANT = os.environ.get("JEV_CLEF_QUANT", "auto").strip().lower() or "auto"
-# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev, Clef-omni, Luna, Decider, and
-# Microsoft are OpenRouter only. Laya, Clef, and Clef-flash load a Hugging Face checkpoint locally
+# Where the oracle sends /systemone. Jev pools Typesafe and OpenRouter. Kev, Clef, Clef-omni, Luna, Decider, and
+# Microsoft are OpenRouter only. Laya and Clef-flash load a Hugging Face checkpoint locally
 # (`huggingface`), one forward at a time.
 # Mirror searches first score this many lines Jev already rates well (search/triage.py) before generating any.
 # Under load Jev's p99 is ~7s and p99.9 ~10s (2026-09-28), with a tail past 20s; slower calls give up and retry.
@@ -137,7 +136,7 @@ def activate(edition: str | None = None) -> str:
     SNAPSHOTS = DATA / "snapshots"
     VAULT = DATA / "vault"
     DATA.mkdir(parents=True, exist_ok=True)
-    local = EDITION in ("laya", "clef", "clef-flash")
+    local = EDITION in ("laya", "clef-flash")
     JEV_MODEL = os.environ.get("JEV_MODEL", EDITION_MODELS[EDITION])
     default_backends = "huggingface" if local else ("openrouter" if MIRROR else "typesafe,openrouter")
     ORACLE_BACKENDS = [

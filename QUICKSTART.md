@@ -128,9 +128,18 @@ uv run jevlab --edition laya vault import-jev   # copy Jev's best measured lines
 uv run jevlab --edition laya search --q is-cereal-a-soup
 ```
 
-Clef on the site is the 27B model. Local estimates use Clef-flash (`Cloudflare/clef-flash`, about 19GB), the
-smallest published checkpoint, so scoring stays fast. The classifier does not call the Cloudflare Workers AI
-API. Weights go under `~/.cache/jevlab/huggingface` (or `JEV_CLEF_CACHE`).
+Clef (27B) scores through OpenRouter as `cloudflare/clef`, same path as Kev or Clef-omni. Needs
+`OPENROUTER_API_KEY`.
+
+```bash
+uv run jevlab --edition clef snapshot
+uv run jevlab --edition clef vault import-jev
+uv run jevlab --edition clef search --q is-cereal-a-soup
+```
+
+Clef-flash stays local (`Cloudflare/clef-flash`, about 19GB) so scoring does not spend OpenRouter tokens. The
+classifier does not call the Cloudflare Workers AI API. Weights go under `~/.cache/jevlab/huggingface` (or
+`JEV_CLEF_CACHE`).
 
 ```bash
 uv sync --extra clef
@@ -139,13 +148,12 @@ uv run jevlab install-clef
 
 `JEV_CLEF_DEVICE` is `cpu`, `cuda`, or `mps`. `JEV_CLEF_QUANT=auto` loads flash in bf16 when the GPU has about
 28GB, uses 4-bit when the GPU has about 8GB (a 12GB card), and otherwise splits the weights across the GPU, RAM,
-and disk. Search does not download the weights on its own. Flash estimates will not match the site's 27B scores
-exactly.
+and disk. Search does not download the weights on its own.
 
 ```bash
-uv run jevlab --edition clef snapshot
-uv run jevlab --edition clef vault import-jev
-uv run jevlab --edition clef search --q is-cereal-a-soup
+uv run jevlab --edition clef-flash snapshot
+uv run jevlab --edition clef-flash vault import-jev
+uv run jevlab --edition clef-flash search --q is-cereal-a-soup
 ```
 
 ## 8. Tests

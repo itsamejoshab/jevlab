@@ -257,7 +257,7 @@ class Backend:
 
 
 def backend_specs() -> list[tuple[str, str, str]]:
-    """(name, base, key). ``huggingface`` is a local checkpoint (Laya or Clef) and needs no key."""
+    """(name, base, key). ``huggingface`` is a local checkpoint (Laya or Clef-flash) and needs no key."""
     known = {"typesafe": (TYPESAFE_BASE, TYPESAFE_KEY), "openrouter": (OPENROUTER_BASE, OPENROUTER_KEY)}
     specs = []
     for name in ORACLE_BACKENDS:
@@ -277,8 +277,8 @@ class BackendPool:
         if not specs:
             raise OracleError(
                 "no Jev backend key: set TYPESAFE_API_KEY and/or OPENROUTER_API_KEY in .env. "
-                "Laya, Clef, and Clef-flash score locally: `uv sync --extra laya` then `jevlab install-laya`, "
-                "or `uv sync --extra clef` then `jevlab install-clef` (Clef and Clef-flash share that download)."
+                "Laya and Clef-flash score locally: `uv sync --extra laya` then `jevlab install-laya`, "
+                "or `uv sync --extra clef` then `jevlab install-clef`. Clef (27B) uses OpenRouter."
             )
         self.backends = [Backend(name, base, key, concurrency) for name, base, key in specs]
         self.cond = asyncio.Condition()
@@ -350,7 +350,7 @@ class BackendPool:
 class Oracle:
     """Scores phrases. With `target` (a choice question's answer option) every value is P(target) instead of
     Jev's top-option probability; samples are stored the same way either way. Remote calls are pooled over
-    Typesafe and OpenRouter. Laya and Clef use a local Hugging Face checkpoint instead, one forward per phrase."""
+    Typesafe and OpenRouter. Laya and Clef-flash use a local Hugging Face checkpoint instead, one forward per phrase."""
 
     def __init__(self, db: DB, question_request: dict, concurrency: int | None = None, target: str = ""):
         if concurrency is None:
@@ -578,10 +578,10 @@ class Oracle:
         """A local checkpoint is deterministic, so one forward fills every sample a caller asked for."""
         from .config import EDITION
 
-        if EDITION in ("clef", "clef-flash"):
+        if EDITION == "clef-flash":
             from .clef_local import ClefError as LocalError, predict_many
 
-            who = "Clef-flash" if EDITION == "clef-flash" else "Clef"
+            who = "Clef-flash"
         else:
             from .laya_local import LayaError as LocalError, predict_many
 

@@ -232,6 +232,30 @@ class HomeScreen(Screen):
         self.tick()
         self.set_interval(1, self.tick)
         self.update_stats()
+        self.calibrate_if_due()
+
+    @work(thread=True, exclusive=True, group="calibrate", exit_on_error=False)
+    def calibrate_if_due(self) -> None:
+        """A saved snapshot can already hold site scores. Check the oracle without another command."""
+        from ..calibrate import ensure_calibration
+
+        def write(message: str) -> None:
+            def paint() -> None:
+                if not self.is_mounted:
+                    return
+                log = self.query_one("#home-log", SelectableRichLog)
+                log.display = True
+                log.write(f"{time.strftime('%H:%M:%S')} {message}")
+
+            try:
+                self.app.call_from_thread(paint)
+            except Exception:
+                pass
+
+        try:
+            ensure_calibration(DB(), log=write)
+        except Exception as exc:
+            write(f"calibration failed: {exc}")
 
     def tick(self) -> None:
         self.query_one("#home").border_subtitle = f" SECURE TERMINAL 7  ·  {time.strftime('%H:%M:%S')} "
@@ -282,11 +306,12 @@ class HomeScreen(Screen):
             text.append("No snapshot yet. Press Sync first.", style="bold red")
             self.query_one("#home-stats", Static).update(text)
             return
-        rows = standings(db, mode=mode.play_mode, board=mode.board)
+        loaded = vault.all_entries()
+        rows = standings(db, mode=mode.play_mode, board=mode.board, entries=loaded)
         searchable = [s for s in rows if s.searchable]
         leading = sum(1 for s in searchable if s.we_lead)
         ready = sum(1 for s in rows if s.entry_beats)
-        entries = [e for e in vault.all_entries(mode.board) if e["mode"] == mode.play_mode]
+        entries = [e for e in loaded if e["board"] == mode.board and e["mode"] == mode.play_mode]
         published = sum(1 for e in entries if e.get("status") == "published")
 
         lead_value = Text()
@@ -416,6 +441,12 @@ def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=N
                 activate(edition)
                 take_snapshot(DB(), modes=modes, log=log, section=section)
                 finished += 1
+                try:
+                    from ..calibrate import ensure_calibration
+
+                    ensure_calibration(DB(), log=log)
+                except Exception as error:
+                    log(f"  calibration failed: {error!r}")
             except Exception as error:
                 log(log_rule(f"{section} · {name} · failed"))
                 log(f"  {error!r}")
@@ -1228,9 +1259,18 @@ class PublishScreen(RunKeys, Screen):
         include_casual = self.query_one("#casual", Checkbox).value
         u = self.game_mode.unit_abbr
         cached = self._rows_long if with_long else self._rows_off
-        if cached is None:
+        need_rows = cached is None
+        need_golf = self._golf_all is None
+        need_casual = include_casual and self._casual_all is None
+        loaded = vault.all_entries() if need_rows or need_golf or need_casual else None
+        if need_rows:
             cached = standings(
-                DB(), mode=self.game_mode.play_mode, long_shots=with_long, board=self.game_mode.board, targets=True
+                DB(),
+                mode=self.game_mode.play_mode,
+                long_shots=with_long,
+                board=self.game_mode.board,
+                targets=True,
+                entries=loaded,
             )
             if with_long:
                 self._rows_long = cached
@@ -1240,15 +1280,15 @@ class PublishScreen(RunKeys, Screen):
         self.long_rows = sorted((s for s in cached if s.long_shot), key=lambda s: s.search_order) if with_long else []
         from ..crosspost import picks as golf_picks
 
-        if self._golf_all is None:
-            self._golf_all = golf_picks(DB())
+        if need_golf:
+            self._golf_all = golf_picks(DB(), entries=loaded)
         self.golf_picks = list(self._golf_all)
         self.casual_picks = []
         if include_casual:
             from ..crosspost import casual_picks
 
-            if self._casual_all is None:
-                self._casual_all = casual_picks(DB())
+            if need_casual:
+                self._casual_all = casual_picks(DB(), entries=loaded)
             self.casual_picks = list(self._casual_all)
         if not include_leading:
             self.rows = [s for s in self.rows if not s.we_lead]

@@ -54,6 +54,18 @@ def strict_pool(slugs: list[str] | None = None, entries: list[dict] | None = Non
     return {key: list(by_phrase.values()) for key, by_phrase in pool.items()}
 
 
+def _load_entries(slugs: list[str] | None, entries: list[dict] | None) -> list[dict]:
+    """Vault lines for a pick. A passed list is used as-is; a slug list reads only those folders."""
+    if entries is not None:
+        return entries
+    if slugs:
+        loaded: list[dict] = []
+        for slug in slugs:
+            loaded.extend(vault.entries_for(slug))
+        return loaded
+    return vault.all_entries()
+
+
 def _site_scores(entries: list[dict], play_mode: str) -> dict[str, dict[tuple[str, str, str], float]]:
     """Recorded site scores for one play mode, keyed by board then (slug, answer, phrase)."""
     known: dict[str, dict[tuple[str, str, str], float]] = {}
@@ -75,10 +87,13 @@ def _rows(boards: dict[tuple[str, str], list[dict]], slug: str, board: str, targ
 
 
 def picks(
-    db: DB, modes: tuple[GameMode, ...] = (GOLF_HIGHEST, GOLF_SHORTEST), slugs: list[str] | None = None
+    db: DB,
+    modes: tuple[GameMode, ...] = (GOLF_HIGHEST, GOLF_SHORTEST),
+    slugs: list[str] | None = None,
+    entries: list[dict] | None = None,
 ) -> list[Pick]:
     """Best Strict line per question (or answer) and Golf board whose lower bound beats the Golf leader."""
-    entries = vault.all_entries()
+    entries = _load_entries(slugs, entries)
     me = db.me()
     questions = db.questions()
     boards = db.boards_for(GOLF)
@@ -113,14 +128,14 @@ def picks(
     return out
 
 
-def casual_picks(db: DB, slugs: list[str] | None = None) -> list[Pick]:
+def casual_picks(db: DB, slugs: list[str] | None = None, entries: list[dict] | None = None) -> list[Pick]:
     """The Strict Highest answer, on each Casual board that answer would take.
 
     Casual ranks by words, the same way Strict Highest does. A leader already at one or two words wins a
     tie against a longer line at the same score, so a crowded board usually yields nothing. An empty board
     is a take, temporary or not. Shortest yes still requires the line to clear that question's yes line.
     """
-    entries = vault.all_entries()
+    entries = _load_entries(slugs, entries)
     me = db.me()
     questions = db.questions()
     boards = db.boards_for(CASUAL)

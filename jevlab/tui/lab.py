@@ -151,6 +151,7 @@ class LabScreen(Screen):
     BINDINGS = [
         Binding("space", "toggle_pause", "pause/resume"),
         Binding("n", "next_question", "next question"),
+        Binding("m", "nudge", "nudge"),
         Binding("p", "toggle_post", "post on/off"),
         Binding("q", "leave", "stop & back"),
     ]
@@ -222,6 +223,7 @@ class LabScreen(Screen):
         self.plan_mode = ""
         self.plan_focus: list[str] = []
         self.plan_bans: list[str] = []
+        self.plan_pins: list[str] = []
         self.plan_at = 0.0
         self.plans = 0
         self.calibration = calibration_status()
@@ -237,6 +239,7 @@ class LabScreen(Screen):
         self.dirty = True
         self.cancelled = False
         self.started_at = time.monotonic()
+        self._nudge_when_ready = False
 
     def compose(self) -> ComposeResult:
         yield EditionMark("Lab", self.game_mode.label)
@@ -296,7 +299,14 @@ class LabScreen(Screen):
             self.bests = 0
             self.last_best_calls = 0
             self.last_best_time = time.monotonic()
-            self.plan, self.plan_mode, self.plan_focus, self.plan_bans, self.plans = "", "", [], [], 0
+            self.plan, self.plan_mode, self.plan_focus, self.plan_bans, self.plan_pins, self.plans = (
+                "",
+                "",
+                [],
+                [],
+                [],
+                0,
+            )
             self.query_one("#feed", RichLog).clear()
             self.timeline.clear()
             self.timeline_dirty = True
@@ -322,7 +332,7 @@ class LabScreen(Screen):
                 item.state, item.reason = "error", str(error)
                 self.log_line(f"skip {item.slug}: {error}")
                 continue
-            self.engine = engine
+            self.adopt_engine(engine)
             self.show_yes_line()
             lead = engine.leader
             item.leader = f"{lead.probability:.2f}/{lead.units}w" if lead else "empty"
@@ -441,7 +451,7 @@ class LabScreen(Screen):
                     await asyncio.sleep(session.poll_interval())
                     continue
                 engine.leader = session.leader
-                self.engine = engine
+                self.adopt_engine(engine)
                 self.show_yes_line()
                 self.run_worker(self._run_live_engine(engine, gen), name=f"live-engine-{gen}")
                 self.gap_logged = not live_now
@@ -473,7 +483,7 @@ class LabScreen(Screen):
         self.bests = 0
         self.last_best_calls = 0
         self.last_best_time = time.monotonic()
-        self.plan, self.plan_mode, self.plan_focus, self.plan_bans, self.plans = "", "", [], [], 0
+        self.plan, self.plan_mode, self.plan_focus, self.plan_bans, self.plan_pins, self.plans = "", "", [], [], [], 0
         self.query_one("#feed", RichLog).clear()
         self.timeline.clear()
         self.timeline_dirty = True
@@ -575,7 +585,7 @@ class LabScreen(Screen):
         except BannedPhrase as error:
             self.skipped_phrases.add(phrase)
             if error.named:
-                removed = vault.drop_banned()
+                removed = vault.drop_banned(error.named)
                 self.log_line(
                     f"[live] banned {error.named!r}; removed {len(removed)} vault line(s); its words stay usable"
                 )
@@ -615,15 +625,21 @@ class LabScreen(Screen):
             self.plan_mode = d.get("mode") or ""
             self.plan_focus = list(d.get("focus") or [])
             self.plan_bans = list(d.get("ban") or [])
+            self.plan_pins = list(d.get("pin") or [])
             self.plan_at = time.monotonic()
             self.plans += 1
-            self.log_line(f"[planner] {self.plan_mode or '-'}: {self.plan}")
+            pinned = f"  pinned {', '.join(self.plan_pins)}" if self.plan_pins else ""
+            self.log_line(f"[planner] {self.plan_mode or '-'}: {self.plan}{pinned}")
         elif kind == "surrogate":
             self.surrogate = (
                 f"{d['embedder']} ρ {d['phrase_rho']:.2f} phrase / {d['word_rho']:.2f} word, {d['n']:,} lines"
             )
         elif kind == "status":
             self.status = d["status"]
+        elif kind == "nudge":
+            if not d.get("armed"):
+                self._nudge_when_ready = False
+            self._show_nudge(bool(d.get("armed")))
         elif kind == "level":
             oracle = self.engine.oracle if self.engine else None
             self.level_marks.append((oracle.calls if oracle else 0, d["level"]))
@@ -723,6 +739,8 @@ class LabScreen(Screen):
     # Rendering.
 
     def refresh_view(self) -> None:
+        armed = self._nudge_when_ready or bool(self.engine and self.engine.nudge_armed)
+        self._show_nudge(armed)
         self.render_header()
         self.render_queue()
         if self.timeline_dirty:
@@ -739,6 +757,7 @@ class LabScreen(Screen):
         self.render_insight()
 
     def render_header(self) -> None:
+        self.calibration = calibration_status()
         engine = self.engine
         header = Text()
         if engine is None:
@@ -837,6 +856,9 @@ class LabScreen(Screen):
         if self.plan_bans:
             tail.append("  banned ", style="dim")
             tail.append(", ".join(self.plan_bans), style="red")
+        if self.plan_pins:
+            tail.append("  pinned ", style="dim")
+            tail.append(", ".join(self.plan_pins), style=colour)
         space = max(room - len(line) - len(tail), 20)
         directive = self.plan if len(self.plan) <= space else self.plan[: space - 1].rstrip() + "…"
         line.append(directive, style=f"italic {colour}")
@@ -861,13 +883,14 @@ class LabScreen(Screen):
         ]
         if self.live_play and self.live_session and not self.live_session.post_enabled:
             inside.append("POST OFF")
-        if netlog.counts:
-            worst = [
-                f"{svc} {status.replace('HTTP ', '')}x{n} {where.split('.')[0]}"
-                for (svc, where, status), n in netlog.counts.most_common(2)
-            ]
-            conc = f" conc {int(oracle.limiter.limit)}" if oracle else ""
-            inside.append("NET ERR " + ", ".join(worst) + conc)
+        concurrency = None
+        if oracle:
+            concurrency = (
+                int(oracle.limiter.limit),
+                sum(b.limiter.maximum for b in oracle.limiter.backends),
+            )
+        if line := netlog.live_line(concurrency):
+            inside.append(line)
         if engine.win_extra:
             inside.insert(
                 4,
@@ -1124,6 +1147,26 @@ class LabScreen(Screen):
         else:
             self.engine.resume()
             self.log_line("resumed")
+
+    def adopt_engine(self, engine: Engine) -> None:
+        self.engine = engine
+        if self._nudge_when_ready:
+            engine.request_nudge()
+            self._nudge_when_ready = False
+        self._show_nudge(engine.nudge_armed)
+
+    def _show_nudge(self, on: bool) -> None:
+        if not self.is_mounted:
+            return
+        self.query_one(EditionMark).set_nudge(on)
+
+    def action_nudge(self) -> None:
+        if self.engine is None:
+            self._nudge_when_ready = True
+        else:
+            self.engine.request_nudge()
+        self._show_nudge(True)
+        self.log_line("[nudge] armed; it runs at the next break")
 
     def action_next_question(self) -> None:
         if self.engine and self.engine.status != "stopped":

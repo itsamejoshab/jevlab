@@ -258,6 +258,9 @@ def test_an_estimate_that_no_longer_beats_the_live_leader_is_deleted(tmp_path, m
     assert phrases == {OTHER}
     assert any("dropped the jev estimate" in line for line in notes)
     assert order == []
+    stored = db.board(slug, GOLF, HIGH_SCORES)
+    assert stored and stored[0]["userId"] == "them"
+    assert stored[0]["probability"] == 0.99
 
 
 def test_a_dry_run_keeps_an_estimate_that_would_lose(tmp_path, monkeypatch):
@@ -279,6 +282,7 @@ def test_a_dry_run_keeps_an_estimate_that_would_lose(tmp_path, monkeypatch):
     assert result.startswith("failed:")
     assert saved["phrase"] == PHRASE
     assert saved["estimated_from"] == "jev"
+    assert db.board(slug, GOLF, HIGH_SCORES) == []
 
 
 def test_a_winning_estimate_is_kept_as_this_editions_score(tmp_path, monkeypatch):
@@ -298,3 +302,82 @@ def test_a_winning_estimate_is_kept_as_this_editions_score(tmp_path, monkeypatch
     assert saved["server_p"] == 0.99
     assert "estimated_from" not in saved
     assert not any("dropped the jev estimate" in line for line in notes)
+
+
+class _Ahead(_Site):
+    def leaderboards(self, revision_id: str, mode: str) -> dict:
+        return {
+            "leaderboards": {
+                HIGH_SCORES: [{"userId": "them", "probability": 0.99, "wordCount": 4, "name": "them"}]
+            }
+        }
+
+
+def test_a_measured_line_that_no_longer_beats_leaves_the_publish_list(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    slug = "hinge"
+    _question(db, slug)
+    entry = _save(slug, PHRASE, 0.90) | {"slug": slug, "mode": GOLF, "board": HIGH_SCORES}
+    _save(slug, OTHER, 0.85)
+    order: list[str] = []
+
+    result, _notes = _publish(db, _Ahead(0.20, order), entry, _live(slug), order, 0.10)
+
+    row = next(item for item in standings(db, GOLF) if item.slug == slug)
+    assert result.startswith("failed:")
+    assert "no longer beats" in result
+    assert order == []
+    assert row.entry_beats is False
+
+
+def test_a_short_saves_the_live_leader_so_the_next_line_leaves_too(tmp_path, monkeypatch):
+    """The posted line's estimate cleared the live leader. The site score did not, and neither does the next vault line."""
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    slug = "hinge"
+    _question(db, slug)
+    entry = _save(slug, PHRASE, 0.90) | {"slug": slug, "mode": GOLF, "board": HIGH_SCORES}
+    _save(slug, OTHER, 0.60)
+    order: list[str] = []
+    monkeypatch.setattr("jevlab.publish.oracle_check", _oracle(order, 0.55))
+
+    class _Live(_Site):
+        def leaderboards(self, revision_id: str, mode: str) -> dict:
+            return {
+                "leaderboards": {
+                    HIGH_SCORES: [{"userId": "them", "probability": 0.70, "wordCount": 10, "name": "them"}]
+                }
+            }
+
+    result, _notes = _publish(db, _Live(0.55, order), entry, _live(slug), order, 0.10)
+
+    row = next(item for item in standings(db, GOLF) if item.slug == slug)
+    assert result.startswith("short")
+    assert row.entry_beats is False
+
+
+def test_a_recorded_site_score_that_still_beats_is_posted(tmp_path, monkeypatch):
+    """A later cross-post can lower the vault estimate and leave the site score. That score is what the list shows."""
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    slug = "hinge"
+    _question(db, slug)
+    _save(slug, PHRASE, 0.90)
+    vault.apply_site_score(slug, GOLF, PHRASE, 0.90, "failed", HIGH_SCORES, detail="earlier")
+    entry = _save(slug, PHRASE, 0.40) | {"slug": slug, "mode": GOLF, "board": HIGH_SCORES}
+    order: list[str] = []
+    monkeypatch.setattr("jevlab.publish.oracle_check", _oracle(order, 0.10))
+
+    class _Mid(_Site):
+        def leaderboards(self, revision_id: str, mode: str) -> dict:
+            return {
+                "leaderboards": {
+                    HIGH_SCORES: [{"userId": "them", "probability": 0.60, "wordCount": 10, "name": "them"}]
+                }
+            }
+
+    result, _notes = _publish(db, _Mid(0.95, order), entry, _live(slug), order, 0.10)
+
+    assert result.startswith("won")
+    assert order[0] == "post"

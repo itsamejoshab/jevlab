@@ -135,11 +135,11 @@ def test_clef_edition_defaults(tmp_path):
         "                           TRIAGE_K)\n"
         "assert EDITION == 'clef' and MIRROR\n"
         "assert DATA.name == 'clef'\n"
-        "assert JEV_MODEL == 'clef-flash'\n"
+        "assert JEV_MODEL == 'cloudflare/clef'\n"
         "assert CLEF_REPO == 'Cloudflare/clef-flash'\n"
         "assert CLEF_QUANT == 'auto'\n"
-        "assert ORACLE_BACKENDS == ['huggingface']\n"
-        "assert ORACLE_CONCURRENCY == 1 and ORACLE_MAX_CONCURRENCY == 1\n"
+        "assert ORACLE_BACKENDS == ['openrouter']\n"
+        "assert ORACLE_CONCURRENCY == 4 and ORACLE_MAX_CONCURRENCY == 8\n"
         "assert CLEF_CACHE == Path.home() / '.cache' / 'jevlab' / 'huggingface'\n"
         "assert ROOT not in CLEF_CACHE.parents\n"
         "assert TRIAGE_K == 40\n"
@@ -192,7 +192,7 @@ def test_decider_edition_defaults(tmp_path):
         "                           ORACLE_CONCURRENCY, ORACLE_MAX_CONCURRENCY, ORACLE_TIMEOUT, TRIAGE_K)\n"
         "assert EDITION == 'decider' and MIRROR\n"
         "assert DATA.name == 'decider'\n"
-        "assert JEV_MODEL == 'perplexity/pplx-decider-v1.1-27b'\n"
+        "assert JEV_MODEL == 'perplexity/pplx-decider-v1.2'\n"
         "assert ORACLE_BACKENDS == ['openrouter']\n"
         "assert ORACLE_CONCURRENCY == 4 and ORACLE_MAX_CONCURRENCY == 8\n"
         "assert ORACLE_TIMEOUT == 60\n"
@@ -219,6 +219,10 @@ def test_new_editions_pick_local_flash_and_openrouter_for_the_rest(tmp_path, mon
         monkeypatch.delenv(key, raising=False)
     config.JEV_DATA = tmp_path
     try:
+        config.activate("clef")
+        assert config.JEV_MODEL == "cloudflare/clef"
+        assert config.ORACLE_BACKENDS == ["openrouter"]
+        assert config.DB_PATH == tmp_path / "clef" / "jev.db"
         config.activate("clef-flash")
         assert config.JEV_MODEL == "clef-flash"
         assert config.ORACLE_BACKENDS == ["huggingface"]

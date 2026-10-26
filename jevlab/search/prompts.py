@@ -639,7 +639,8 @@ def plan_user(ctx, stats: dict) -> str:
     tactics = ", ".join(ARCHETYPE_GUIDE)
     lines.append(
         f"\nDecide: which tactics to push ({tactics}), words to ban (they keep "
-        "hurting) or pin (they carry the score), whether to explore, exploit (local edits and genetic), or "
+        "hurting) or pin (at most 3 words already in the best lines that the score collapses without; "
+        "every later phrase must contain them), whether to explore, exploit (local edits and genetic), or "
         f"compress (cut words while {keep}), and a one-sentence directive for the writers. "
         'Return JSON: {"directive": "...", "focus": ["scene"], "mode": "explore|exploit|compress", '
         '"ban": [], "pin": [], "seed_phrases": ["up to 5 new phrases you think could win"]}'

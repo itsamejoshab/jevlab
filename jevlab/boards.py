@@ -141,14 +141,24 @@ def long_shot(
 
 
 def standings(
-    db: DB, mode: str = STRICT, long_shots: bool = False, board: str = HIGH_SCORES, targets: bool = False
+    db: DB,
+    mode: str = STRICT,
+    long_shots: bool = False,
+    board: str = HIGH_SCORES,
+    targets: bool = False,
+    entries: list[dict] | None = None,
 ) -> list[Standing]:
-    """One row per question; with `targets`, also one row per answer of each searchable choice question."""
+    """One row per question; with `targets`, also one row per answer of each searchable choice question.
+
+    `entries`, when given, is filtered here to `board` and `mode` (it may list every board and mode).
+    When omitted, that board is read from the vault.
+    """
     me = db.me()
-    entries: dict[tuple[str, str], list[dict]] = {}
+    pooled: dict[tuple[str, str], list[dict]] = {}
     spent: dict[str, set[str]] = {}
-    for entry in vault.all_entries(board):
-        if entry["mode"] != mode:
+    source = vault.all_entries(board) if entries is None else entries
+    for entry in source:
+        if (entry.get("board") or HIGH_SCORES) != board or entry["mode"] != mode:
             continue
         key = (entry["slug"], entry.get("target") or "")
         if (
@@ -156,7 +166,7 @@ def standings(
             and not has_rejected_word(entry["phrase"])
             and not phrase_banned(entry["phrase"])
         ):
-            entries.setdefault(key, []).append(entry)
+            pooled.setdefault(key, []).append(entry)
         if entry.get("status") in ("published", "failed", "rejected", "dropped"):
             spent.setdefault(entry["slug"], set()).add(entry["phrase"])
     memories = by_slug(db, board) if mode == STRICT else {}
@@ -179,7 +189,7 @@ def standings(
                     db,
                     row,
                     rows,
-                    entries.get((row["slug"], target), []),
+                    pooled.get((row["slug"], target), []),
                     spent,
                     memory,
                     me,

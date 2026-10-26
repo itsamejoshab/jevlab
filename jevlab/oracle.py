@@ -257,7 +257,7 @@ class Backend:
 
 
 def backend_specs() -> list[tuple[str, str, str]]:
-    """(name, base, key). ``huggingface`` is a local checkpoint (Laya or Clef) and needs no key."""
+    """(name, base, key). ``huggingface`` is a local checkpoint (Laya or Clef-flash) and needs no key."""
     known = {"typesafe": (TYPESAFE_BASE, TYPESAFE_KEY), "openrouter": (OPENROUTER_BASE, OPENROUTER_KEY)}
     specs = []
     for name in ORACLE_BACKENDS:
@@ -277,8 +277,8 @@ class BackendPool:
         if not specs:
             raise OracleError(
                 "no Jev backend key: set TYPESAFE_API_KEY and/or OPENROUTER_API_KEY in .env. "
-                "Laya, Clef, and Clef-flash score locally: `uv sync --extra laya` then `jevlab install-laya`, "
-                "or `uv sync --extra clef` then `jevlab install-clef` (Clef and Clef-flash share that download)."
+                "Laya and Clef-flash score locally: `uv sync --extra laya` then `jevlab install-laya`, "
+                "or `uv sync --extra clef` then `jevlab install-clef`. Clef (27B) uses OpenRouter."
             )
         self.backends = [Backend(name, base, key, concurrency) for name, base, key in specs]
         self.cond = asyncio.Condition()
@@ -350,7 +350,7 @@ class BackendPool:
 class Oracle:
     """Scores phrases. With `target` (a choice question's answer option) every value is P(target) instead of
     Jev's top-option probability; samples are stored the same way either way. Remote calls are pooled over
-    Typesafe and OpenRouter. Laya and Clef use a local Hugging Face checkpoint instead, one forward per phrase."""
+    Typesafe and OpenRouter. Laya and Clef-flash use a local Hugging Face checkpoint instead, one forward per phrase."""
 
     def __init__(self, db: DB, question_request: dict, concurrency: int | None = None, target: str = ""):
         if concurrency is None:
@@ -578,10 +578,10 @@ class Oracle:
         """A local checkpoint is deterministic, so one forward fills every sample a caller asked for."""
         from .config import EDITION
 
-        if EDITION in ("clef", "clef-flash"):
+        if EDITION == "clef-flash":
             from .clef_local import ClefError as LocalError, predict_many
 
-            who = "Clef-flash" if EDITION == "clef-flash" else "Clef"
+            who = "Clef-flash"
         else:
             from .laya_local import LayaError as LocalError, predict_many
 
@@ -627,7 +627,7 @@ class Oracle:
         return {state: Score(state, list(self._cached(keys[state]))) for state in unique}
 
     def _duplicate(self, key: str, copies: int) -> None:
-        """Repeat a stored local reading so a later run sees the same sample count, without another forward."""
+        """Repeat a stored reading so a later run sees the same sample count, without another forward or API call."""
         row = self.db.one(
             "SELECT model, state, noul, answer, latency_ms, qkey FROM oracle_samples "
             "WHERE request_hash = ? ORDER BY rowid DESC LIMIT 1",
@@ -645,15 +645,28 @@ class Oracle:
 
     async def score(self, states: list[str], n: int = 1, qkey: str | None = None) -> dict[str, Score]:
         """Top every state up to n samples. Duplicate states are scored once. `qkey` files the samples under
-        another key, so measurement lines stay out of the question's history."""
+        another key, so measurement lines stay out of the question's history.
+
+        A deterministic edition repeats one reading until `n` is filled. Search still asks for five
+        samples before it trusts a line; those copies are not extra API calls.
+        """
         if self.limiter.backends and all(backend.local for backend in self.limiter.backends):
             return await self._score_local(states, n, qkey)
+        from .config import DETERMINISTIC_EDITIONS, EDITION
+
+        deterministic = EDITION in DETERMINISTIC_EDITIONS
         unique = list(dict.fromkeys(states))
         keys = {s: request_hash(build_request(self.question_request, s)) for s in unique}
         tasks = []
         for state in unique:
-            need = n - len(self._cached(keys[state]))
-            tasks.extend(self._one(state, qkey) for _ in range(max(need, 0)))
+            have = len(self._cached(keys[state]))
+            if have >= n:
+                continue
+            if deterministic:
+                if have == 0:
+                    tasks.append(self._one(state, qkey))
+            else:
+                tasks.extend(self._one(state, qkey) for _ in range(n - have))
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             from .llm import key_denied
@@ -664,6 +677,11 @@ class Oracle:
             fatal = [r for r in results if isinstance(r, OracleError) and "HTTP 4" in str(r)]
             if fatal:
                 raise fatal[0]
+        if deterministic:
+            for state in unique:
+                have = len(self._cached(keys[state]))
+                if 0 < have < n:
+                    self._duplicate(keys[state], n - have)
         return {s: Score(s, list(self._cached(keys[s]))) for s in unique}
 
     async def score_one(self, state: str, n: int = 1) -> Score:

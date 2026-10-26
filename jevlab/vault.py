@@ -194,6 +194,20 @@ def set_status(
     return None
 
 
+def _tag_file(path: Path, mode: str, file_board: str) -> list[dict]:
+    data = json.loads(path.read_text())
+    return [
+        entry
+        | {
+            "slug": data["slug"],
+            "mode": data.get("mode") or mode,
+            "board": file_board,
+            "target": data.get("target") or "",
+        }
+        for entry in data["entries"]
+    ]
+
+
 def all_entries(board: str | None = None, root: Path | None = None) -> list[dict]:
     """Every entry, tagged with slug, mode, and board; only one board's when `board` is given.
     `root` reads another edition's vault (config.JEV_VAULT from a mirror edition)."""
@@ -205,17 +219,25 @@ def all_entries(board: str | None = None, root: Path | None = None) -> list[dict
         mode, file_board = _split(path)
         if file_board not in BOARDS or (board is not None and file_board != board):
             continue
-        data = json.loads(path.read_text())
-        for entry in data["entries"]:
-            out.append(
-                entry
-                | {
-                    "slug": data["slug"],
-                    "mode": data.get("mode") or mode,
-                    "board": file_board,
-                    "target": data.get("target") or "",
-                }
-            )
+        out.extend(_tag_file(path, mode, file_board))
+    return out
+
+
+def entries_for(slug: str, root: Path | None = None) -> list[dict]:
+    """Entries in one question's folder, tagged like all_entries.
+
+    `root` defaults to this edition's vault so a caller can pass config.JEV_VAULT. A missing or empty
+    folder is []. Non-board files are skipped the same way all_entries skips them.
+    """
+    folder = (root or VAULT) / slug
+    if not folder.is_dir():
+        return []
+    out = []
+    for path in sorted(folder.glob("*.json")):
+        mode, file_board = _split(path)
+        if file_board not in BOARDS:
+            continue
+        out.extend(_tag_file(path, mode, file_board))
     return out
 
 
@@ -305,11 +327,12 @@ def drop_phrases(slug: str, phrases: set[str]) -> list[dict]:
     return removed
 
 
-def drop_banned() -> list[dict]:
+def drop_banned(span: str = "") -> list[dict]:
     """Remove every entry whose phrase contains a span the server has named.
 
     One banned span can sit inside lines on other questions, modes, and boards. Those lines keep a
     high score, so the next search or queue picks them again. Returns the removed entries.
+    `span` checks only the phrase just banned. The full list is for a sweep that is not tied to one new ban.
     """
     from .rules.banned import hit
 
@@ -327,7 +350,7 @@ def drop_banned() -> list[dict]:
         kept = []
         changed = False
         for entry in data.get("entries") or []:
-            if hit(entry.get("phrase") or ""):
+            if hit(entry.get("phrase") or "", span):
                 removed.append(
                     entry
                     | {

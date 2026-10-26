@@ -61,11 +61,12 @@ options:
 
 ### `jevlab install-clef`
 
-Downloads `Cloudflare/clef-flash` (9B) into `~/.cache/jevlab/huggingface` (override with `JEV_CLEF_CACHE`). Needs
-`uv sync --extra clef` first. The download stays outside the git repo. Search does not fetch weights on its own,
-and scoring does not call the Cloudflare Workers AI API. The site itself scores with the 27B model; local
-estimates use flash. `JEV_CLEF_QUANT=auto` uses bf16 on a GPU with about 28GB, 4-bit on a GPU with about 8GB,
-and otherwise splits the weights across GPU, RAM, and disk.
+Downloads `Cloudflare/clef-flash` (9B) into `~/.cache/jevlab/huggingface` (override with `JEV_CLEF_CACHE`) for
+the clef-flash edition. Needs `uv sync --extra clef` first. The download stays outside the git repo. Search does
+not fetch weights on its own, and scoring does not call the Cloudflare Workers AI API. The clef edition scores
+the 27B model through OpenRouter (`cloudflare/clef`) and does not need this download. `JEV_CLEF_QUANT=auto`
+uses bf16 on a GPU with about 28GB, 4-bit on a GPU with about 8GB, and otherwise splits the weights across GPU,
+RAM, and disk.
 
 ```text
 usage: jevlab install-clef [-h]

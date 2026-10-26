@@ -4,6 +4,7 @@ from jevlab.live import (
     LiveSession,
     best_saved,
     carried_question,
+    saved_line,
     chain_token,
     live_question,
     post_phrase,
@@ -12,7 +13,7 @@ from jevlab.live import (
     sentence_words,
 )
 from jevlab.objective import Leader
-from jevlab.modes import from_name
+from jevlab.modes import STRICT, from_name
 from jevlab.oracle import Score
 from jevlab.search.engine import Engine
 
@@ -506,3 +507,86 @@ def test_sentence_round_submits_the_phrase_in_one_turn():
     longer = Client()
     post_phrase(longer, question, session.play_mode, long, lambda _message: None)
     assert [op["text"] for op in longer.ops] == [" ".join(f"w{i}" for i in range(SENTENCE_WORDS))]
+
+
+def test_saved_line_reads_that_questions_strict_lines(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    vault.save(
+        "asked",
+        STRICT,
+        "quiet river",
+        p_mean=0.80,
+        p_lcb=0.80,
+        spread=0.01,
+        n=4,
+        units=2,
+        leader=None,
+        beats=True,
+        title="Asked",
+    )
+    vault.save(
+        "asked",
+        STRICT,
+        "gone phrase",
+        p_mean=0.99,
+        p_lcb=0.99,
+        spread=0.01,
+        n=4,
+        units=2,
+        leader=None,
+        beats=True,
+        title="Asked",
+    )
+    vault.set_status("asked", STRICT, "gone phrase", "rejected")
+    vault.save(
+        "other",
+        STRICT,
+        "loud storm",
+        p_mean=0.99,
+        p_lcb=0.99,
+        spread=0.01,
+        n=4,
+        units=2,
+        leader=None,
+        beats=True,
+        title="Other",
+    )
+
+    vault.save(
+        "round-avocados",
+        STRICT,
+        "pitch black volcanic sky",
+        p_mean=0.99,
+        p_lcb=0.99,
+        spread=0.01,
+        n=4,
+        units=4,
+        leader=None,
+        beats=True,
+        title="Is it stealing to ring up avocados as bananas?",
+    )
+    reads = {"n": 0}
+    original = vault.all_entries
+
+    def counting(*args, **kwargs):
+        reads["n"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(vault, "all_entries", counting)
+
+    saved = saved_line({"slug": "asked", "title": "Asked"})
+
+    assert saved["phrase"] == "quiet river"
+    assert saved["p"] == 0.80
+    assert reads["n"] == 0
+    recycled = saved_line(
+        {
+            "slug": "round-brand-new",
+            "title": "Is it stealing to ring up avocados as bananas?",
+        }
+    )
+    assert recycled["phrase"] == "pitch black volcanic sky"
+    assert recycled["p"] == 0.99
+    assert reads["n"] == 1
+    assert saved_line({"slug": "missing", "title": "Nope"}) is None
+    assert reads["n"] == 2

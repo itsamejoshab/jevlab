@@ -13,7 +13,7 @@ rest are tools the search uses to find phrases that score well on it.
 
 | Role | Variable | Default | What it does |
 | --- | --- | --- | --- |
-| Oracle | `JEV_MODEL` | `jev-latest` (Kev: `jaredpalmer/kev-4b`, Luna: `openai/gpt-6-luna-decisions`, Decider: `perplexity/pplx-decider-v1.1-27b`, Laya: `convaiinnovations/laya`, Clef: `clef-flash`) | The classifier the game scores with. Every candidate phrase is scored here. |
+| Oracle | `JEV_MODEL` | `jev-latest` (Kev: `jaredpalmer/kev-4b`, Luna: `openai/gpt-6-luna-decisions`, Decider: `perplexity/pplx-decider-v1.2`, Laya: `convaiinnovations/laya`, Clef: `cloudflare/clef`, Clef-flash: `clef-flash`) | The classifier the game scores with. Every candidate phrase is scored here. |
 | Generators | `JEV_GEN_MODELS` | tiered table in `config.py` | Write candidate phrases. Each tier is one bandit arm. |
 | Rewrite model | `JEV_GEN_MODEL` | first table entry | Single-model jobs: rewrites and synonyms. |
 | Beam model | `JEV_GEN_MODEL_ALT` | `deepseek/deepseek-v4-flash` | High-volume next-word proposals. Should be fast and cheap. |
@@ -31,19 +31,19 @@ The oracle sends the site's own request body (each question's `jevRequest`, with
 - `typesafe` uses `TYPESAFE_API_KEY` (Typesafe serves the same Jev model).
 
 `huggingface` is a local checkpoint. It needs no API key. Laya installs with `uv sync --extra laya` and
-`jevlab install-laya`. Clef installs with `uv sync --extra clef` and `jevlab install-clef` (see
+`jevlab install-laya`. Clef-flash installs with `uv sync --extra clef` and `jevlab install-clef` (see
 [QUICKSTART.md](../QUICKSTART.md)). Weights go to `JEV_LAYA_CACHE` or `JEV_CLEF_CACHE` (both default to
 `~/.cache/jevlab/huggingface`), outside the repo. `JEV_LAYA_DEVICE` and `JEV_CLEF_DEVICE` are `cpu`, `cuda`, or
-`mps`. The site scores Clef with the 27B model. Local estimates use Clef-flash (`Cloudflare/clef-flash`, 9B),
-the smallest published checkpoint. `JEV_CLEF_QUANT=auto` keeps it in bf16 on a GPU with about 28GB, uses 4-bit
-on a GPU with about 8GB, and otherwise splits the weights across GPU, RAM, and disk. `none` forces the whole
-checkpoint onto one device. Clef does not call the Cloudflare Workers AI API.
+`mps`. The clef edition scores the 27B model through OpenRouter (`cloudflare/clef`). The clef-flash edition
+scores locally with `Cloudflare/clef-flash` (9B). `JEV_CLEF_QUANT=auto` keeps flash in bf16 on a GPU with about
+28GB, uses 4-bit on a GPU with about 8GB, and otherwise splits the weights across GPU, RAM, and disk. `none`
+forces the whole checkpoint onto one device. Local scoring does not call the Cloudflare Workers AI API.
 
-`JEV_ORACLE_BACKENDS` chooses which to use (default `typesafe,openrouter` on Jev, `openrouter` on Kev, Luna,
-and Decider, `huggingface` on Laya and Clef). Remote backends without a key are skipped, so OpenRouter alone is enough for Jev
-and Kev. Calls go to the healthy backend with the most free slots, and a backend that fails three times in a row
-rests for a while. Laya and Clef score one phrase at a time in-process; a missing checkpoint fails with the
-install command rather than downloading during a search.
+`JEV_ORACLE_BACKENDS` chooses which to use (default `typesafe,openrouter` on Jev, `openrouter` on Kev, Clef,
+Luna, Decider, Clef-omni, and Microsoft, `huggingface` on Laya and Clef-flash). Remote backends without a key
+are skipped, so OpenRouter alone is enough for Jev and Kev. Calls go to the healthy backend with the most free
+slots, and a backend that fails three times in a row rests for a while. Laya and Clef-flash score one phrase at
+a time in-process; a missing checkpoint fails with the install command rather than downloading during a search.
 
 `JEV_ORACLE_CONCURRENCY` is the starting number of parallel calls, and AIMD adjusts it up to
 `JEV_ORACLE_MAX_CONCURRENCY`. Lower both if you hit rate limits.
@@ -107,18 +107,19 @@ For a cheap first run, use `--budget 2000`, or `--no-llm` for a purely mechanica
 
 ## Editions: Jev, Kev, Luna, Decider, Laya, and Clef
 
-`JEV_EDITION=kev`, `luna`, `decider`, `laya`, or `clef` (or `--edition`) switches to a mirror game. Kev, Luna, and
-Decider keep the remote oracle on OpenRouter and lower concurrency. Laya and Clef score with a local Hugging Face model.
+`JEV_EDITION=kev`, `luna`, `decider`, `laya`, `clef`, or `clef-flash` (or `--edition`) switches to a mirror game.
+Kev, Clef, Luna, and Decider keep the remote oracle on OpenRouter and lower concurrency. Laya and Clef-flash
+score with a local Hugging Face model.
 
-| Setting | Jev | Kev | Luna | Decider | Laya | Clef |
-| --- | --- | --- | --- | --- | --- | --- |
-| Data directory | `jevlab/data/` | `jevlab/data/kev/` | `jevlab/data/luna/` | `jevlab/data/decider/` | `jevlab/data/laya/` | `jevlab/data/clef/` |
-| `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `openai/gpt-6-luna-decisions` | `perplexity/pplx-decider-v1.1-27b` | `convaiinnovations/laya` | `clef-flash` |
-| `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `openrouter` | `openrouter` | `huggingface` | `huggingface` |
-| `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 4 / 8 | 4 / 8 | 1 / 1 | 1 / 1 |
-| `JEV_ORACLE_TIMEOUT` | 20 s | 60 s | 60 s | 60 s | unused (local) | unused (local) |
-| `JEV_TRIAGE_K` | 0 | 40 | 40 | 40 | 40 | 40 |
-| Weights | — | — | — | — | `~/.cache/jevlab/huggingface` | `~/.cache/jevlab/huggingface` |
+| Setting | Jev | Kev | Luna | Decider | Laya | Clef | Clef-flash |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Data directory | `jevlab/data/` | `jevlab/data/kev/` | `jevlab/data/luna/` | `jevlab/data/decider/` | `jevlab/data/laya/` | `jevlab/data/clef/` | `jevlab/data/clef-flash/` |
+| `JEV_MODEL` | `jev-latest` | `jaredpalmer/kev-4b` | `openai/gpt-6-luna-decisions` | `perplexity/pplx-decider-v1.2` | `convaiinnovations/laya` | `cloudflare/clef` | `clef-flash` |
+| `JEV_ORACLE_BACKENDS` | `typesafe,openrouter` | `openrouter` | `openrouter` | `openrouter` | `huggingface` | `openrouter` | `huggingface` |
+| `JEV_ORACLE_CONCURRENCY` / max | 24 / 48 | 4 / 8 | 4 / 8 | 4 / 8 | 1 / 1 | 4 / 8 | 1 / 1 |
+| `JEV_ORACLE_TIMEOUT` | 20 s | 60 s | 60 s | 60 s | unused (local) | 60 s | unused (local) |
+| `JEV_TRIAGE_K` | 0 | 40 | 40 | 40 | 40 | 40 | 40 |
+| Weights | — | — | — | — | `~/.cache/jevlab/huggingface` | — | `~/.cache/jevlab/huggingface` |
 
 A mirror reads Jev's database and vault read-only (`JEV_SOURCE_MODEL` names the model Jev's samples were recorded
 under), so it can start from lines that already work on Jev. `jevlab --edition clef vault import-jev` copies the

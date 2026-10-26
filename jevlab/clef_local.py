@@ -1,12 +1,12 @@
-"""Local Clef oracle: the Hugging Face checkpoint, scored in-process.
+"""Local Clef-flash oracle: the Hugging Face checkpoint, scored in-process.
 
 The weights live in the Hugging Face cache under ``JEV_CLEF_CACHE`` (default
 ``~/.cache/jevlab/huggingface``), which is outside the git repo. ``jevlab install-clef``
 downloads them. Search loads that cache and does not fetch on a miss.
 
-The site scores with the 27B model. Local estimates use Clef-flash (``Cloudflare/clef-flash``, 9B),
-the smallest published checkpoint, and do not call the Cloudflare Workers AI API. ``auto`` loads
-that checkpoint in 4-bit on a GPU that can hold it.
+The clef-flash edition scores with this 9B checkpoint (``Cloudflare/clef-flash``) and does not call
+the Cloudflare Workers AI API. The clef edition (27B) goes through OpenRouter instead. ``auto`` loads
+this checkpoint in 4-bit on a GPU that can hold it.
 """
 
 from __future__ import annotations

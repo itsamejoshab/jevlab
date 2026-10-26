@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="870" height="806" viewBox="0 0 870 806">
+<rect width="870" height="806" fill="#ffffff"/>
+<text x="36" y="40" font-family="Georgia, 'Iowan Old Style', 'Times New Roman', serif" font-size="22" fill="#1a1a1a">Laya’s phrases stay on Laya</text>
+<text x="36" y="68" font-family="sans-serif" font-size="14" fill="#444444">Each square is the share of questions where that phrase changed the answer.</text>
+<text x="36" y="88" font-family="sans-serif" font-size="14" fill="#444444">Columns are whose phrase. Rows are who it was tried on. Darker means it changed more often.</text>
+<text x="454.0" y="132" font-family="sans-serif" font-size="12" fill="#666666" text-anchor="middle">Phrase that won on</text>
+<text transform="translate(28,462.0) rotate(-90)" font-family="sans-serif" font-size="12" fill="#666666" text-anchor="middle">Tried on</text>
+<rect x="334" y="160" width="88" height="580" rx="8" fill="#f4f7fb" stroke="#1e3a5f" stroke-width="1.5"/>
+<text transform="translate(226.0,186) rotate(-50)" font-family="sans-serif" font-size="13" font-weight="500" fill="#1a1a1a" text-anchor="start">Jev</text>
+<text transform="translate(302.0,186) rotate(-50)" font-family="sans-serif" font-size="13" font-weight="500" fill="#1a1a1a" text-anchor="start">Kev</text>
+<text transform="translate(378.0,186) rotate(-50)" font-family="sans-serif" font-size="13" font-weight="700" fill="#1e3a5f" text-anchor="start">Laya</text>
+<text transform="translate(454.0,186) rotate(-50)" font-family="sans-serif" font-size="13" font-weight="500" fill="#1a1a1a" text-anchor="start">Clef</text>
+<text transform="translate(530.0,186) rotate(-50)" font-family="sans-serif" font-size="13" font-weight="500" fill="#1a1a1a" text-anchor="start">Clef-flash</text>
+<text transform="translate(606.0,186) rotate(-50)" font-family="sans-serif" font-size="13" font-weight="500" fill="#1a1a1a" text-anchor="start">Clef-omni</text>
+<text transform="translate(682.0,186) rotate(-50)" font-family="sans-serif" font-size="13" font-weight="500" fill="#1a1a1a" text-anchor="start">Microsoft</text>
+<text x="172" y="239.0" font-family="sans-serif" font-size="14" font-weight="500" fill="#1a1a1a" text-anchor="end">Jev</text>
+<rect x="192" y="200" width="68" height="68" rx="4" fill="#f3f1ec" stroke="#d9d3c7" stroke-width="1"/>
+<text x="226.0" y="239.0" font-family="sans-serif" font-size="13" fill="#8a8175" text-anchor="middle">own</text>
+<rect x="268" y="200" width="68" height="68" rx="4" fill="#bd5749"/>
+<text x="302.0" y="239.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">69</text>
+<rect x="344" y="200" width="68" height="68" rx="4" fill="#f5dfd6"/>
+<text x="378.0" y="239.0" font-family="sans-serif" font-size="15" fill="#1a1a1a" text-anchor="middle">11</text>
+<rect x="420" y="200" width="68" height="68" rx="4" fill="#e47f5c"/>
+<text x="454.0" y="239.0" font-family="sans-serif" font-size="15" fill="#1a1a1a" text-anchor="middle">54</text>
+<rect x="496" y="200" width="68" height="68" rx="4" fill="#cf6952"/>
+<text x="530.0" y="239.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">62</text>
+<rect x="572" y="200" width="68" height="68" rx="4" fill="#ca6550"/>
+<text x="606.0" y="239.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">64</text>
+<rect x="648" y="200" width="68" height="68" rx="4" fill="#d56f55"/>
+<text x="682.0" y="239.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">60</text>
+<text x="172" y="315.0" font-family="sans-serif" font-size="14" font-weight="500" fill="#1a1a1a" text-anchor="end">Kev</text>
+<rect x="192" y="276" width="68" height="68" rx="4" fill="#8d2732"/>
+<text x="226.0" y="315.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">86</text>
+<rect x="268" y="276" width="68" height="68" rx="4" fill="#f3f1ec" stroke="#d9d3c7" stroke-width="1"/>
+<text x="302.0" y="315.0" font-family="sans-serif" font-size="13" fill="#8a8175" text-anchor="middle">own</text>
+<rect x="344" y="276" width="68" height="68" rx="4" fill="#f2b69e"/>
+<text x="378.0" y="315.0" font-family="sans-serif" font-size="15" fill="#1a1a1a" text-anchor="middle">30</text>
+<rect x="420" y="276" width="68" height="68" rx="4" fill="#ab4541"/>
+<text x="454.0" y="315.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">75</text>
+<rect x="496" y="276" width="68" height="68" rx="4" fill="#af4942"/>
+<text x="530.0" y="315.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">74</text>
+<rect x="572" y="276" width="68" height="68" rx="4" fill="#a9433f"/>
+<text x="606.0" y="315.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">76</text>
+<rect x="648" y="276" width="68" height="68" rx="4" fill="#b95347"/>
+<text x="682.0" y="315.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">70</text>
+<text x="172" y="391.0" font-family="sans-serif" font-size="14" font-weight="700" fill="#1e3a5f" text-anchor="end">Laya</text>
+<rect x="192" y="352" width="68" height="68" rx="4" fill="#892330"/>
+<text x="226.0" y="391.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">87</text>
+<rect x="268" y="352" width="68" height="68" rx="4" fill="#902933"/>
+<text x="302.0" y="391.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">85</text>
+<rect x="344" y="352" width="68" height="68" rx="4" fill="#f3f1ec" stroke="#d9d3c7" stroke-width="1"/>
+<text x="378.0" y="391.0" font-family="sans-serif" font-size="13" fill="#8a8175" text-anchor="middle">own</text>
+<rect x="420" y="352" width="68" height="68" rx="4" fill="#963036"/>
+<text x="454.0" y="391.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">83</text>
+<rect x="496" y="352" width="68" height="68" rx="4" fill="#963036"/>
+<text x="530.0" y="391.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">83</text>
+<rect x="572" y="352" width="68" height="68" rx="4" fill="#8f2933"/>
+<text x="606.0" y="391.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">85</text>
+<rect x="648" y="352" width="68" height="68" rx="4" fill="#a9433f"/>
+<text x="682.0" y="391.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">76</text>
+<text x="172" y="467.0" font-family="sans-serif" font-size="14" font-weight="500" fill="#1a1a1a" text-anchor="end">Clef</text>
+<rect x="192" y="428" width="68" height="68" rx="4" fill="#821b2c"/>
+<text x="226.0" y="467.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">90</text>
+<rect x="268" y="428" width="68" height="68" rx="4" fill="#ae4842"/>
+<text x="302.0" y="467.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">74</text>
+<rect x="344" y="428" width="68" height="68" rx="4" fill="#f4ccbc"/>
+<text x="378.0" y="467.0" font-family="sans-serif" font-size="15" fill="#1a1a1a" text-anchor="middle">20</text>
+<rect x="420" y="428" width="68" height="68" rx="4" fill="#f3f1ec" stroke="#d9d3c7" stroke-width="1"/>
+<text x="454.0" y="467.0" font-family="sans-serif" font-size="13" fill="#8a8175" text-anchor="middle">own</text>
+<rect x="496" y="428" width="68" height="68" rx="4" fill="#ab4540"/>
+<text x="530.0" y="467.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">75</text>
+<rect x="572" y="428" width="68" height="68" rx="4" fill="#b24c44"/>
+<text x="606.0" y="467.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">72</text>
+<rect x="648" y="428" width="68" height="68" rx="4" fill="#a33d3c"/>
+<text x="682.0" y="467.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">78</text>
+<text x="172" y="543.0" font-family="sans-serif" font-size="14" font-weight="500" fill="#1a1a1a" text-anchor="end">Clef-flash</text>
+<rect x="192" y="504" width="68" height="68" rx="4" fill="#851e2e"/>
+<text x="226.0" y="543.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">89</text>
+<rect x="268" y="504" width="68" height="68" rx="4" fill="#88212f"/>
+<text x="302.0" y="543.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">88</text>
+<rect x="344" y="504" width="68" height="68" rx="4" fill="#f4d0c1"/>
+<text x="378.0" y="543.0" font-family="sans-serif" font-size="15" fill="#1a1a1a" text-anchor="middle">18</text>
+<rect x="420" y="504" width="68" height="68" rx="4" fill="#993338"/>
+<text x="454.0" y="543.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">82</text>
+<rect x="496" y="504" width="68" height="68" rx="4" fill="#f3f1ec" stroke="#d9d3c7" stroke-width="1"/>
+<text x="530.0" y="543.0" font-family="sans-serif" font-size="13" fill="#8a8175" text-anchor="middle">own</text>
+<rect x="572" y="504" width="68" height="68" rx="4" fill="#7b1429"/>
+<text x="606.0" y="543.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">93</text>
+<rect x="648" y="504" width="68" height="68" rx="4" fill="#932c35"/>
+<text x="682.0" y="543.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">84</text>
+<text x="172" y="619.0" font-family="sans-serif" font-size="14" font-weight="500" fill="#1a1a1a" text-anchor="end">Clef-omni</text>
+<rect x="192" y="580" width="68" height="68" rx="4" fill="#9b3539"/>
+<text x="226.0" y="619.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">81</text>
+<rect x="268" y="580" width="68" height="68" rx="4" fill="#c9634f"/>
+<text x="302.0" y="619.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">64</text>
+<rect x="344" y="580" width="68" height="68" rx="4" fill="#f5d8cd"/>
+<text x="378.0" y="619.0" font-family="sans-serif" font-size="15" fill="#1a1a1a" text-anchor="middle">14</text>
+<rect x="420" y="580" width="68" height="68" rx="4" fill="#da7558"/>
+<text x="454.0" y="619.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">58</text>
+<rect x="496" y="580" width="68" height="68" rx="4" fill="#c45f4d"/>
+<text x="530.0" y="619.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">66</text>
+<rect x="572" y="580" width="68" height="68" rx="4" fill="#f3f1ec" stroke="#d9d3c7" stroke-width="1"/>
+<text x="606.0" y="619.0" font-family="sans-serif" font-size="13" fill="#8a8175" text-anchor="middle">own</text>
+<rect x="648" y="580" width="68" height="68" rx="4" fill="#e27d5c"/>
+<text x="682.0" y="619.0" font-family="sans-serif" font-size="15" fill="#1a1a1a" text-anchor="middle">55</text>
+<text x="172" y="695.0" font-family="sans-serif" font-size="14" font-weight="500" fill="#1a1a1a" text-anchor="end">Microsoft</text>
+<rect x="192" y="656" width="68" height="68" rx="4" fill="#750e26"/>
+<text x="226.0" y="695.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">95</text>
+<rect x="268" y="656" width="68" height="68" rx="4" fill="#8f2832"/>
+<text x="302.0" y="695.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">85</text>
+<rect x="344" y="656" width="68" height="68" rx="4" fill="#f2b49c"/>
+<text x="378.0" y="695.0" font-family="sans-serif" font-size="15" fill="#1a1a1a" text-anchor="middle">31</text>
+<rect x="420" y="656" width="68" height="68" rx="4" fill="#7f182b"/>
+<text x="454.0" y="695.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">91</text>
+<rect x="496" y="656" width="68" height="68" rx="4" fill="#851e2e"/>
+<text x="530.0" y="695.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">89</text>
+<rect x="572" y="656" width="68" height="68" rx="4" fill="#902a33"/>
+<text x="606.0" y="695.0" font-family="sans-serif" font-size="15" fill="#ffffff" text-anchor="middle">85</text>
+<rect x="648" y="656" width="68" height="68" rx="4" fill="#f3f1ec" stroke="#d9d3c7" stroke-width="1"/>
+<text x="682.0" y="695.0" font-family="sans-serif" font-size="13" fill="#8a8175" text-anchor="middle">own</text>
+<text x="748" y="204" font-family="sans-serif" font-size="12" fill="#666666">Share of questions</text>
+<rect x="748" y="222" width="22" height="22" rx="3" fill="#f5ddd3"/>
+<text x="778" y="238" font-family="sans-serif" font-size="12" fill="#333333">Rarely</text>
+<rect x="748" y="258" width="22" height="22" rx="3" fill="#e17c5b"/>
+<text x="778" y="274" font-family="sans-serif" font-size="12" fill="#333333">Often</text>
+<rect x="748" y="294" width="22" height="22" rx="3" fill="#7d162a"/>
+<text x="778" y="310" font-family="sans-serif" font-size="12" fill="#333333">Nearly always</text>
+<text x="36" y="764" font-family="sans-serif" font-size="12" fill="#666666">Numbers are percents. Gray cells are each model’s own winning phrase, left out of the comparison.</text>
+<text x="36" y="782" font-family="sans-serif" font-size="12" fill="#1e3a5f">The pale column is Laya. Her winning phrases rarely change anyone else.</text>
+</svg>

@@ -469,6 +469,51 @@ def cmd_bench_proxy(args) -> int:
     return asyncio.run(bench_proxy(models=args.models, phrases=args.phrases))
 
 
+def cmd_analyze(args) -> int:
+    """Build the leaderboard cross-score table, or fill cells that are still empty."""
+    import asyncio
+
+    from .analysis import (
+        assemble,
+        baseline_summary,
+        baselines_csv_path,
+        baselines_path,
+        collect_baselines,
+        csv_path,
+        fill_missing,
+        load_table,
+        open_edition_dbs,
+        save_table,
+        summary,
+        table_path,
+    )
+
+    if args.action == "baselines":
+        saved = asyncio.run(collect_baselines(load_table(), log=print))
+        print(baseline_summary(saved))
+        print(baselines_path())
+        print(baselines_csv_path())
+        return 0
+    if args.action == "fill":
+        table = load_table()
+        filled = asyncio.run(fill_missing(table, limit=args.limit or None, log=print))
+        print(summary(table))
+        print(f"filled {filled}")
+        print(table_path())
+        return 0
+    opened = open_edition_dbs()
+    try:
+        table = assemble(opened, log=print)
+    finally:
+        for db in opened.values():
+            db.conn.close()
+    save_table(table)
+    print(summary(table))
+    print(table_path())
+    print(csv_path())
+    return 0
+
+
 def cmd_train_global(args) -> int:
     from .db import DB
     from .search.global_model import train_global
@@ -685,6 +730,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--models", nargs="*", help="OpenRouter chat model ids (default: a shortlist)")
     p.add_argument("--phrases", type=int, default=400)
     p.set_defaults(func=cmd_bench_proxy)
+
+    p = sub.add_parser(
+        "analyze",
+        help="cross-score leaders; `fill` scores empty cells; `baselines` scores each question with no phrase",
+    )
+    p.add_argument("action", nargs="?", default="build", choices=["build", "fill", "baselines"])
+    p.add_argument("--limit", type=int, default=0, help="when filling, stop after this many cells (0 = all)")
+    p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser("train-global", help="train the cross-question predictor on every scored phrase")
     p.add_argument("--limit", type=int, default=0, help="cap on training rows (0 = all)")

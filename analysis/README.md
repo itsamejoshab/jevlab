@@ -63,3 +63,9 @@ The other models tend to move together: a phrase that wins on one of them usuall
 The pale column shows that last point. Phrases that win on Laya change Jev's answer about 11% of the time and Clef-omni's about 14%, with the others landing somewhere between 18% and 31%. Jev's column is the dark one: his phrases change the other models most of the time, and Kev, the Clef models, and Microsoft all fall in that same band. Laya, by comparison, answers as if the questions belonged to a different game.
 
 The record behind this note is [findings.md](findings.md). The scores live in the [analysis folder on GitHub](https://github.com/itsamejoshab/jevlab/tree/analysis/analysis): [baselines.json](https://github.com/itsamejoshab/jevlab/blob/analysis/analysis/baselines.json) holds each model's answer with an empty phrase, and [cross.json](https://github.com/itsamejoshab/jevlab/blob/analysis/analysis/cross.json) holds every winning phrase scored on every model. The extract was built on 2026-10-26.
+
+---
+
+## Every winning phrase, scored on every model
+
+The full table is in [scores.md](scores.md). One table per question, one row per Strict Highest leader, including choice questions. Luna is blank when she refused. Decider is blank when we had no sample.

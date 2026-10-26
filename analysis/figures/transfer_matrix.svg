@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="844" height="788" viewBox="0 0 844 788">
+<rect width="844" height="788" fill="#ffffff"/>
+<text x="28" y="28" font-family="sans-serif" font-size="18" fill="#1a1a1a">Crude flip rate on own resistant questions</text>
+<text x="28" y="50" font-family="sans-serif" font-size="12" fill="#444444">Rows are targets. Columns are sources, with decider added. A heavy border marks the own-attack diagonal.</text>
+<text x="28" y="68" font-family="sans-serif" font-size="12" fill="#444444">Each cell is that source&#39;s flip rate on the target&#39;s resistant questions. Lower is harder to flip.</text>
+<text transform="translate(158.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">jev</text>
+<text transform="translate(226.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">kev</text>
+<text transform="translate(294.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">laya</text>
+<text transform="translate(362.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">clef</text>
+<text transform="translate(430.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">clef-flash</text>
+<text transform="translate(498.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">clef-omni</text>
+<text transform="translate(566.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">luna</text>
+<text transform="translate(634.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">microsoft</text>
+<text transform="translate(702.0,180) rotate(-60)" font-family="sans-serif" font-size="12" fill="#1a1a1a" text-anchor="start">decider</text>
+<text x="114" y="226.0" font-family="sans-serif" font-size="13" fill="#1a1a1a" text-anchor="end">jev</text>
+<rect x="125" y="189" width="66" height="66" fill="#6c0521" stroke="#ffffff" stroke-width="1"/>
+<rect x="126" y="190" width="64" height="64" fill="none" stroke="#111111" stroke-width="2.5"/>
+<text x="158.0" y="227.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.98</text>
+<rect x="193" y="189" width="66" height="66" fill="#bd5749" stroke="#ffffff" stroke-width="1"/>
+<text x="226.0" y="227.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.69</text>
+<rect x="261" y="189" width="66" height="66" fill="#f5dfd6" stroke="#ffffff" stroke-width="1"/>
+<text x="294.0" y="227.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.11</text>
+<rect x="329" y="189" width="66" height="66" fill="#e47f5c" stroke="#ffffff" stroke-width="1"/>
+<text x="362.0" y="227.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.54</text>
+<rect x="397" y="189" width="66" height="66" fill="#cf6952" stroke="#ffffff" stroke-width="1"/>
+<text x="430.0" y="227.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.62</text>
+<rect x="465" y="189" width="66" height="66" fill="#ca6550" stroke="#ffffff" stroke-width="1"/>
+<text x="498.0" y="227.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.64</text>
+<rect x="533" y="189" width="66" height="66" fill="#b75247" stroke="#ffffff" stroke-width="1"/>
+<text x="566.0" y="227.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.70</text>
+<rect x="601" y="189" width="66" height="66" fill="#d56f55" stroke="#ffffff" stroke-width="1"/>
+<text x="634.0" y="227.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.60</text>
+<rect x="669" y="189" width="66" height="66" fill="#de7859" stroke="#ffffff" stroke-width="1"/>
+<text x="702.0" y="227.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.56</text>
+<text x="114" y="294.0" font-family="sans-serif" font-size="13" fill="#1a1a1a" text-anchor="end">kev</text>
+<rect x="125" y="257" width="66" height="66" fill="#8d2732" stroke="#ffffff" stroke-width="1"/>
+<text x="158.0" y="295.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.86</text>
+<rect x="193" y="257" width="66" height="66" fill="#67001f" stroke="#ffffff" stroke-width="1"/>
+<rect x="194" y="258" width="64" height="64" fill="none" stroke="#111111" stroke-width="2.5"/>
+<text x="226.0" y="295.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">1.00</text>
+<rect x="261" y="257" width="66" height="66" fill="#f2b69e" stroke="#ffffff" stroke-width="1"/>
+<text x="294.0" y="295.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.30</text>
+<rect x="329" y="257" width="66" height="66" fill="#ab4541" stroke="#ffffff" stroke-width="1"/>
+<text x="362.0" y="295.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.75</text>
+<rect x="397" y="257" width="66" height="66" fill="#af4942" stroke="#ffffff" stroke-width="1"/>
+<text x="430.0" y="295.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.74</text>
+<rect x="465" y="257" width="66" height="66" fill="#a9433f" stroke="#ffffff" stroke-width="1"/>
+<text x="498.0" y="295.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.76</text>
+<rect x="533" y="257" width="66" height="66" fill="#c7614e" stroke="#ffffff" stroke-width="1"/>
+<text x="566.0" y="295.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.65</text>
+<rect x="601" y="257" width="66" height="66" fill="#b95347" stroke="#ffffff" stroke-width="1"/>
+<text x="634.0" y="295.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.70</text>
+<rect x="669" y="257" width="66" height="66" fill="#c6614e" stroke="#ffffff" stroke-width="1"/>
+<text x="702.0" y="295.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.65</text>
+<text x="114" y="362.0" font-family="sans-serif" font-size="13" fill="#1a1a1a" text-anchor="end">laya</text>
+<rect x="125" y="325" width="66" height="66" fill="#892330" stroke="#ffffff" stroke-width="1"/>
+<text x="158.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.87</text>
+<rect x="193" y="325" width="66" height="66" fill="#902933" stroke="#ffffff" stroke-width="1"/>
+<text x="226.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.85</text>
+<rect x="261" y="325" width="66" height="66" fill="#67001f" stroke="#ffffff" stroke-width="1"/>
+<rect x="262" y="326" width="64" height="64" fill="none" stroke="#111111" stroke-width="2.5"/>
+<text x="294.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">1.00</text>
+<rect x="329" y="325" width="66" height="66" fill="#963036" stroke="#ffffff" stroke-width="1"/>
+<text x="362.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.83</text>
+<rect x="397" y="325" width="66" height="66" fill="#963036" stroke="#ffffff" stroke-width="1"/>
+<text x="430.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.83</text>
+<rect x="465" y="325" width="66" height="66" fill="#8f2933" stroke="#ffffff" stroke-width="1"/>
+<text x="498.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.85</text>
+<rect x="533" y="325" width="66" height="66" fill="#c8634f" stroke="#ffffff" stroke-width="1"/>
+<text x="566.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.64</text>
+<rect x="601" y="325" width="66" height="66" fill="#a9433f" stroke="#ffffff" stroke-width="1"/>
+<text x="634.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.76</text>
+<rect x="669" y="325" width="66" height="66" fill="#a9433f" stroke="#ffffff" stroke-width="1"/>
+<text x="702.0" y="363.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.76</text>
+<text x="114" y="430.0" font-family="sans-serif" font-size="13" fill="#1a1a1a" text-anchor="end">clef</text>
+<rect x="125" y="393" width="66" height="66" fill="#821b2c" stroke="#ffffff" stroke-width="1"/>
+<text x="158.0" y="431.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.90</text>
+<rect x="193" y="393" width="66" height="66" fill="#ae4842" stroke="#ffffff" stroke-width="1"/>
+<text x="226.0" y="431.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.74</text>
+<rect x="261" y="393" width="66" height="66" fill="#f4ccbc" stroke="#ffffff" stroke-width="1"/>
+<text x="294.0" y="431.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.20</text>
+<rect x="329" y="393" width="66" height="66" fill="#6c0521" stroke="#ffffff" stroke-width="1"/>
+<rect x="330" y="394" width="64" height="64" fill="none" stroke="#111111" stroke-width="2.5"/>
+<text x="362.0" y="431.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.98</text>
+<rect x="397" y="393" width="66" height="66" fill="#ab4540" stroke="#ffffff" stroke-width="1"/>
+<text x="430.0" y="431.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.75</text>
+<rect x="465" y="393" width="66" height="66" fill="#b24c44" stroke="#ffffff" stroke-width="1"/>
+<text x="498.0" y="431.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.72</text>
+<rect x="533" y="393" width="66" height="66" fill="#b65046" stroke="#ffffff" stroke-width="1"/>
+<text x="566.0" y="431.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.71</text>
+<rect x="601" y="393" width="66" height="66" fill="#a33d3c" stroke="#ffffff" stroke-width="1"/>
+<text x="634.0" y="431.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.78</text>
+<rect x="669" y="393" width="66" height="66" fill="#9e383a" stroke="#ffffff" stroke-width="1"/>
+<text x="702.0" y="431.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.80</text>
+<text x="114" y="498.0" font-family="sans-serif" font-size="13" fill="#1a1a1a" text-anchor="end">clef-flash</text>
+<rect x="125" y="461" width="66" height="66" fill="#851e2e" stroke="#ffffff" stroke-width="1"/>
+<text x="158.0" y="499.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.89</text>
+<rect x="193" y="461" width="66" height="66" fill="#88212f" stroke="#ffffff" stroke-width="1"/>
+<text x="226.0" y="499.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.88</text>
+<rect x="261" y="461" width="66" height="66" fill="#f4d0c1" stroke="#ffffff" stroke-width="1"/>
+<text x="294.0" y="499.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.18</text>
+<rect x="329" y="461" width="66" height="66" fill="#993338" stroke="#ffffff" stroke-width="1"/>
+<text x="362.0" y="499.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.82</text>
+<rect x="397" y="461" width="66" height="66" fill="#690220" stroke="#ffffff" stroke-width="1"/>
+<rect x="398" y="462" width="64" height="64" fill="none" stroke="#111111" stroke-width="2.5"/>
+<text x="430.0" y="499.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.99</text>
+<rect x="465" y="461" width="66" height="66" fill="#7b1429" stroke="#ffffff" stroke-width="1"/>
+<text x="498.0" y="499.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.93</text>
+<rect x="533" y="461" width="66" height="66" fill="#b55046" stroke="#ffffff" stroke-width="1"/>
+<text x="566.0" y="499.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.71</text>
+<rect x="601" y="461" width="66" height="66" fill="#932c35" stroke="#ffffff" stroke-width="1"/>
+<text x="634.0" y="499.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.84</text>
+<rect x="669" y="461" width="66" height="66" fill="#ba5448" stroke="#ffffff" stroke-width="1"/>
+<text x="702.0" y="499.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.70</text>
+<text x="114" y="566.0" font-family="sans-serif" font-size="13" fill="#1a1a1a" text-anchor="end">clef-omni</text>
+<rect x="125" y="529" width="66" height="66" fill="#9b3539" stroke="#ffffff" stroke-width="1"/>
+<text x="158.0" y="567.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.81</text>
+<rect x="193" y="529" width="66" height="66" fill="#c9634f" stroke="#ffffff" stroke-width="1"/>
+<text x="226.0" y="567.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.64</text>
+<rect x="261" y="529" width="66" height="66" fill="#f5d8cd" stroke="#ffffff" stroke-width="1"/>
+<text x="294.0" y="567.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.14</text>
+<rect x="329" y="529" width="66" height="66" fill="#da7558" stroke="#ffffff" stroke-width="1"/>
+<text x="362.0" y="567.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.58</text>
+<rect x="397" y="529" width="66" height="66" fill="#c45f4d" stroke="#ffffff" stroke-width="1"/>
+<text x="430.0" y="567.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.66</text>
+<rect x="465" y="529" width="66" height="66" fill="#a23c3c" stroke="#ffffff" stroke-width="1"/>
+<rect x="466" y="530" width="64" height="64" fill="none" stroke="#111111" stroke-width="2.5"/>
+<text x="498.0" y="567.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.78</text>
+<rect x="533" y="529" width="66" height="66" fill="#e6815e" stroke="#ffffff" stroke-width="1"/>
+<text x="566.0" y="567.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.53</text>
+<rect x="601" y="529" width="66" height="66" fill="#e27d5c" stroke="#ffffff" stroke-width="1"/>
+<text x="634.0" y="567.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.55</text>
+<rect x="669" y="529" width="66" height="66" fill="#f0936e" stroke="#ffffff" stroke-width="1"/>
+<text x="702.0" y="567.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.46</text>
+<text x="114" y="634.0" font-family="sans-serif" font-size="13" fill="#1a1a1a" text-anchor="end">luna</text>
+<rect x="125" y="597" width="66" height="66" fill="#973137" stroke="#ffffff" stroke-width="1"/>
+<text x="158.0" y="635.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.82</text>
+<rect x="193" y="597" width="66" height="66" fill="#dd7859" stroke="#ffffff" stroke-width="1"/>
+<text x="226.0" y="635.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.57</text>
+<rect x="261" y="597" width="66" height="66" fill="#f6ece8" stroke="#ffffff" stroke-width="1"/>
+<text x="294.0" y="635.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.05</text>
+<rect x="329" y="597" width="66" height="66" fill="#f09571" stroke="#ffffff" stroke-width="1"/>
+<text x="362.0" y="635.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.45</text>
+<rect x="397" y="597" width="66" height="66" fill="#dc7759" stroke="#ffffff" stroke-width="1"/>
+<text x="430.0" y="635.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.57</text>
+<rect x="465" y="597" width="66" height="66" fill="#e47f5c" stroke="#ffffff" stroke-width="1"/>
+<text x="498.0" y="635.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.54</text>
+<rect x="533" y="597" width="66" height="66" fill="#a7413f" stroke="#ffffff" stroke-width="1"/>
+<rect x="534" y="598" width="64" height="64" fill="none" stroke="#111111" stroke-width="2.5"/>
+<text x="566.0" y="635.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.76</text>
+<rect x="601" y="597" width="66" height="66" fill="#e5805d" stroke="#ffffff" stroke-width="1"/>
+<text x="634.0" y="635.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.54</text>
+<rect x="669" y="597" width="66" height="66" fill="#ef8b63" stroke="#ffffff" stroke-width="1"/>
+<text x="702.0" y="635.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.50</text>
+<text x="114" y="702.0" font-family="sans-serif" font-size="13" fill="#1a1a1a" text-anchor="end">microsoft</text>
+<rect x="125" y="665" width="66" height="66" fill="#750e26" stroke="#ffffff" stroke-width="1"/>
+<text x="158.0" y="703.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.95</text>
+<rect x="193" y="665" width="66" height="66" fill="#8f2832" stroke="#ffffff" stroke-width="1"/>
+<text x="226.0" y="703.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.85</text>
+<rect x="261" y="665" width="66" height="66" fill="#f2b49c" stroke="#ffffff" stroke-width="1"/>
+<text x="294.0" y="703.0" font-family="sans-serif" font-size="14" fill="#1a1a1a" text-anchor="middle">0.31</text>
+<rect x="329" y="665" width="66" height="66" fill="#7f182b" stroke="#ffffff" stroke-width="1"/>
+<text x="362.0" y="703.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.91</text>
+<rect x="397" y="665" width="66" height="66" fill="#851e2e" stroke="#ffffff" stroke-width="1"/>
+<text x="430.0" y="703.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.89</text>
+<rect x="465" y="665" width="66" height="66" fill="#902a33" stroke="#ffffff" stroke-width="1"/>
+<text x="498.0" y="703.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.85</text>
+<rect x="533" y="665" width="66" height="66" fill="#ab4540" stroke="#ffffff" stroke-width="1"/>
+<text x="566.0" y="703.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.75</text>
+<rect x="601" y="665" width="66" height="66" fill="#67001f" stroke="#ffffff" stroke-width="1"/>
+<rect x="602" y="666" width="64" height="64" fill="none" stroke="#111111" stroke-width="2.5"/>
+<text x="634.0" y="703.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">1.00</text>
+<rect x="669" y="665" width="66" height="66" fill="#6d0622" stroke="#ffffff" stroke-width="1"/>
+<text x="702.0" y="703.0" font-family="sans-serif" font-size="14" fill="#ffffff" text-anchor="middle">0.98</text>
+<defs><linearGradient id="heat" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#f7f7f7"/><stop offset="50%" stop-color="#ef8a62"/><stop offset="100%" stop-color="#67001f"/></linearGradient></defs>
+<rect x="764" y="188" width="16" height="536" fill="url(#heat)" stroke="#cccccc"/>
+<text x="786" y="728.0" font-family="sans-serif" font-size="11" fill="#333333">0.00</text>
+<text x="786" y="460.0" font-family="sans-serif" font-size="11" fill="#333333">0.50</text>
+<text x="786" y="192.0" font-family="sans-serif" font-size="11" fill="#333333">1.00</text>
+<text x="764" y="770" font-family="sans-serif" font-size="11" fill="#333333">flip rate</text>
+</svg>

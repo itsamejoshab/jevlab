@@ -165,7 +165,7 @@ def atom_vectors(atoms: list[tuple[str, str]], embed=None) -> dict[str, np.ndarr
             vectors = []
         for (text, _name), vec in zip(missing, vectors):
             saved[f"atom:{text}"] = _unit(np.asarray(vec, dtype=np.float64))
-        if vectors:
+        if len(vectors):
             _write_matrix(path, saved)
     return {text: saved[f"atom:{text}"] for text, _name in atoms if f"atom:{text}" in saved}
 

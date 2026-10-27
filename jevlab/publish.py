@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from . import vault
 from .config import DATA
 from .db import DB
-from .modes import CASUAL, GOLF, HIGH_SCORES, STRICT, from_board
+from .modes import CASUAL, EMOJI, GOLF, HIGH_SCORES, STRICT, from_board
 from .objective import Leader, Objective, board_leader, objective_for, site_round, target_rows
 from .oracle import Oracle, question_key
 from .rules import RuleError, check_phrase, drop_clashing, option_clash, rejected
@@ -557,7 +557,7 @@ def publish_entry(
     known_ban = hit_ban(phrase)
     if known_ban:
         raise BannedPhrase(phrase, known_ban)
-    if mode not in (STRICT, GOLF, CASUAL):
+    if mode not in (STRICT, GOLF, CASUAL, EMOJI):
         raise PublishError(f"mode {mode} is not supported by the publisher yet")
     game_mode = from_board(board, mode)
     u = game_mode.unit_abbr
@@ -570,7 +570,17 @@ def publish_entry(
     if stored["revision_id"] != live["revisionId"]:
         raise PublishError("question revision changed since the snapshot; re-snapshot and re-search")
     objective = objective_for(live, unit=game_mode.unit, board=board)
-    if game_mode.golf:
+    if game_mode.emoji:
+        from .emoji.rules import RuleError as EmojiRuleError
+        from .emoji.rules import check_phrase as check_emoji
+
+        try:
+            phrase = check_emoji(phrase)
+        except EmojiRuleError as error:
+            raise PublishError(f"phrase breaks emoji rules: {error}") from error
+        words = phrase.split(" ")
+        units = len(words)
+    elif game_mode.golf:
         text = unicodedata.normalize("NFC", phrase).strip()
         if not text:
             raise PublishError("empty golf phrase")
@@ -643,10 +653,13 @@ def publish_entry(
         if EDITION in DETERMINISTIC_EDITIONS:
             log("  no extra re-rolls: this model returns the same score for the same phrase")
     need = leader
+    one_each = word_by_word or game_mode.emoji
     if dry_run:
         if game_mode.golf:
             what = f"send {units} characters"
-        elif word_by_word:
+        elif game_mode.emoji:
+            what = f"append {units} emoji one at a time"
+        elif one_each:
             what = f"append {units} words one at a time"
         else:
             what = f"build {units} words"
@@ -662,9 +675,11 @@ def publish_entry(
         attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
         # Word by word is one append per word. Otherwise the line goes up as a sentence and the
         # last word is its own turn, so a re-roll only has to replace that word. Golf stays one phrase.
-        if word_by_word:
+        if game_mode.emoji:
+            log("  one emoji at a time")
+        elif word_by_word:
             log("  one word at a time")
-        attempt, server_p = build_chain(client, attempt, words, log, hold_last=not word_by_word)
+        attempt, server_p = build_chain(client, attempt, words, log, hold_last=not one_each)
         turn = last_turn(attempt)
         picked = str((turn or {}).get("choice") or "")
         shown_p = server_p

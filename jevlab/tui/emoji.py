@@ -80,7 +80,7 @@ class EmojiSetupScreen(RunKeys, Screen):
             yield Select(self.player_options(), prompt="Target player", id="target-player")
         with Horizontal(id="emoji-run"):
             yield Label("Budget")
-            yield Input("40", id="budget", type="integer", max_length=6)
+            yield Input("3000", id="budget", type="integer", max_length=6)
             yield Label("Patience")
             yield Input("6", id="patience", type="integer", max_length=3)
             yield Label("Win mode")
@@ -190,7 +190,7 @@ class EmojiSetupScreen(RunKeys, Screen):
             "All, None, Not leading, Empty, and Target player choose the questions. "
             "Win mode, when on, saves a WIN for publish and moves to the next question. "
             "Patience counts climb passes that do not raise the score. The question continues until the budget is spent, or a one-glyph line rounds to 1.00. "
-            "Go opens the lab: project, singles, climb, then after patience an order pass and a beam, then compact. "
+            "Go opens the lab: project, singles, climb, then after patience an order pass, a beam, and a rebuild of the next Strict line, then compact. "
             "Space pauses and s stops, after the current oracle call."
         )
 

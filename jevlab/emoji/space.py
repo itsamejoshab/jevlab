@@ -52,6 +52,65 @@ def residual_glyph(space, target: np.ndarray | None, current: str, catalog: list
     return ranked[0] if ranked else None
 
 
+def gap_chain(space, target: np.ndarray | None, catalog: list[Atom], limit: int) -> list[str]:
+    """Prefixes that walk toward `target`. Each step is the glyph nearest the residual.
+
+    The walk stops when that glyph would not reduce the distance, or at `limit`.
+    """
+    if space is None or target is None or limit < 1:
+        return []
+    aim = np.asarray(target, dtype=np.float64)
+    chosen: list[str] = []
+    total = np.zeros(aim.shape, dtype=np.float64)
+    dist = float(np.linalg.norm(aim))
+    while len(chosen) < limit:
+        atom = residual_glyph(space, aim, " ".join(chosen), catalog)
+        if atom is None:
+            break
+        got = space.glyph_vector(atom.text)
+        if got is None:
+            break
+        vec = np.asarray(got, dtype=np.float64)
+        if vec.shape != total.shape:
+            break
+        nxt = total + vec
+        nxt_dist = float(np.linalg.norm(aim - nxt))
+        if nxt_dist >= dist - 1e-9:
+            break
+        chosen.append(atom.text)
+        total = nxt
+        dist = nxt_dist
+    return [" ".join(chosen[:end]) for end in range(1, len(chosen) + 1)]
+
+
+def alternate_phrases(
+    space,
+    target: np.ndarray | None,
+    catalog: list[Atom],
+    avoid: set[str],
+    lengths,
+    per_length: int,
+) -> list[str]:
+    """Glyph strings near `target` at each length, using glyphs outside `avoid`."""
+    if per_length < 1:
+        return []
+    pool = nearest_glyphs(
+        space,
+        target,
+        [atom for atom in catalog if atom.text not in avoid],
+        len(catalog),
+    )
+    out: list[str] = []
+    seen: set[str] = set()
+    for length in lengths:
+        for text in beam_phrases(space, target, pool, [length], 8, per_length):
+            if text in seen or set(text.split()) & avoid:
+                continue
+            seen.add(text)
+            out.append(text)
+    return out
+
+
 def beam_phrases(space, target: np.ndarray | None, pool: list[Atom], lengths, width: int, limit: int) -> list[str]:
     """Strings of the asked lengths whose glyph average sits nearest `target`. At most `limit`."""
     if space is None or target is None or width < 1 or limit < 1:
@@ -133,16 +192,27 @@ _TRIED = False
 _TABLE: Table | None = None
 
 
+def _table_path():
+    """Edition models first, then the shared `data/models` table."""
+    from ..config import DATA, JEV_DATA
+
+    path = DATA / "models" / "emoji_space.npz"
+    if path.exists():
+        return path
+    shared = JEV_DATA / "models" / "emoji_space.npz"
+    if shared != path and shared.exists():
+        return shared
+    return None
+
+
 def cached_table() -> Table | None:
-    """The on-disk joint table, or None when `data/models/emoji_space.npz` is absent."""
+    """The on-disk joint table, or None when no `emoji_space.npz` is present."""
     global _TRIED, _TABLE
     if _TRIED:
         return _TABLE
     _TRIED = True
-    from ..config import DATA
-
-    path = DATA / "models" / "emoji_space.npz"
-    if not path.exists():
+    path = _table_path()
+    if path is None:
         return None
     try:
         blob = np.load(path, allow_pickle=False)

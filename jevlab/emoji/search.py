@@ -1,4 +1,4 @@
-"""Emoji search: project, singles, climb, compact. A capped oracle budget, then a vaulted winner."""
+"""Emoji search: project, singles, climb, then rebuild Strict vectors, then compact."""
 
 from __future__ import annotations
 
@@ -17,17 +17,30 @@ from .learn import Model, _local_embed, atom_vectors, load_model, observe, quest
 from .lexicon import Index
 from .project import aim_phrases, bearing, glyph_for, projections, strict_impacts, strict_lines
 from .rank import Atom, shortlist
-from .space import beam_phrases, cached_table, mean_vector, nearest_glyphs, residual_glyph, round_robin
+from .space import (
+    alternate_phrases,
+    beam_phrases,
+    cached_table,
+    gap_chain,
+    mean_vector,
+    nearest_glyphs,
+    residual_glyph,
+    round_robin,
+)
 from .rules import ZWJ, RuleError, check_phrase, check_word
 
-DEFAULT_BUDGET = 40
+DEFAULT_BUDGET = 3000
 RANK_K = 24
 SINGLES_CAP = 12
 PROJECT_CAP = 3
 COMPACT_CAP = 12
 CLIMB_TRIALS = 8
 CLIMB_WORDS = 12
+KIN_TIMES = (2, 3, 4, 5)
+KIN_NEIGHBORS = 4
 ORDER_CAP = 8
+EXPLORE_LENGTHS = (2, 4, 6, 8, 12)
+EXPLORE_PER_LENGTH = 4
 CATALOG = Path(__file__).with_name("catalog.json")
 _SPACE_LOGGED = False
 
@@ -164,6 +177,12 @@ async def search(
     space=None,
 ) -> str | None:
     """Project, then singles, climb, and compact. Returns the vaulted phrase, or None.
+
+    After patience, once reordering does not raise the score, the next calls rebuild one Strict
+    line's vector: glyphs nearest the residual, at whatever length closes the gap, then other
+    combinations of that vector. The following stall rebuilds the next Strict line.
+    Every new winner reloads those aims, and so does the end of the patience steps. A Strict
+    line we have matched or passed drops out, so the search does not keep chasing it.
 
     `score(phrase, n)` is an async callable returning an oracle Score. The live oracle is used when it is omitted.
     `embed=False` keeps the run on name overlap and snapshot impacts, with no local embedding.
@@ -334,13 +353,47 @@ async def _search(
     source_phrases = [str(line.get("phrase") or "") for line in lines if line.get("phrase")]
     phrases = aim_phrases(lines, impacts, None if leader is None else leader.probability)
     anchor = phrases[0] if phrases else (source_phrases[0] if source_phrases else title)
-    targets = []
-    if space is not None:
-        for phrase in phrases:
-            vec = mean_vector(space, bearing(phrase, impacts))
-            if vec is not None:
-                targets.append(vec)
-    target = targets[0] if targets else None
+    target_phrases: list[str] = []
+    targets: list = []
+    target = None
+    explore_i = 0
+    explored_glyphs: dict[str, set[str]] = {}
+
+    def refresh_targets() -> None:
+        """Reload Strict aims that still outscore the winner.
+
+        A new winner does this, and so does the end of the patience steps. The score is a
+        sample, so a small change can move a line on or off the list. A line we have matched
+        or passed is no longer an aim.
+        """
+        nonlocal targets, target, target_phrases, explore_i
+        if best is not None:
+            bar = objective.p(best)
+        elif leader is None:
+            bar = None
+        else:
+            bar = leader.probability
+        chosen = aim_phrases(lines, impacts, bar)
+        if best is not None:
+            scores = {str(line.get("phrase") or ""): float(line.get("p_mean") or 0.0) for line in lines}
+            our = site_round(bar)
+            chosen = [phrase for phrase in chosen if site_round(scores.get(phrase, 0.0)) > our]
+        kept: list[str] = []
+        vectors = []
+        if space is not None:
+            for phrase in chosen:
+                vec = mean_vector(space, bearing(phrase, impacts))
+                if vec is None:
+                    continue
+                kept.append(phrase)
+                vectors.append(vec)
+        if kept != target_phrases:
+            explore_i = 0
+        target_phrases = kept
+        targets = vectors
+        target = targets[0] if targets else None
+
+    refresh_targets()
     aimed = round_robin(space, targets, catalog, SINGLES_CAP)
     usage_phrase = anchor if phrases else ""
     usage_atoms = collect_usage(usage_phrase, index, embed, usage, log) if usage_phrase or usage is not None else []
@@ -386,6 +439,7 @@ async def _search(
         units = objective.units(phrase)
         if best is None or best_phrase is None:
             best_phrase, best = phrase, got
+            refresh_targets()
             report("running")
             return
         old_units = objective.units(best_phrase)
@@ -394,6 +448,7 @@ async def _search(
         higher = units == old_units and objective.p(got) > objective.p(best)
         if new_key > old_key or higher:
             best_phrase, best = phrase, got
+            refresh_targets()
             if arm == "climb":
                 stalls = 0
                 advanced = True
@@ -548,6 +603,8 @@ async def _search(
         cursor = best_phrase
         cursor_score = best
         repeat_used = False
+        stacked_self: set[str] = set()
+        stacked_kin: set[str] = set()
 
         def candidate_atoms(current: str) -> list[Atom]:
             present = set(current.split())
@@ -572,6 +629,47 @@ async def _search(
                 for atom in catalog:
                     add(atom)
             return ordered
+
+        def stack_phrases(current: str, skip: set[str]) -> list[str]:
+            """Repeat each new glyph 2–5 times, and the same lengths with its nearest neighbors."""
+            phrases: list[str] = []
+            seen = set(skip)
+
+            def add(text: str) -> None:
+                try:
+                    phrase = check_phrase(text)
+                except RuleError:
+                    return
+                if phrase in seen or phrase in scored:
+                    return
+                seen.add(phrase)
+                phrases.append(phrase)
+
+            alive = [atom for atom in catalog if not is_dead(atom.text, dead)]
+            words = current.split()
+            for glyph in dict.fromkeys(words):
+                if glyph not in stacked_self:
+                    stacked_self.add(glyph)
+                    for times in KIN_TIMES:
+                        add(" ".join([glyph] * times))
+                # Neighbor stacks are for a glyph that just took the lead on its own.
+                # A long line only repeats the glyphs it already contains.
+                if len(words) != 1 or glyph in stacked_kin or space is None:
+                    continue
+                vec = space.glyph_vector(glyph)
+                stacked_kin.add(glyph)
+                if vec is None:
+                    continue
+                others = [atom for atom in alive if atom.text != glyph]
+                for atom in nearest_glyphs(space, vec, others, KIN_NEIGHBORS):
+                    neighbor = atom.text
+                    if neighbor not in stacked_self:
+                        stacked_self.add(neighbor)
+                        for times in KIN_TIMES:
+                            add(" ".join([neighbor] * times))
+                    for times in KIN_TIMES:
+                        add(" ".join([glyph] + [neighbor] * (times - 1)))
+            return phrases
 
         def climb_trials(current: str, pool: list[Atom], allow_repeat: bool, skip: set[str]) -> list[str]:
             words = current.split()
@@ -633,6 +731,7 @@ async def _search(
 
         skip: set[str] = set()
         beamed = False
+        explore_noted = False
         won: list[str] = []
         exhausted: set[str] = set()
         stopped = False
@@ -741,11 +840,74 @@ async def _search(
             repeat_used = False
             return True
 
+        async def run_explore() -> bool:
+            """Rebuild the next Strict vector. Longer probes do not have to take the lead."""
+            nonlocal arm, stalls, cursor, cursor_score, repeat_used, stopped, explore_i, explore_noted
+            if space is None or not targets or not target_phrases:
+                # Patience still elapsed. Say so once, or the log stays on climb and looks like a display bug.
+                if not explore_noted:
+                    explore_noted = True
+                    if space is None:
+                        log("  explore skipped, no emoji space")
+                    else:
+                        log("  explore skipped, no strict line still ahead")
+                return False
+            slot = explore_i % len(targets)
+            phrase_key = target_phrases[slot]
+            explore_i += 1
+            aim = targets[slot]
+            arm = "explore"
+            log("  explore")
+            report("running")
+            alive = [atom for atom in catalog if not is_dead(atom.text, dead)]
+            key_before = None
+            if best is not None and best_phrase is not None:
+                key_before = objective.score_key(best, objective.units(best_phrase))
+            chain = gap_chain(space, aim, alive, CLIMB_WORDS)
+            avoid = set(chain[-1].split()) if chain else set()
+            seen_glyphs = explored_glyphs.setdefault(phrase_key, set())
+            avoid |= seen_glyphs
+            varied = alternate_phrases(space, aim, alive, avoid, EXPLORE_LENGTHS, EXPLORE_PER_LENGTH)
+            for text in varied:
+                seen_glyphs.update(text.split())
+            planned = chain + varied
+            raised = False
+            for text in planned:
+                if text in scored:
+                    continue
+                got, saved = await score_line(text)
+                if saved:
+                    won.append(saved)
+                    break
+                if got is None:
+                    stopped = True
+                    break
+                if (
+                    key_before is not None
+                    and best is not None
+                    and best_phrase is not None
+                    and objective.score_key(best, objective.units(best_phrase)) > key_before
+                ):
+                    raised = True
+            flush()
+            arm = "climb"
+            if not raised or best_phrase is None or best is None:
+                return False
+            stalls = 0
+            log("  patience 0")
+            report("running")
+            cursor, cursor_score = best_phrase, best
+            exhausted.discard(best_phrase)
+            skip.clear()
+            repeat_used = False
+            return True
+
         while cursor and cursor_score is not None and not halted:
             if is_perfect():
                 log(f"  1.00/1w {best_phrase}")
                 break
-            trials = climb_trials(cursor, candidate_atoms(cursor), not repeat_used, skip)
+            stacks = stack_phrases(cursor, skip)
+            trials = stacks + climb_trials(cursor, candidate_atoms(cursor), not repeat_used, skip | set(stacks))
             repeat_used = True
             if not trials:
                 if cursor is not None:
@@ -798,60 +960,68 @@ async def _search(
             if won or stopped or halted:
                 break
             if raised:
+                refresh_targets()
                 continue
-            if beamed or space is None or target is None or best is None or best_phrase is None:
-                continue
-            beamed = True
-            arm = "beam"
-            log("  beam")
-            report("running")
-            base = objective.units(best_phrase)
-            key_before = objective.score_key(best, base)
-            pool = nearest_glyphs(
-                space,
-                target,
-                [atom for atom in catalog if not is_dead(atom.text, dead)],
-                RANK_K,
-            )
-            raised = False
-            budget_done = False
-            for text in beam_phrases(
-                space,
-                target,
-                pool,
-                range(base, min(base + 3, CLIMB_WORDS + 1)),
-                8,
-                8,
-            ):
-                try:
-                    phrase = check_phrase(text)
-                except RuleError:
-                    continue
-                if phrase in scored:
-                    continue
-                got, saved = await score_line(phrase)
-                if saved:
-                    return finish_win(saved)
-                if got is None:
-                    budget_done = True
-                    break
-                if (
-                    best is not None
-                    and best_phrase is not None
-                    and objective.score_key(best, objective.units(best_phrase)) > key_before
-                ):
-                    raised = True
-            flush()
-            if halted or budget_done:
-                break
-            arm = "climb"
-            if raised and best is not None and best_phrase is not None:
-                stalls = 0
-                log("  patience 0")
+            if not beamed and space is not None and target is not None and best is not None and best_phrase is not None:
+                beamed = True
+                arm = "beam"
+                log("  beam")
                 report("running")
-                cursor, cursor_score = best_phrase, best
-                skip.clear()
-                repeat_used = False
+                base = objective.units(best_phrase)
+                key_before = objective.score_key(best, base)
+                pool = nearest_glyphs(
+                    space,
+                    target,
+                    [atom for atom in catalog if not is_dead(atom.text, dead)],
+                    RANK_K,
+                )
+                raised = False
+                budget_done = False
+                for text in beam_phrases(
+                    space,
+                    target,
+                    pool,
+                    range(base, min(base + 3, CLIMB_WORDS + 1)),
+                    8,
+                    8,
+                ):
+                    try:
+                        phrase = check_phrase(text)
+                    except RuleError:
+                        continue
+                    if phrase in scored:
+                        continue
+                    got, saved = await score_line(phrase)
+                    if saved:
+                        return finish_win(saved)
+                    if got is None:
+                        budget_done = True
+                        break
+                    if (
+                        best is not None
+                        and best_phrase is not None
+                        and objective.score_key(best, objective.units(best_phrase)) > key_before
+                    ):
+                        raised = True
+                flush()
+                if halted or budget_done:
+                    break
+                arm = "climb"
+                if raised and best is not None and best_phrase is not None:
+                    stalls = 0
+                    log("  patience 0")
+                    report("running")
+                    cursor, cursor_score = best_phrase, best
+                    skip.clear()
+                    repeat_used = False
+                    refresh_targets()
+                    continue
+            raised = await run_explore()
+            refresh_targets()
+            if won or stopped or halted:
+                break
+            if raised:
+                continue
         if won:
             return finish_win(won[0])
         if not halted and not stopped:

@@ -28,6 +28,7 @@ ARMS = {
     "singles": "One glyph at a time, nearest this edition's best Strict line.",
     "climb": "Append the glyph that fills the gap to that line.",
     "beam": "After patience, strings whose glyphs sit nearest that line.",
+    "explore": "After patience, rebuild a Strict line at any length, then other combinations of that vector.",
     "order": "After patience, other orders of the best line.",
     "compact": "Drop glyphs while the rounded score holds.",
 }
@@ -223,6 +224,8 @@ class EmojiLabScreen(RunKeys, Screen):
         calls = self.calls
         budget = max(self.shown_budget, 1)
         filled = round(width * min(calls / budget, 1.0))
+        if calls and width:
+            filled = max(filled, 1)
         color = "green" if self.current_item() and self.current_item().win else "cyan"
         wins = set()
         if filled:

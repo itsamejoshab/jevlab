@@ -135,6 +135,53 @@ def test_search_stops_at_the_budget(tmp_path, monkeypatch):
     assert phrase is None
 
 
+def test_a_strong_glyph_is_repeated_and_paired_out_to_five(tmp_path, monkeypatch):
+    """The first climb from a glyph tries it 2, 3, 4, and 5 times, and the same lengths with each neighbor."""
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _emoji_leader(db, 0.50)
+    mark = Atom("😀", "north")
+    near = Atom("😁", "northeast")
+    far = Atom("😂", "east")
+
+    class Space:
+        def word_vector(self, word: str):
+            return None
+
+        def glyph_vector(self, glyph: str):
+            return {
+                mark.text: np.array([1.0, 0.0]),
+                near.text: np.array([0.9, 0.1]),
+                far.text: np.array([0.0, 1.0]),
+            }[glyph]
+
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.8 if phrase == mark.text else 0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=40,
+            log=lambda _message: None,
+            score=score,
+            catalog=[mark, near, far],
+            embed=False,
+            space=Space(),
+        )
+    )
+    for times in (2, 3, 4, 5):
+        assert " ".join([mark.text] * times) in calls
+        assert " ".join([near.text] * times) in calls
+        assert " ".join([mark.text] + [near.text] * (times - 1)) in calls
+        assert " ".join([far.text] * times) in calls
+        assert " ".join([mark.text] + [far.text] * (times - 1)) in calls
+
+
 def test_search_skips_a_one_emoji_ceiling(tmp_path, monkeypatch):
     monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
     db = DB(tmp_path / "t.db")
@@ -1149,7 +1196,7 @@ def test_a_longer_line_tries_the_reversal_without_every_order(tmp_path, monkeypa
         search(
             db,
             "cereal",
-            budget=40,
+            budget=80,
             log=notes.append,
             score=score,
             catalog=catalog,
@@ -1288,7 +1335,7 @@ def test_climb_appends_the_glyph_that_fills_the_phrase_gap(tmp_path, monkeypatch
         search(
             db,
             "cereal",
-            budget=7,
+            budget=40,
             log=lambda _message: None,
             score=score,
             catalog=[near, anti, bowl, far, gap, tail],
@@ -1296,14 +1343,15 @@ def test_climb_appends_the_glyph_that_fills_the_phrase_gap(tmp_path, monkeypatch
             space=Space(),
         )
     )
-    pairs = [phrase for phrase in calls if len(phrase.split()) == 2]
-    assert pairs[:1] == [f"{bowl.text} {gap.text}"]
+    gap_phrase = f"{bowl.text} {gap.text}"
+    assert gap_phrase in calls
+    assert calls.index(f"{bowl.text} {bowl.text}") < calls.index(gap_phrase)
 
 
 def test_beam_runs_once_after_patience_and_a_better_line_resets_it(tmp_path, monkeypatch):
     db = DB(tmp_path / "t.db")
     _question(db)
-    _plant_strict(tmp_path, monkeypatch, "mark")
+    _plant_strict(tmp_path, monkeypatch, "mark", 0.99)
     vault.save(
         "cereal",
         STRICT,
@@ -1361,7 +1409,7 @@ def test_beam_runs_once_after_patience_and_a_better_line_resets_it(tmp_path, mon
         search(
             db,
             "cereal",
-            budget=40,
+            budget=80,
             log=notes.append,
             score=score,
             catalog=[kept, match, extra],
@@ -1375,7 +1423,7 @@ def test_beam_runs_once_after_patience_and_a_better_line_resets_it(tmp_path, mon
     stalls = [index for index, line in enumerate(notes) if "patience 1/1" in line]
     resets = [index for index, line in enumerate(notes) if line.strip() == "patience 0"]
     assert beam_at == [beam_at[0]]
-    assert stalls[0] < beam_at[0] < resets[0] < stalls[1]
+    assert resets[0] < stalls[0] < beam_at[0] < stalls[1]
 
 
 def test_a_better_top_score_resets_patience(tmp_path, monkeypatch):
@@ -1639,7 +1687,7 @@ def test_emoji_setup_lists_the_question_and_the_budget(monkeypatch):
                 shown.append(prompt.plain if hasattr(prompt, "plain") else str(prompt))
             assert any("Is cereal a soup" in line for line in shown)
             budget = screen.query_one("#budget")
-            assert budget.value == "40"
+            assert budget.value == "3000"
             assert screen.query_one("#patience").value == "6"
             assert budget.region.width >= 16
             assert budget.content_region.width >= 6
@@ -1708,3 +1756,141 @@ def test_emoji_setup_lists_the_question_and_the_budget(monkeypatch):
             yield from ()
 
     asyncio.run(check())
+
+
+def test_patience_rebuilds_a_strict_vector_past_the_leader_length(tmp_path, monkeypatch):
+    """After patience, glyphs nearest the residual rebuild a Strict line, prefix by prefix, until the
+    next glyph would not get closer. Other glyph sets, at more than one length, approximate that same
+    vector. The next stall rebuilds the next Strict line. A longer probe does not have to take the lead.
+    """
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_lines(tmp_path, monkeypatch, [("alpha quartz", 0.90), ("bravo flint", 0.80)])
+    _emoji_leader(db, 0.50)
+    steps = [Atom(glyph, name) for glyph, name in zip("😀😁😂🤣", ["north", "south", "east", "west"], strict=True)]
+    alts = [Atom("😃", "maple"), Atom("😄", "cedar")]
+    ups = [Atom(glyph, name) for glyph, name in zip("😉😊😋😎", ["cedarwood", "maplewood", "oakwood", "elmwood"])]
+    chain = " ".join(atom.text for atom in steps)
+    prefix = " ".join(atom.text for atom in steps[:3])
+    other = " ".join(atom.text for atom in ups)
+    alt_glyphs = {atom.text for atom in alts}
+
+    class Space:
+        def word_vector(self, word: str):
+            if word in ("alpha", "quartz"):
+                return np.array([4.0, 0.0])
+            if word in ("bravo", "flint"):
+                return np.array([0.0, 4.0])
+            return None
+
+        def glyph_vector(self, glyph: str):
+            if glyph in {atom.text for atom in steps}:
+                return np.array([1.0, 0.0])
+            if glyph == alts[0].text:
+                return np.array([0.8, 0.6])
+            if glyph == alts[1].text:
+                return np.array([0.8, -0.6])
+            if glyph in {atom.text for atom in ups}:
+                return np.array([0.0, 1.0])
+            return np.array([-1.0, 0.0])
+
+    calls: list[str] = []
+    notes: list[str] = []
+    stalls_when: dict[str, int] = {}
+    probes: list[tuple[str, str]] = []
+
+    def stalls() -> int:
+        return sum(1 for line in notes if line.strip().startswith("patience ") and "/" in line)
+
+    def progress(info: dict) -> None:
+        if info.get("state") != "batch":
+            return
+        best = str(info.get("best") or "")
+        for row in info["scored"]:
+            probes.append((row["phrase"], best))
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        stalls_when.setdefault(phrase, stalls())
+        return Score(phrase, [0.2] * n)
+
+    result = asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=200,
+            log=notes.append,
+            score=score,
+            catalog=steps + alts + ups,
+            embed=False,
+            space=Space(),
+            patience=1,
+            progress=progress,
+        )
+    )
+    assert result is None
+    assert prefix in calls
+    assert chain in calls
+    assert calls.index(prefix) < calls.index(chain)
+    assert not any(phrase.startswith(chain + " ") for phrase in calls)
+    assert (chain, "0.200/1w") in probes
+    same_stall = [
+        phrase
+        for phrase, seen_at in stalls_when.items()
+        if seen_at == stalls_when[chain] and calls.index(phrase) > calls.index(chain)
+    ]
+    diverse_lengths = {
+        len(phrase.split()) for phrase in same_stall if set(phrase.split()) and set(phrase.split()) <= alt_glyphs
+    }
+    assert len(diverse_lengths) >= 2
+    assert other in calls
+    assert stalls_when[other] > stalls_when[chain] >= 1
+
+
+def test_a_new_winner_drops_a_strict_line_it_has_passed(tmp_path, monkeypatch):
+    """A winning string reloads the aim. A Strict line whose score is no longer higher is not rebuilt."""
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_lines(tmp_path, monkeypatch, [("alpha quartz", 0.90), ("bravo flint", 0.50)])
+    _emoji_leader(db, 0.30)
+    steps = [Atom(glyph, name) for glyph, name in zip("😀😁😂🤣", ["north", "south", "east", "west"], strict=True)]
+    ups = [Atom(glyph, name) for glyph, name in zip("😉😊😋😎", ["cedarwood", "maplewood", "oakwood", "elmwood"])]
+    chain = " ".join(atom.text for atom in steps)
+    other = " ".join(atom.text for atom in ups)
+
+    class Space:
+        def word_vector(self, word: str):
+            if word in ("alpha", "quartz"):
+                return np.array([4.0, 0.0])
+            if word in ("bravo", "flint"):
+                return np.array([0.0, 4.0])
+            return None
+
+        def glyph_vector(self, glyph: str):
+            if glyph in {atom.text for atom in steps}:
+                return np.array([1.0, 0.0])
+            if glyph in {atom.text for atom in ups}:
+                return np.array([0.0, 1.0])
+            return np.array([-1.0, 0.0])
+
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.60] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=200,
+            log=lambda _message: None,
+            score=score,
+            catalog=steps + ups,
+            embed=False,
+            space=Space(),
+            patience=1,
+        )
+    )
+    assert chain in calls
+    assert other not in calls

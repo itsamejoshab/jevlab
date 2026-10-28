@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import itertools
 import json
+import shutil
 
 import numpy as np
 import pytest
@@ -335,9 +337,7 @@ def _plant_strict(tmp_path, monkeypatch, phrase: str, p_mean: float = 0.8) -> No
 
 
 def test_projection_keeps_phrase_order_and_drops_a_stop():
-    index = Index.build(
-        [Atom("🚫", "no entry sign"), Atom("🥄", "spoon"), Atom("🚗", "car")]
-    )
+    index = Index.build([Atom("🚫", "no entry sign"), Atom("🥄", "spoon"), Atom("🚗", "car")])
     text = project_phrase("never the spoon car", {"spoon": 0.5, "car": 0.4}, index)
     assert text == "🚫 🥄 🚗"
 
@@ -531,7 +531,7 @@ def test_embed_false_does_not_load_an_embedder_or_bertweet(tmp_path, monkeypatch
     monkeypatch.setattr(module, "question_vector", boom)
     monkeypatch.setattr(module, "atom_vectors", boom)
     monkeypatch.setattr(module, "load_model", boom)
-    monkeypatch.setattr(module, "usage_glyphs", boom)
+    monkeypatch.setattr(module, "cached_table", boom)
 
     async def score(phrase: str, n: int = 1) -> Score:
         return Score(phrase, [0.2] * n)
@@ -629,7 +629,7 @@ def test_call_count_never_exceeds_the_budget(tmp_path, monkeypatch):
     assert len(calls) <= 5
 
 
-def test_patience_ends_the_question_after_that_many_stalls(tmp_path, monkeypatch):
+def test_patience_does_not_end_the_question(tmp_path, monkeypatch):
     monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
     db = DB(tmp_path / "t.db")
     _question(db)
@@ -662,11 +662,52 @@ def test_patience_ends_the_question_after_that_many_stalls(tmp_path, monkeypatch
             patience=1,
         )
     )
-    one = len(calls)
-    assert one <= 40
     assert any("patience 1/1" in line for line in notes)
+    assert len(calls) >= 30
+    assert len(calls) <= 40
 
-    calls.clear()
+
+def test_a_perfect_single_ends_the_question(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    catalog = [Atom(f"{index}\u20e3", f"digit {index}") for index in range(30)]
+    perfect = catalog[0].text
+    notes: list[str] = []
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [1.0 if phrase == perfect else 0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=40,
+            log=notes.append,
+            score=score,
+            catalog=catalog,
+            embed=False,
+            patience=6,
+        )
+    )
+    assert any(line.startswith("  1.00/1w") for line in notes)
+    assert len(calls) < 20
+    assert len(calls) <= 40
+
+
+def test_a_point_nine_nine_single_keeps_spending(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    catalog = [Atom(f"{index}\u20e3", f"digit {index}") for index in range(30)]
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.99] * n)
+
     asyncio.run(
         search(
             db,
@@ -676,11 +717,665 @@ def test_patience_ends_the_question_after_that_many_stalls(tmp_path, monkeypatch
             score=score,
             catalog=catalog,
             embed=False,
-            patience=2,
+            patience=1,
         )
     )
-    assert len(calls) > one
+    assert len(calls) >= 30
     assert len(calls) <= 40
+
+
+def test_the_bar_marks_a_new_leader_not_every_win(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    catalog = [Atom(f"{index}\u20e3", f"digit {index}") for index in range(3)]
+    scored: list[str] = []
+    leads: list[str] = []
+    seen = 0
+
+    def progress(info: dict) -> None:
+        if info.get("state") != "batch":
+            return
+        for row in info["scored"]:
+            scored.append(row["phrase"])
+            assert row["win"]
+            if row["lead"]:
+                leads.append(row["phrase"])
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        nonlocal seen
+        seen += 1
+        return Score(phrase, [0.9 if seen == 3 else 0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=3,
+            log=lambda _message: None,
+            score=score,
+            catalog=catalog,
+            embed=False,
+            progress=progress,
+        )
+    )
+    assert len(scored) == 3
+    assert leads == [scored[0], scored[2]]
+
+
+def _plant_lines(tmp_path, monkeypatch, lines: list[tuple[str, float]]) -> None:
+    root = tmp_path / "vault"
+    monkeypatch.setattr(vault, "VAULT", root)
+    monkeypatch.setattr("jevlab.transfer.edition_vault", lambda _edition: root)
+    for phrase, p_mean in lines:
+        vault.save(
+            "cereal",
+            STRICT,
+            phrase,
+            p_mean=p_mean,
+            p_lcb=p_mean - 0.05,
+            spread=0.01,
+            n=3,
+            units=len(phrase.split()),
+            leader=None,
+            beats=True,
+            title="cereal",
+        )
+
+
+def _emoji_leader(db: DB, probability: float) -> None:
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": probability, "wordCount": 1}]),
+        ),
+    )
+
+
+def test_project_skips_a_similar_line_and_keeps_three(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_lines(
+        tmp_path,
+        monkeypatch,
+        [
+            ("the alpha bravo", 0.95),
+            ("alpha zebra", 0.90),
+            ("the cedar delta", 0.80),
+            ("zebra flint", 0.70),
+            ("gust hail", 0.60),
+            ("ivory jade", 0.40),
+        ],
+    )
+    _emoji_leader(db, 0.50)
+    named = {
+        "alpha": "😀",
+        "bravo": "😁",
+        "zebra": "😂",
+        "cedar": "🤣",
+        "delta": "😃",
+        "ember": "😄",
+        "flint": "😅",
+        "gust": "😆",
+        "hail": "😉",
+        "ivory": "😊",
+        "jade": "😋",
+    }
+    catalog = [Atom(glyph, word) for word, glyph in named.items()]
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=20,
+            log=lambda _message: None,
+            score=score,
+            catalog=catalog,
+            embed=False,
+        )
+    )
+    assert calls[:3] == [
+        f"{named['alpha']} {named['bravo']}",
+        f"{named['cedar']} {named['delta']}",
+        f"{named['zebra']} {named['flint']}",
+    ]
+
+
+def test_singles_take_a_glyph_from_each_line_above_the_leader(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_lines(
+        tmp_path,
+        monkeypatch,
+        [
+            ("alpha bravo", 0.95),
+            ("alpha zebra", 0.90),
+            ("the cedar delta", 0.80),
+            ("ember flint", 0.70),
+            ("gust hail", 0.60),
+            ("ivory jade", 0.50),
+        ],
+    )
+    _emoji_leader(db, 0.50)
+    axes = {
+        "alpha": np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        "bravo": np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        "zebra": np.array([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+        "the": np.array([0.0, 0.0, 0.0, 0.0, 0.0, 10.0]),
+        "cedar": np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+        "delta": np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        "ember": np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        "flint": np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        "gust": np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+        "hail": np.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+        "ivory": np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        "jade": np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+    }
+    glyphs = {
+        "alpha": Atom("😀", "north"),
+        "cedar": Atom("🤣", "east"),
+        "ember": Atom("😄", "west"),
+        "gust": Atom("😆", "up"),
+        "decoy": Atom("😂", "south"),
+        "ivory": Atom("😊", "down"),
+    }
+
+    class Space:
+        def word_vector(self, word: str):
+            return axes.get(word)
+
+        def glyph_vector(self, glyph: str):
+            if glyph == glyphs["cedar"].text:
+                return np.array([0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+            if glyph == glyphs["decoy"].text:
+                return np.array([0.9, 0.1, 0.0, 0.0, 0.0, 0.0])
+            for word, atom in glyphs.items():
+                if atom.text == glyph:
+                    return axes[word]
+            return None
+
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=5,
+            log=lambda _message: None,
+            score=score,
+            catalog=list(glyphs.values()),
+            embed=False,
+            space=Space(),
+        )
+    )
+    assert calls == [
+        glyphs["alpha"].text,
+        glyphs["cedar"].text,
+        glyphs["ember"].text,
+        glyphs["gust"].text,
+        glyphs["decoy"].text,
+    ]
+
+
+def test_singles_fill_to_three_when_few_lines_beat_the_leader(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_lines(
+        tmp_path,
+        monkeypatch,
+        [
+            ("alpha bravo", 0.95),
+            ("alpha zebra", 0.75),
+            ("cedar delta", 0.70),
+            ("ember flint", 0.60),
+            ("gust hail", 0.50),
+        ],
+    )
+    _emoji_leader(db, 0.85)
+    axes = {
+        "alpha": np.array([1.0, 0.0, 0.0, 0.0, 0.0]),
+        "bravo": np.array([1.0, 0.0, 0.0, 0.0, 0.0]),
+        "zebra": np.array([0.0, 0.0, 0.0, 0.0, 5.0]),
+        "cedar": np.array([0.0, 1.0, 0.0, 0.0, 0.0]),
+        "delta": np.array([0.0, 1.0, 0.0, 0.0, 0.0]),
+        "ember": np.array([0.0, 0.0, 1.0, 0.0, 0.0]),
+        "flint": np.array([0.0, 0.0, 1.0, 0.0, 0.0]),
+        "gust": np.array([0.0, 0.0, 0.0, 1.0, 0.0]),
+        "hail": np.array([0.0, 0.0, 0.0, 1.0, 0.0]),
+    }
+    glyphs = {
+        "alpha": Atom("😀", "north"),
+        "zebra": Atom("😃", "zebra"),
+        "cedar": Atom("🤣", "east"),
+        "ember": Atom("😄", "west"),
+        "gust": Atom("😆", "up"),
+        "decoy": Atom("😂", "south"),
+    }
+
+    class Space:
+        def word_vector(self, word: str):
+            return axes.get(word)
+
+        def glyph_vector(self, glyph: str):
+            if glyph == glyphs["decoy"].text:
+                return np.array([0.9, 0.1, 0.0, 0.0, 0.0])
+            for word, atom in glyphs.items():
+                if atom.text == glyph:
+                    return axes[word]
+            return None
+
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=4,
+            log=lambda _message: None,
+            score=score,
+            catalog=list(glyphs.values()),
+            embed=False,
+            space=Space(),
+        )
+    )
+    assert calls == [
+        glyphs["alpha"].text,
+        glyphs["cedar"].text,
+        glyphs["ember"].text,
+        glyphs["decoy"].text,
+    ]
+
+
+def test_an_empty_emoji_board_aims_at_three_lines(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_lines(
+        tmp_path,
+        monkeypatch,
+        [("alpha bravo", 0.95), ("cedar delta", 0.80), ("ember flint", 0.70), ("gust hail", 0.60)],
+    )
+    axes = {
+        "alpha": np.array([1.0, 0.0, 0.0, 0.0]),
+        "bravo": np.array([1.0, 0.0, 0.0, 0.0]),
+        "cedar": np.array([0.0, 1.0, 0.0, 0.0]),
+        "delta": np.array([0.0, 1.0, 0.0, 0.0]),
+        "ember": np.array([0.0, 0.0, 1.0, 0.0]),
+        "flint": np.array([0.0, 0.0, 1.0, 0.0]),
+        "gust": np.array([0.0, 0.0, 0.0, 1.0]),
+        "hail": np.array([0.0, 0.0, 0.0, 1.0]),
+    }
+    glyphs = {
+        "alpha": Atom("😀", "north"),
+        "cedar": Atom("🤣", "east"),
+        "ember": Atom("😄", "west"),
+        "gust": Atom("😆", "up"),
+        "decoy": Atom("😂", "south"),
+    }
+
+    class Space:
+        def word_vector(self, word: str):
+            return axes.get(word)
+
+        def glyph_vector(self, glyph: str):
+            if glyph == glyphs["decoy"].text:
+                return np.array([0.9, 0.1, 0.0, 0.0])
+            for word, atom in glyphs.items():
+                if atom.text == glyph:
+                    return axes[word]
+            return None
+
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=4,
+            log=lambda _message: None,
+            score=score,
+            catalog=list(glyphs.values()),
+            embed=False,
+            space=Space(),
+        )
+    )
+    assert calls == [
+        glyphs["alpha"].text,
+        glyphs["cedar"].text,
+        glyphs["ember"].text,
+        glyphs["decoy"].text,
+    ]
+
+
+def test_a_short_line_is_scored_in_every_order(tmp_path, monkeypatch):
+    glyphs = {
+        "alpha": "😀",
+        "bravo": "😁",
+        "cedar": "😂",
+    }
+    for names in (["alpha", "bravo"], ["alpha", "bravo", "cedar"]):
+        vault_root = tmp_path / "vault"
+        if vault_root.exists():
+            shutil.rmtree(vault_root)
+        db = DB(tmp_path / f"{len(names)}.db")
+        _question(db)
+        _plant_lines(tmp_path, monkeypatch, [(" ".join(names), 0.8)])
+        _emoji_leader(db, 0.80)
+        catalog = [Atom(glyphs[name], name) for name in names]
+        forward = " ".join(glyphs[name] for name in names)
+        reverse = " ".join(glyphs[name] for name in reversed(names))
+        calls: list[str] = []
+        notes: list[str] = []
+        ordered: list[str] = []
+
+        def progress(info: dict) -> None:
+            if info.get("state") == "batch" and info.get("arm") == "order":
+                ordered.extend(row["phrase"] for row in info["scored"])
+
+        async def score(phrase: str, n: int = 1) -> Score:
+            calls.append(phrase)
+            return Score(phrase, [0.9 if phrase == reverse else 0.55 if phrase == forward else 0.2] * n)
+
+        phrase = asyncio.run(
+            search(
+                db,
+                "cereal",
+                budget=40,
+                log=notes.append,
+                score=score,
+                catalog=catalog,
+                embed=False,
+                patience=1,
+                progress=progress,
+            )
+        )
+        patience_at = next(index for index, line in enumerate(notes) if "patience 1/1" in line)
+        order_at = [index for index, line in enumerate(notes) if line.startswith("  order")]
+        assert order_at
+        assert patience_at < order_at[0]
+        expected = {" ".join(perm) for perm in itertools.permutations(forward.split()) if " ".join(perm) != forward}
+        assert ordered == list(dict.fromkeys(ordered))
+        assert set(ordered) == expected
+        assert set(ordered) <= set(calls)
+        assert phrase == reverse
+
+
+def test_a_longer_line_tries_the_reversal_without_every_order(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    names = ["alpha", "bravo", "cedar", "delta", "echo"]
+    glyphs = ["😀", "😁", "😂", "🤣", "😃"]
+    _plant_lines(tmp_path, monkeypatch, [(" ".join(names), 0.8)])
+    _emoji_leader(db, 0.80)
+    catalog = [Atom(glyph, name) for glyph, name in zip(glyphs, names)]
+    forward = " ".join(glyphs)
+    words = forward.split()
+    reverse = " ".join(reversed(words))
+    adjacent = " ".join([words[1], words[0], *words[2:]])
+    moved_back = " ".join([*words[1:], words[0]])
+    moved_front = " ".join([words[-1], *words[:-1]])
+    calls: list[str] = []
+    notes: list[str] = []
+    ordered: list[str] = []
+
+    def progress(info: dict) -> None:
+        if info.get("state") == "batch" and info.get("arm") == "order":
+            ordered.extend(row["phrase"] for row in info["scored"])
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.55 if phrase == forward else 0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=40,
+            log=notes.append,
+            score=score,
+            catalog=catalog,
+            embed=False,
+            patience=1,
+            progress=progress,
+        )
+    )
+    patience_at = next(index for index, line in enumerate(notes) if "patience 1/1" in line)
+    order_at = [index for index, line in enumerate(notes) if line.startswith("  order")]
+    assert order_at
+    assert patience_at < order_at[0]
+    assert set(ordered) <= set(calls)
+    assert ordered == list(dict.fromkeys(ordered))
+    assert all(sorted(phrase.split()) == sorted(words) and phrase != forward for phrase in ordered)
+    assert reverse in ordered
+    assert adjacent in ordered
+    assert moved_back in ordered
+    assert moved_front in ordered
+    assert len(ordered) <= 8
+
+
+def test_singles_follow_the_strict_phrase_vector(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_strict(tmp_path, monkeypatch, "the warm broth")
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.9, "wordCount": 1}]),
+        ),
+    )
+    warm = Atom("🔥", "fire")
+    pulled = Atom("💧", "droplet")
+    bowl = Atom("🥣", "bowl")
+
+    class Space:
+        def word_vector(self, word: str):
+            return {
+                "the": np.array([0.0, 10.0]),
+                "warm": np.array([1.0, 0.0]),
+                "broth": np.array([0.0, 1.0]),
+            }.get(word)
+
+        def glyph_vector(self, glyph: str):
+            return {
+                warm.text: np.array([1.0, 0.0]),
+                pulled.text: np.array([0.0, 1.0]),
+                bowl.text: np.array([1.0, 1.0]),
+            }.get(glyph)
+
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=1,
+            log=lambda _message: None,
+            score=score,
+            catalog=[warm, pulled, bowl],
+            embed=False,
+            space=Space(),
+        )
+    )
+    assert calls == [bowl.text]
+
+
+def test_climb_appends_the_glyph_that_fills_the_phrase_gap(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_strict(tmp_path, monkeypatch, "the warm broth")
+    vault.save(
+        "cereal",
+        STRICT,
+        "stone metal",
+        p_mean=0.7,
+        p_lcb=0.65,
+        spread=0.01,
+        n=3,
+        units=2,
+        leader=None,
+        beats=True,
+        title="cereal",
+    )
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.9, "wordCount": 1}]),
+        ),
+    )
+    near = Atom("🔥", "fire")
+    anti = Atom("💧", "droplet")
+    bowl = Atom("🥣", "bowl")
+    far = Atom("💯", "hundred")
+    gap = Atom("👍", "thumbs up")
+    tail = Atom("❄️", "snowflake")
+
+    class Space:
+        def word_vector(self, word: str):
+            return {
+                "the": np.array([0.0, 0.0, 9.0]),
+                "warm": np.array([2.0, 0.0, 0.0]),
+                "broth": np.array([0.0, 2.0, 0.0]),
+                "stone": np.array([0.0, 0.0, 8.0]),
+                "metal": np.array([0.0, 0.0, 8.0]),
+            }.get(word)
+
+        def glyph_vector(self, glyph: str):
+            return {
+                near.text: np.array([0.9, 0.9, 0.0]),
+                anti.text: np.array([-1.0, 0.0, 0.0]),
+                bowl.text: np.array([1.0, 0.0, 0.0]),
+                far.text: np.array([-1.0, -1.0, 0.0]),
+                gap.text: np.array([0.0, 1.0, 0.0]),
+                tail.text: np.array([0.0, -1.0, 0.0]),
+            }.get(glyph)
+
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.5 if phrase == bowl.text else 0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=7,
+            log=lambda _message: None,
+            score=score,
+            catalog=[near, anti, bowl, far, gap, tail],
+            embed=False,
+            space=Space(),
+        )
+    )
+    pairs = [phrase for phrase in calls if len(phrase.split()) == 2]
+    assert pairs[:1] == [f"{bowl.text} {gap.text}"]
+
+
+def test_beam_runs_once_after_patience_and_a_better_line_resets_it(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_strict(tmp_path, monkeypatch, "mark")
+    vault.save(
+        "cereal",
+        STRICT,
+        "quartz",
+        p_mean=0.7,
+        p_lcb=0.65,
+        spread=0.01,
+        n=3,
+        units=1,
+        leader=None,
+        beats=True,
+        title="cereal",
+    )
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.95, "wordCount": 1}]),
+        ),
+    )
+    kept = Atom("🔥", "fire")
+    match = Atom("💧", "droplet")
+    extra = Atom("💯", "hundred")
+    pair = f"{match.text} {match.text}"
+
+    class Space:
+        def word_vector(self, word: str):
+            if word == "mark":
+                return np.array([0.0, 1.0])
+            if word == "quartz":
+                return np.array([-1.0, 0.0])
+            return None
+
+        def glyph_vector(self, glyph: str):
+            if glyph == match.text:
+                return np.array([0.0, 1.0])
+            if glyph == extra.text:
+                return np.array([-1.0, 0.0])
+            return np.array([1.0, 0.0])
+
+    notes: list[str] = []
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        if phrase == kept.text:
+            return Score(phrase, [0.5] * n)
+        if phrase == pair:
+            return Score(phrase, [0.9] * n)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=40,
+            log=notes.append,
+            score=score,
+            catalog=[kept, match, extra],
+            embed=False,
+            space=Space(),
+            patience=1,
+        )
+    )
+    assert pair in calls
+    beam_at = [index for index, line in enumerate(notes) if line.strip() == "beam"]
+    stalls = [index for index, line in enumerate(notes) if "patience 1/1" in line]
+    resets = [index for index, line in enumerate(notes) if line.strip() == "patience 0"]
+    assert beam_at == [beam_at[0]]
+    assert stalls[0] < beam_at[0] < resets[0] < stalls[1]
 
 
 def test_a_better_top_score_resets_patience(tmp_path, monkeypatch):
@@ -780,7 +1475,7 @@ def test_emoji_go_opens_the_lab(monkeypatch):
                 "arm": "project",
                 "calls": 1,
                 "budget": kwargs["budget"],
-                "scored": [{"phrase": "🥣", "p": 0.8, "units": 1, "arm": "project", "win": True}],
+                "scored": [{"phrase": "🥣", "p": 0.8, "units": 1, "arm": "project", "win": True, "lead": True}],
                 "best": "0.800/1w",
                 "win": True,
                 "phrase": "🥣",
@@ -820,6 +1515,7 @@ def test_emoji_go_opens_the_lab(monkeypatch):
             assert win_cell.plain == "WIN"
             assert "green" in repr(win_cell)
             assert "WIN" in str(screen.query_one("#lab-header").content)
+            assert "✓" in str(screen.query_one("#lab-header").content)
             assert "WIN" in str(screen.query_one("#queue").content)
             assert "green" in repr(screen.query_one("#queue").content)
             await pilot.press("q")

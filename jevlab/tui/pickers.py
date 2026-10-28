@@ -466,25 +466,208 @@ def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=N
 
 
 def snapshot_line(message: str) -> Text:
-    """Timestamp plus the snapshot line. Section rules are the only colored lines."""
+    """Timestamp plus the snapshot line, colored for this screen."""
+    line = Text(f"{time.strftime('%H:%M:%S')}  ", style="dim")
+    line.append_text(_paint_snapshot(message))
+    return line
+
+
+def _paint_snapshot(message: str) -> Text:
+    from ..site.snapshot import parse_progress, rule_title
+
+    if parse_progress(message):
+        return _paint_progress(message)
+    if rule_title(message) is not None:
+        return _paint_rule(message)
+    return _paint_body(message)
+
+
+def _paint_sync(message: str) -> Text:
+    count, _, modes = message.removeprefix("SYNC ").partition(" · ")
+    text = Text()
+    text.append("SYNC", style="bold cyan")
+    text.append(f"  {count}", style="bold")
+    if modes:
+        text.append("\n")
+        text.append(" " * 10)
+        text.append("   ".join(part.strip() for part in modes.split(",")), style="cyan")
+    return text
+
+
+def _paint_open(title: str) -> Text:
+    index, sep, name = title.partition(" · ")
+    text = Text()
+    text.append("▸ ", style="bold cyan")
+    text.append(index, style="bold cyan")
+    if sep:
+        text.append("   ", style="dim")
+        text.append(name, style="bold")
+    return text
+
+
+def _paint_done(title: str) -> Text:
+    failed = ""
+    head, sep, tail = title.rpartition(" · ")
+    if sep and tail.endswith(" failed"):
+        failed = tail
+        title = head
+    head, sep, elapsed = title.partition(" · done · ")
+    if not sep:
+        return Text("✓ " + title, style="bold green")
+    index, name_sep, name = head.partition(" · ")
+    text = Text()
+    text.append("✓ ", style="bold green")
+    text.append(index, style="bold green")
+    if name_sep:
+        text.append("   ", style="dim")
+        text.append(name, style="bold green")
+    text.append("   ", style="dim")
+    text.append(elapsed, style="bold")
+    if failed:
+        text.append("   ", style="dim")
+        text.append(failed, style="bold yellow")
+    return text
+
+
+def _paint_failed(title: str) -> Text:
+    head = title.removesuffix(" · failed")
+    index, sep, name = head.partition(" · ")
+    text = Text()
+    text.append("✗ ", style="bold red")
+    text.append(index, style="bold red")
+    if sep:
+        text.append("   ", style="dim")
+        text.append(name, style="bold red")
+    text.append("   failed", style="bold red")
+    return text
+
+
+def _paint_back(title: str) -> Text:
+    text = Text()
+    text.append("↩ ", style="cyan")
+    text.append("back to ", style="dim")
+    text.append(title.removeprefix("back to "), style="bold")
+    return text
+
+
+def _paint_rule(message: str) -> Text:
     from ..site.snapshot import rule_title
 
-    line = Text()
-    line.append(f"{time.strftime('%H:%M:%S')} ", style="dim")
-    title = rule_title(message)
-    if title is None:
-        line.append(message)
-        return line
-    if title.startswith("stopped"):
-        style = "bold yellow"
-    elif title.endswith("failed"):
-        style = "bold red"
-    elif " · done · " in title:
-        style = "bold green"
+    if message.startswith("SYNC "):
+        return _paint_sync(message)
+    title = rule_title(message) or ""
+    if message.startswith("✓ "):
+        return _paint_done(title)
+    if message.startswith("✗ "):
+        return _paint_failed(title)
+    if message.startswith("■ "):
+        return Text(message, style="bold yellow")
+    if message.startswith("↩ "):
+        return _paint_back(title)
+    return _paint_open(title)
+
+
+def _paint_progress(message: str) -> Text:
+    from ..site.snapshot import parse_progress
+
+    parsed = parse_progress(message) or {}
+    who = parsed["who"]
+    bar = parsed["bar"]
+    who_at = 2
+    bar_at = who_at + len(who) + 2
+    pct_at = bar_at + len(bar) + 2
+    pct_end = message.find("%", pct_at) + 1
+    failed_at = message.rfind("  ", pct_end)
+    has_failed = bool(parsed["failed"])
+    pct = int(parsed["pct"])
+    if has_failed:
+        hot = "bold yellow"
+    elif pct >= 100:
+        hot = "bold green"
     else:
-        style = "bold cyan"
-    line.append(message, style=style)
-    return line
+        hot = "bold cyan"
+    text = Text()
+    text.append(message[:who_at])
+    text.append(message[who_at:bar_at], style="bold")
+    text.append(message[bar_at:pct_at], style=hot)
+    text.append(message[pct_at:pct_end], style=hot)
+    if has_failed and failed_at > pct_end:
+        text.append(message[pct_end:failed_at], style="dim")
+        text.append(message[failed_at:], style="bold yellow")
+    else:
+        text.append(message[pct_end:], style="dim")
+    return text
+
+
+def _split_label(message: str) -> tuple[str, str] | None:
+    if not message.startswith("  "):
+        return None
+    label, sep, rest = message[2:].partition("  ")
+    if not sep or not label or " " in label:
+        return None
+    return label, rest
+
+
+def _paint_body(message: str) -> Text:
+    if message.startswith("  removed ") and not message.startswith("  removed  "):
+        return Text(message, style="yellow")
+    labeled = _split_label(message)
+    if labeled is None:
+        low = message.lower()
+        if "fail" in low or "error" in low:
+            return Text(message, style="red")
+        if message.startswith("calibrat"):
+            return Text(message, style="cyan")
+        return Text(message)
+    label, rest = labeled
+    text = Text("  ")
+    if label.startswith("#"):
+        text.append(label, style="bold cyan")
+        text.append("  ")
+        head, sep, ident = rest.rpartition(" · ")
+        if sep:
+            text.append(head)
+            text.append(sep, style="dim")
+            text.append(ident, style="dim" if ident == "anonymous" else "bold")
+        else:
+            text.append(rest)
+        return text
+    styles = {
+        "requests": "bold cyan",
+        "pull": "bold cyan",
+        "kept": "bold green",
+        "wrote": "bold",
+        "fail": "bold red",
+        "removed": "bold yellow",
+        "viewer": "bold yellow",
+    }
+    style = styles.get(label)
+    if style is None:
+        if "failed" in message or "Error" in message:
+            return Text(message, style="red")
+        return Text(message)
+    text.append(label, style=style)
+    text.append("  ", style="dim")
+    if label == "kept":
+        head, sep, tail = rest.rpartition(" · ")
+        text.append(head)
+        if sep:
+            text.append(sep, style="dim")
+            text.append(tail, style="dim" if tail == "0 failed" else "bold red")
+        return text
+    if label == "wrote":
+        parent, slash, name = rest.rpartition("/")
+        if slash:
+            text.append(parent + slash, style="dim")
+            text.append(name, style="bold")
+        else:
+            text.append(rest, style="bold")
+        return text
+    if label in {"fail", "viewer"}:
+        text.append(rest, style="bold red" if label == "fail" else "red")
+        return text
+    text.append(rest)
+    return text
 
 
 class RunKeys:
@@ -566,14 +749,21 @@ class SnapshotScreen(RunKeys, Screen):
     #start { color: $success; }
     #start:hover, #start:focus { color: $text; background: $success; }
     #back { color: $text-muted; }
-    #snap-help { height: auto; padding: 0 1 1 1; color: $text-muted; }
-    #snap-editions { height: auto; padding: 0 1; }
-    #snap-modes { height: 1; padding: 0 1; }
-    #snap-editions Label, #snap-modes Label { width: 12; height: 1; text-style: bold; }
+    #snap-setup {
+        height: auto; margin: 0 1; padding: 0 1;
+        border: round $primary-darken-2;
+        border-title-color: $accent; border-title-style: bold; border-title-align: left;
+    }
+    #snap-help { height: auto; color: $text-muted; }
+    #snap-editions { height: auto; }
+    #snap-modes { height: 1; }
+    #snap-editions Label, #snap-modes Label { width: 12; height: 1; text-style: bold; color: $accent; }
     #snap-editions Setting, #snap-modes Setting { margin-right: 2; }
     #snap-log {
-        height: 1fr; border: round $secondary; margin-top: 1;
-        border-title-color: $secondary; border-title-style: bold; border-title-align: center;
+        height: 1fr; margin: 1; padding: 0 1;
+        border: heavy $accent;
+        border-title-color: $accent; border-title-style: bold; border-title-align: left;
+        border-subtitle-color: $text-muted; border-subtitle-align: right;
     }
     """
 
@@ -588,24 +778,28 @@ class SnapshotScreen(RunKeys, Screen):
         with Horizontal(id="snap-actions"):
             yield Button("Start", id="start", variant="success", compact=True)
             yield Button("Back", id="back", compact=True)
-        yield Static(id="snap-help")
-        with Horizontal(id="snap-editions"):
-            yield Label("Editions")
-            for edition in EDITIONS:
-                yield Setting(edition.capitalize(), value=True, id=f"snap-ed-{edition}", compact=True)
-        with Horizontal(id="snap-modes"):
-            yield Label("Modes")
-            for label, mode in SNAPSHOT_MODES:
-                yield Setting(label, value=True, id=f"snap-mode-{mode}", compact=True)
+        with Vertical(id="snap-setup"):
+            yield Static(id="snap-help")
+            with Horizontal(id="snap-editions"):
+                yield Label("Editions")
+                for edition in EDITIONS:
+                    yield Setting(edition.capitalize(), value=True, id=f"snap-ed-{edition}", compact=True)
+            with Horizontal(id="snap-modes"):
+                yield Label("Modes")
+                for label, mode in SNAPSHOT_MODES:
+                    yield Setting(label, value=True, id=f"snap-mode-{mode}", compact=True)
         yield SelectableRichLog(id="snap-log", wrap=True, markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#snap-setup").border_title = " editions & modes "
         self.query_one("#snap-help", Static).update(
             "One start snapshots each checked edition, switching its database, then returns here. "
             "Strict, Golf, and Casual each fill Highest and Shortest."
         )
-        self.query_one("#snap-log").border_title = "snapshot"
+        log = self.query_one("#snap-log")
+        log.border_title = " sync "
+        log.border_subtitle = "space pauses  ·  q stops after this edition"
 
     def action_back(self) -> None:
         if self.busy:
@@ -637,17 +831,38 @@ class SnapshotScreen(RunKeys, Screen):
     @work(thread=True, exclusive=True)
     def snapshot_worker(self, editions: tuple[str, ...], modes: tuple[str, ...]) -> None:
         log = self.query_one("#snap-log", RichLog)
+        live = {"lines": 0}
 
         def write(message: str) -> None:
             activity.log("snapshot", message)
 
             def paint() -> None:
-                from ..site.snapshot import rule_title
+                from ..site.snapshot import is_progress, parse_progress, rule_title
 
-                log.write(snapshot_line(message))
+                rendered = snapshot_line(message)
                 title = rule_title(message)
+                closes = bool(title) and (" · done · " in title or title.endswith(" · failed"))
+                if is_progress(message) and live["lines"]:
+                    live["lines"] = log.replace_tail(rendered, live["lines"], scroll_end=True)
+                elif closes and live["lines"]:
+                    log.replace_tail(rendered, live["lines"], scroll_end=True)
+                    live["lines"] = 0
+                else:
+                    before = len(log.lines)
+                    log.write(rendered)
+                    live["lines"] = len(log.lines) - before if is_progress(message) else 0
                 if title:
-                    log.border_title = title
+                    log.border_title = " sync " if "edition" in title else f" {title} "
+                parsed = parse_progress(message)
+                if parsed:
+                    failed = f"   {parsed['failed']} failed" if parsed["failed"] else ""
+                    log.border_subtitle = f"{parsed['pct']}%   {parsed['count']}   {parsed['elapsed']}{failed}"
+                elif title and " · done · " in title:
+                    log.border_subtitle = title.split(" · done · ", 1)[1]
+                elif title and title.endswith(" · failed"):
+                    log.border_subtitle = "failed"
+                elif title:
+                    log.border_subtitle = "space pauses  ·  q stops after this edition"
 
             self.app.call_from_thread(paint)
 

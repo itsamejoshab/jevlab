@@ -132,6 +132,48 @@ def strict_lines(slug: str, *, kind: str, goal: str) -> list[dict]:
     return rows
 
 
+def aim_phrases(lines: list[dict], impacts: dict[str, float], leader_p: float | None) -> list[str]:
+    """Unlike Strict lines to aim from, strongest first.
+
+    A line qualifies when its score is above the emoji leader. Lines that share a load-bearing word are
+    skipped. Fewer than three qualifiers are filled from the top of the vault, with the same overlap rule.
+    An empty emoji board keeps only the top three.
+    """
+    ordered = [str(line.get("phrase") or "") for line in lines if str(line.get("phrase") or "")]
+    pool: list[str] = []
+    if leader_p is not None:
+        for line in lines:
+            phrase = str(line.get("phrase") or "")
+            if phrase and float(line.get("p_mean") or 0.0) > leader_p:
+                pool.append(phrase)
+    chosen = _unlike(pool, impacts)
+    if leader_p is not None and len(chosen) >= 3:
+        return chosen
+    for phrase in ordered:
+        if phrase in chosen:
+            continue
+        if _fits(phrase, chosen, impacts):
+            chosen.append(phrase)
+        if len(chosen) >= 3:
+            break
+    return chosen
+
+
+def _unlike(phrases: list[str], impacts: dict[str, float]) -> list[str]:
+    chosen: list[str] = []
+    for phrase in phrases:
+        if _fits(phrase, chosen, impacts):
+            chosen.append(phrase)
+    return chosen
+
+
+def _fits(phrase: str, chosen: list[str], impacts: dict[str, float]) -> bool:
+    words = set(bearing(phrase, impacts))
+    if not words:
+        return False
+    return all(words.isdisjoint(bearing(other, impacts)) for other in chosen)
+
+
 def projections(
     lines: list[dict],
     impacts: dict[str, float],

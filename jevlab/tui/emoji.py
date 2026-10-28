@@ -189,8 +189,8 @@ class EmojiSetupScreen(RunKeys, Screen):
         self.query_one("#emoji-help", Static).update(
             "All, None, Not leading, Empty, and Target player choose the questions. "
             "Win mode, when on, saves a WIN for publish and moves to the next question. "
-            "Patience is how many climb passes may fail to raise the score before the question ends. "
-            "Go opens the lab: project, singles, climb, then compact. "
+            "Patience counts climb passes that do not raise the score. The question continues until the budget is spent, or a one-glyph line rounds to 1.00. "
+            "Go opens the lab: project, singles, climb, then after patience an order pass and a beam, then compact. "
             "Space pauses and s stops, after the current oracle call."
         )
 

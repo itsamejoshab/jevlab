@@ -563,10 +563,10 @@ def test_snapshot_switches_each_edition_then_returns(monkeypatch):
         ("on", "jev"),
     ]
     rules = [item[1] for item in seen if item[0] == "log"]
-    assert rules[0] == "──────────── snapshot · 2 editions · Strict ────────────"
-    assert "──────────── 1/2 · Kev ────────────" in rules
-    assert "──────────── 2/2 · Laya ────────────" in rules
-    assert rules[-1] == "──────────── back to Jev ────────────"
+    assert rules[0] == "SYNC 2 editions · Strict"
+    assert "▸ 1/2 · Kev" in rules
+    assert "▸ 2/2 · Laya" in rules
+    assert rules[-1] == "↩ back to Jev"
 
 
 def test_snapshot_log_marks_a_failed_edition_and_continues(monkeypatch):
@@ -588,15 +588,15 @@ def test_snapshot_log_marks_a_failed_edition_and_continues(monkeypatch):
     monkeypatch.setattr("jevlab.site.snapshot.take_snapshot", take)
     pickers.run_snapshots(("kev", "laya"), ("golf", "word_chain"), lambda message: seen.append(message))
 
-    assert seen[0] == "──────────── snapshot · 2 editions · Golf, Casual ────────────"
-    assert "──────────── 1/2 · Kev · failed ────────────" in seen
+    assert seen[0] == "SYNC 2 editions · Golf, Casual"
+    assert "✗ 1/2 · Kev · failed" in seen
     assert any("menu down" in message for message in seen)
     assert "body 2/2" in seen
-    assert seen[-1] == "──────────── back to Jev ────────────"
+    assert seen[-1] == "↩ back to Jev"
 
 
 def test_snapshot_log_colors_section_rules():
-    from jevlab.site.snapshot import log_rule
+    from jevlab.site.snapshot import log_rule, progress_line
     from jevlab.tui.pickers import snapshot_line
 
     def styles(message: str) -> str:
@@ -606,9 +606,15 @@ def test_snapshot_log_colors_section_rules():
     assert "bold green" in styles(log_rule("1/3 · Jev · done · 4s"))
     assert "bold red" in styles(log_rule("1/3 · Jev · failed"))
     assert "bold yellow" in styles(log_rule("stopped · 1/3 finished"))
-    body = styles("  1/3 · Jev · 40/120 · 33% · 12s")
-    assert "dim" in body
-    assert "bold" not in body
+    running = styles(progress_line("jev", 40, 120, 12, section="1/3"))
+    assert "dim" in running
+    assert "bold cyan" in running
+    assert "bold green" in styles(progress_line("jev", 8, 8, 4, section="1/3"))
+    assert "bold yellow" in styles(progress_line("jev", 8, 8, 4, failed=2))
+    opened = snapshot_line(log_rule("snapshot · 9 editions · Strict, Golf"))
+    assert "SYNC" in opened.plain
+    assert "Strict" in opened.plain
+    assert "Golf" in opened.plain
 
 
 def _question(db: DB, slug: str, revision: str) -> None:

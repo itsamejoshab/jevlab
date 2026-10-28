@@ -1172,6 +1172,35 @@ def test_a_longer_line_tries_the_reversal_without_every_order(tmp_path, monkeypa
     assert len(ordered) <= 8
 
 
+def test_cached_table_keeps_one_copy_of_each_matrix(tmp_path, monkeypatch):
+    from jevlab.emoji import space
+
+    models = tmp_path / "models"
+    models.mkdir()
+    word_vecs = np.arange(6, dtype=np.float32).reshape(3, 2)
+    glyph_vecs = np.arange(4, dtype=np.float32).reshape(2, 2)
+    np.savez(
+        models / "emoji_space.npz",
+        word_keys=np.array(["alpha", "beta", "gamma"]),
+        glyph_keys=np.array(["🔥", "💧"]),
+        word_vecs=word_vecs,
+        glyph_vecs=glyph_vecs,
+    )
+    monkeypatch.setattr(space, "_TRIED", False)
+    monkeypatch.setattr(space, "_TABLE", None)
+    monkeypatch.setattr("jevlab.config.DATA", tmp_path)
+
+    table = space.cached_table()
+
+    words = [table.word_vector(word) for word in ("alpha", "beta", "gamma")]
+    glyphs = [table.glyph_vector(glyph) for glyph in ("🔥", "💧")]
+    assert words[0].base is words[1].base is words[2].base
+    assert words[0].base.nbytes == word_vecs.nbytes
+    assert glyphs[0].base is glyphs[1].base
+    assert glyphs[0].base.nbytes == glyph_vecs.nbytes
+    assert np.allclose(words[1], word_vecs[1])
+
+
 def test_singles_follow_the_strict_phrase_vector(tmp_path, monkeypatch):
     db = DB(tmp_path / "t.db")
     _question(db)

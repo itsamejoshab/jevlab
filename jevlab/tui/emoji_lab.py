@@ -25,8 +25,10 @@ from .pickers import RunKeys, fmt_leader
 
 ARMS = {
     "project": "First strings, from this edition's best Strict Highest lines.",
-    "singles": "One glyph at a time, from the question and from the usage probe.",
-    "climb": "Swap or append one glyph on the best string.",
+    "singles": "One glyph at a time, nearest this edition's best Strict line.",
+    "climb": "Append the glyph that fills the gap to that line.",
+    "beam": "After patience, strings whose glyphs sit nearest that line.",
+    "order": "After patience, other orders of the best line.",
     "compact": "Drop glyphs while the rounded score holds.",
 }
 
@@ -94,6 +96,7 @@ class EmojiLabScreen(RunKeys, Screen):
         self.arm = "-"
         self.calls = 0
         self.shown_budget = budget
+        self.win_marks: list[int] = []
         self.skip_question = False
         self.current_key = ""
         self.index = -1
@@ -220,9 +223,16 @@ class EmojiLabScreen(RunKeys, Screen):
         calls = self.calls
         budget = max(self.shown_budget, 1)
         filled = round(width * min(calls / budget, 1.0))
-        bar = Text()
         color = "green" if self.current_item() and self.current_item().win else "cyan"
-        bar.append("█" * filled, style=color)
+        wins = set()
+        if filled:
+            wins = {min(filled - 1, int(c / budget * width)) for c in self.win_marks}
+        bar = Text()
+        for col in range(filled):
+            if col in wins:
+                bar.append("✓", style=f"bold black on {color}")
+            else:
+                bar.append("█", style=color)
         bar.append("░" * (width - filled), style="grey30")
         bar.append("\n")
         state = (self.current_item().state if self.current_item() else "starting").upper()
@@ -321,6 +331,7 @@ class EmojiLabScreen(RunKeys, Screen):
         if state == "running":
             self.calls = 0
             self.stalls = 0
+            self.win_marks = []
             item.rows.clear()
             self.query_one("#feed", SelectableRichLog).clear()
             self.query_one("#table", DataTable).clear()
@@ -337,6 +348,8 @@ class EmojiLabScreen(RunKeys, Screen):
         if not rows:
             return
         item.rows.extend(rows)
+        if any(row.get("lead") for row in rows):
+            self.win_marks.append(self.calls)
         scores = [float(row["p"]) for row in rows]
         arm = str(info.get("arm") or "-")
         target = self.target_p(item)

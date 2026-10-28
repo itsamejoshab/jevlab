@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import traceback
-
 from rich.text import Text
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -14,10 +10,8 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Input, Label, SelectionList, Select, Static, Switch
 from textual.widgets.selection_list import Selection
 
-from .. import activity
 from ..boards import Standing, standings
 from ..db import DB
-from ..emoji.search import search
 from ..modes import GameMode
 from .chrome import EditionMark
 from .copyselect import SelectableRichLog
@@ -40,6 +34,7 @@ class EmojiSetupScreen(RunKeys, Screen):
     #target-player { width: 32; }
     #emoji-run { height: 3; }
     #budget { width: 16; min-width: 16; }
+    #patience { width: 8; min-width: 8; }
     #win-mode { margin: 0 1; }
     #emoji-run Button { margin-left: 1; min-width: 8; }
     """
@@ -86,6 +81,8 @@ class EmojiSetupScreen(RunKeys, Screen):
         with Horizontal(id="emoji-run"):
             yield Label("Budget")
             yield Input("40", id="budget", type="integer", max_length=6)
+            yield Label("Patience")
+            yield Input("6", id="patience", type="integer", max_length=3)
             yield Label("Win mode")
             yield Switch(True, id="win-mode")
             yield Button("GO", id="go", variant="primary")
@@ -192,8 +189,9 @@ class EmojiSetupScreen(RunKeys, Screen):
         self.query_one("#emoji-help", Static).update(
             "All, None, Not leading, Empty, and Target player choose the questions. "
             "Win mode, when on, saves a WIN for publish and moves to the next question. "
-            "On Highest, a stalled chain keeps climbing until the budget is used or the score reaches 1.00. "
-            "Space pauses and s stops, after the current oracle call. The log stays."
+            "Patience is how many climb passes may fail to raise the score before the question ends. "
+            "Go opens the lab: project, singles, climb, then compact. "
+            "Space pauses and s stops, after the current oracle call."
         )
 
     def on_checkbox_changed(self, event) -> None:
@@ -278,69 +276,15 @@ class EmojiSetupScreen(RunKeys, Screen):
         if budget < 1:
             self.notify("budget must be a whole number of at least 1", severity="error")
             return
+        try:
+            patience = int(self.query_one("#patience", Input).value)
+        except ValueError:
+            patience = 0
+        if patience < 1:
+            self.notify("patience must be a whole number of at least 1", severity="error")
+            return
         win_mode = self.query_one("#win-mode", Switch).value
         order = [row.key for row in self.rows if row.key in chosen and row.searchable]
-        log = self.query_one("#emoji-log", SelectableRichLog)
-        log.clear()
-        self.begin_run()
-        self.query_one("#go", Button).disabled = True
-        self.query_one("#stop", Button).disabled = False
-        self._run(order, budget, win_mode)
+        from .emoji_lab import EmojiLabScreen
 
-    def note(self, message: str) -> None:
-        for line in str(message).splitlines() or [""]:
-            activity.log("emoji", line)
-        log = self.query_one("#emoji-log", SelectableRichLog)
-        follow = log.is_vertical_scroll_end
-        log.write(message, scroll_end=follow)
-
-    @work(thread=True, exclusive=True)
-    def _run(self, order: list[str], budget: int, win_mode: bool) -> None:
-        def write(message: str) -> None:
-            self.app.call_from_thread(self.note, message)
-
-        write(f"emoji: {len(order)} question(s), budget {budget}")
-
-        def on_progress(info: dict) -> None:
-            self.app.call_from_thread(self.apply_progress, info)
-
-        try:
-            db = DB()
-            for slug in order:
-                if self.gate():
-                    write("stopped")
-                    break
-                write(f"\n== {slug}")
-                try:
-                    asyncio.run(
-                        search(
-                            db,
-                            slug,
-                            board=self.game_mode.board,
-                            budget=budget,
-                            log=write,
-                            halt=self.gate,
-                            progress=on_progress,
-                            win_mode=win_mode,
-                        )
-                    )
-                except Exception as error:
-                    write(f"{slug} failed: {type(error).__name__}: {error}")
-                    for line in traceback.format_exc().splitlines():
-                        write(f"  {line}")
-                    on_progress({"slug": slug, "state": "error"})
-        except Exception as error:
-            write(f"emoji search failed: {type(error).__name__}: {error}")
-            for line in traceback.format_exc().splitlines():
-                write(f"  {line}")
-
-        def finish() -> None:
-            stopped = self.stop_requested or self.leave_after
-            if self.finish_run():
-                return
-            self.query_one("#go", Button).disabled = False
-            self.query_one("#stop", Button).disabled = True
-            if not stopped:
-                self.notify(f"emoji search finished, {len(order)} question(s)")
-
-        self.app.call_from_thread(finish)
+        self.app.push_screen(EmojiLabScreen(order, budget, win_mode, self.game_mode, patience))

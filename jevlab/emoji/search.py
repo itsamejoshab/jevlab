@@ -1,24 +1,33 @@
-"""Emoji search: rank locally, spend a capped oracle budget, vault a winner."""
+"""Emoji search: project, singles, climb, compact. A capped oracle budget, then a vaulted winner."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
+from ..config import DATA
 from ..db import DB
 from ..modes import EMOJI, HIGH_SCORES
 from ..objective import board_leader, logit, objective_for, site_round
 from ..oracle import Oracle, Score
-from .learn import Model, atom_vectors, load_model, observe, question_vector
+from .learn import Model, _local_embed, atom_vectors, load_model, observe, question_vector
+from .lexicon import Index
+from .project import bearing, glyph_for, projections, strict_impacts, strict_lines
 from .rank import Atom, shortlist
-from .rules import ZWJ, RuleError, check_word
+from .rules import ZWJ, RuleError, check_phrase, check_word
+from .usage import usage_glyphs, usage_problem
 
 DEFAULT_BUDGET = 40
-SHORTLIST = 24
-MAX_CHAIN = 6
-CONFIRM = 3
+RANK_K = 24
+SINGLES_CAP = 12
+PROJECT_CAP = 3
+COMPACT_CAP = 12
+CLIMB_TRIALS = 8
+CLIMB_WORDS = 12
 CATALOG = Path(__file__).with_name("catalog.json")
+_USAGE_LOGGED = False
 
 
 def load_catalog(path: Path | None = None) -> list[Atom]:
@@ -35,6 +44,74 @@ def _impacts(db: DB, slug: str) -> dict[str, float]:
     return found
 
 
+def dead_path() -> Path:
+    return DATA / "models" / "emoji_dead.json"
+
+
+def load_dead() -> dict:
+    """Glyphs that have been single-scored often and never moved a probability. A bad file is empty."""
+    try:
+        raw = json.loads(dead_path().read_text())
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def is_dead(glyph: str, table: dict) -> bool:
+    row = table.get(glyph)
+    if not isinstance(row, dict):
+        return False
+    try:
+        count = int(row.get("n") or 0)
+        max_p = float(row.get("max_p") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return count >= 3 and max_p < 0.20
+
+
+def record_singles(scored: dict[str, float]) -> None:
+    """Remember single-glyph scores. Tests skip the write so a run cannot mark the real catalog dead."""
+    if not scored or os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    table = load_dead()
+    for glyph, p in scored.items():
+        row = table.get(glyph) if isinstance(table.get(glyph), dict) else {}
+        try:
+            count = int(row.get("n") or 0)
+            max_p = float(row.get("max_p") or 0.0)
+        except (TypeError, ValueError):
+            count, max_p = 0, 0.0
+        table[glyph] = {"n": count + 1, "max_p": max(max_p, float(p))}
+    path = dead_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(table))
+    except OSError:
+        return
+
+
+def collect_usage(phrase: str, index: Index, embed: bool, usage, log) -> list[Atom]:
+    """Injected probe, else the cached BERTweet probe when embeddings are on. A failure is no atoms."""
+    global _USAGE_LOGGED
+    if usage is not None:
+        try:
+            return [atom for atom in usage(phrase, index) if isinstance(atom, Atom)]
+        except Exception:
+            return []
+    if not embed or not phrase:
+        return []
+    try:
+        glyphs = usage_glyphs(phrase, index)
+        problem = usage_problem()
+    except Exception:
+        glyphs = []
+        problem = "model not cached"
+    if problem and not _USAGE_LOGGED:
+        log("usage: model not cached")
+        _USAGE_LOGGED = True
+    return glyphs
+
+
 async def search(
     db: DB,
     slug: str,
@@ -48,13 +125,17 @@ async def search(
     halt=None,
     progress=None,
     win_mode: bool = False,
+    usage=None,
+    patience: int = 6,
 ) -> str | None:
-    """Score a short ZWJ chain for one question. Returns the vaulted phrase, or None.
+    """Project, then singles, climb, and compact. Returns the vaulted phrase, or None.
 
     `score(phrase, n)` is an async callable returning an oracle Score. The live oracle is used when it is omitted.
-    `embed=False` keeps the run on name overlap and snapshot impacts, with no local embedding.
-    `progress` is called with the question's running best: score, phrase, and whether it wins.
+    `embed=False` keeps the run on name overlap and snapshot impacts, with no local embedding and no BERTweet.
+    `usage(phrase, index)` supplies probe atoms. The cached model is used when it is omitted and `embed` is on.
+    `progress` is called with the question's running best, the current arm, and one event per scored batch.
     `win_mode` saves a WIN for publish and moves on instead of spending the rest of the budget.
+    `patience` is how many climb passes may fail to raise the score before the question ends.
     """
     question = db.question(slug)
 
@@ -79,14 +160,42 @@ async def search(
             async def live(phrase: str, n: int = 1) -> Score:
                 return await oracle.score_one(phrase, n)
 
-            return await _search(db, question, board, budget, log, live, catalog, embed, halt, progress, win_mode)
+            return await _search(
+                db,
+                question,
+                board,
+                budget,
+                log,
+                live,
+                catalog,
+                embed,
+                halt,
+                progress,
+                win_mode,
+                usage,
+                patience,
+            )
         finally:
             await oracle.close()
-    return await _search(db, question, board, budget, log, score, catalog, embed, halt, progress, win_mode)
+    return await _search(
+        db, question, board, budget, log, score, catalog, embed, halt, progress, win_mode, usage, patience
+    )
 
 
 async def _search(
-    db, question, board, budget, log, score, catalog, embed, halt=None, progress=None, win_mode: bool = False
+    db,
+    question,
+    board,
+    budget,
+    log,
+    score,
+    catalog,
+    embed,
+    halt=None,
+    progress=None,
+    win_mode: bool = False,
+    usage=None,
+    patience: int = 6,
 ) -> str | None:
     from .. import vault
 
@@ -94,13 +203,31 @@ async def _search(
     objective = objective_for(question, unit="word", board=board)
     leader = board_leader(db.board(slug, EMOJI, board), db.me(), board=board)
     title = question.get("title") or slug
+    kind = question.get("kind") or "noul"
+    goal = question.get("goal") or "yes"
     best_phrase: str | None = None
     best: Score | None = None
+    arm = "project"
+    single_ps: dict[str, float] = {}
+    used = 0
+    stalls = 0
+    patience = max(1, int(patience))
 
     def report(state: str) -> None:
         if progress is None:
             return
-        info = {"slug": slug, "state": state, "best": None, "win": False, "phrase": None}
+        info = {
+            "slug": slug,
+            "state": state,
+            "best": None,
+            "win": False,
+            "phrase": None,
+            "arm": arm,
+            "calls": used,
+            "budget": budget,
+            "stalls": stalls,
+            "patience": patience,
+        }
         if best_phrase is not None and best is not None:
             p = objective.p(best)
             units = objective.units(best_phrase)
@@ -113,6 +240,11 @@ async def _search(
         log(f"  {slug}: leader already holds the ceiling in one emoji")
         report("skipped")
         return None
+    if not catalog:
+        log(f"  {slug}: empty catalog")
+        report("skipped")
+        return None
+
     qvec = None
     name_vecs = None
     model: Model | None = None
@@ -124,13 +256,38 @@ async def _search(
         log(f"  {slug}: stopped")
         report("stopped")
         return None
-    picks = shortlist(title, catalog, _impacts(db, slug), qvec, name_vecs, model, k=len(catalog))
-    if not picks:
-        log(f"  {slug}: empty catalog")
-        report("skipped")
-        return None
-    used = 0
+
+    index = Index.build(catalog)
+    impacts = strict_impacts(db, slug)
+    dead = load_dead()
+    vec_cache: dict[str, object] = {}
+
+    def word_vec(word: str):
+        if not embed:
+            return None
+        if word not in vec_cache:
+            try:
+                vec_cache[word] = _local_embed([word])[0]
+            except Exception:
+                vec_cache[word] = None
+        return vec_cache[word]
+
+    lines = strict_lines(slug, kind=kind, goal=goal)
+    source_phrases = [str(line.get("phrase") or "") for line in lines if line.get("phrase")]
+    usage_phrase = source_phrases[0] if source_phrases else ""
+    usage_atoms = collect_usage(usage_phrase, index, embed, usage, log) if usage_phrase or usage is not None else []
+    glyph_lines = projections(
+        lines,
+        impacts,
+        index,
+        name_vecs if embed else None,
+        word_vec if embed else None,
+    )
+    ranked = shortlist(title, catalog, _impacts(db, slug), qvec, name_vecs, model, k=RANK_K)
+    confirm_n = min(3, budget // 10)
     halted = False
+    scored: dict[str, Score] = {}
+    batch: list[dict] = []
 
     def stopping() -> bool:
         nonlocal halted
@@ -140,16 +297,36 @@ async def _search(
             halted = True
         return halted
 
-    async def sample(phrase: str, n: int) -> Score | None:
+    async def sample(phrase: str, n: int, *, reserve: bool = True) -> Score | None:
         nonlocal used
-        if stopping() or used + n > budget:
+        cap = budget - confirm_n if reserve else budget
+        if stopping() or used + n > cap or used + n > budget:
             return None
         used += n
         got = await score(phrase, n)
         if qvec is not None:
-            pieces = phrase.split(ZWJ)
-            observe(qvec, pieces, logit(objective.p(got)), name_vecs)
+            observe(qvec, phrase.split(), logit(objective.p(got)), name_vecs)
         return got
+
+    advanced = False
+
+    def consider(phrase: str, got: Score) -> None:
+        nonlocal best_phrase, best, stalls, advanced
+        units = objective.units(phrase)
+        if best is None or best_phrase is None:
+            best_phrase, best = phrase, got
+            report("running")
+            return
+        old_units = objective.units(best_phrase)
+        old_key = objective.score_key(best, old_units)
+        new_key = objective.score_key(got, units)
+        higher = units == old_units and objective.p(got) > objective.p(best)
+        if new_key > old_key or higher:
+            best_phrase, best = phrase, got
+            if arm == "climb":
+                stalls = 0
+                advanced = True
+            report("running")
 
     def claim(phrase: str, got: Score) -> str | None:
         """A WIN is saved for publish and ends the question. The search then moves on."""
@@ -175,162 +352,358 @@ async def _search(
             origin="emoji",
             board=board,
         )
-        report("running")
-        report("done")
         return phrase
 
-    ranked = picks
-    pool: list[Atom] = []
-    cursor = 0
-    singles: dict[str, Score] = {}
-    grown: set[str] = set()
-    scored: dict[str, Score] = {}
+    def flush() -> None:
+        if progress is None or not batch:
+            batch.clear()
+            return
+        info = {
+            "slug": slug,
+            "state": "batch",
+            "best": None,
+            "win": False,
+            "phrase": None,
+            "arm": arm,
+            "calls": used,
+            "budget": budget,
+            "stalls": stalls,
+            "patience": patience,
+            "scored": list(batch),
+        }
+        if best_phrase is not None and best is not None:
+            p = objective.p(best)
+            units = objective.units(best_phrase)
+            info["best"] = f"{p:.3f}/{units}w"
+            info["win"] = objective.wins(best, units, leader)
+            info["phrase"] = best_phrase
+        progress(info)
+        batch.clear()
 
-    async def pull(count: int) -> str | None:
-        """Score the next ranked emoji. A returned phrase is a win-mode save."""
-        nonlocal cursor, best_phrase, best
-        batch = ranked[cursor : cursor + count]
-        for atom in batch:
-            got = await sample(atom.text, 1)
+    async def score_line(text: str, *, as_single: bool = False) -> tuple[Score | None, str | None]:
+        try:
+            phrase = check_phrase(text)
+        except RuleError:
+            return None, None
+        cached = phrase in scored
+        if cached:
+            got = scored[phrase]
+        else:
+            got = await sample(phrase, 1)
             if got is None:
-                return None
-            cursor += 1
-            pool.append(atom)
-            singles[atom.text] = got
-            scored[atom.text] = got
-            if best is None or objective.p(got) > objective.p(best):
-                best_phrase, best = atom.text, got
-                report("running")
-            log(f"  {objective.p(got):.3f} {atom.text} {atom.name}")
-            saved = claim(atom.text, got)
-            if saved is not None:
-                return saved
-        return None
+                return None, None
+            scored[phrase] = got
+        p = objective.p(got)
+        units = objective.units(phrase)
+        if as_single and units == 1:
+            single_ps[phrase] = p
+        if not cached:
+            batch.append(
+                {
+                    "phrase": phrase,
+                    "p": p,
+                    "units": units,
+                    "arm": arm,
+                    "win": objective.wins(got, units, leader),
+                }
+            )
+            log(f"  {arm} {p:.3f} {phrase}")
+        consider(phrase, got)
+        return got, claim(phrase, got)
 
-    async def grow(root: str) -> str | None:
-        """Extend one emoji while the rounded score rises. Highest keeps the global best."""
-        nonlocal best_phrase, best
-        phrase = root
-        while len(phrase.split(ZWJ)) < MAX_CHAIN:
-            current = scored.get(phrase)
-            if current is None:
-                break
-            base = site_round(objective.p(current))
-            improved: str | None = None
-            improved_score: Score | None = None
-            present = set(phrase.split(ZWJ))
-            for atom in pool:
-                if atom.text in present:
-                    continue
-                try:
-                    trial = check_word(phrase + ZWJ + atom.text)
-                except RuleError:
-                    continue
-                got = scored.get(trial)
-                if got is None:
-                    got = await sample(trial, 1)
-                    if got is None:
-                        return None
-                    scored[trial] = got
-                    log(f"  {objective.p(got):.3f} {trial}")
-                    saved = claim(trial, got)
-                    if saved is not None:
-                        return saved
-                if site_round(objective.p(got)) > base and (
-                    improved_score is None or objective.p(got) > objective.p(improved_score)
-                ):
-                    improved, improved_score = trial, got
-            if improved is None or improved_score is None:
-                break
-            phrase = improved
-            if best is None or objective.p(improved_score) > objective.p(best):
-                best_phrase, best = improved, improved_score
-                report("running")
-        return None
-
-    log(f"{slug}: {min(SHORTLIST, len(ranked))} emoji to start, budget {budget}")
-    report("running")
-    saved = await pull(SHORTLIST)
-    if saved is not None:
+    def finish_win(saved: str) -> str:
+        flush()
+        report("running")
+        report("done")
         return saved
-    if best_phrase and not halted and used < budget:
-        grown.add(best_phrase)
-        saved = await grow(best_phrase)
-        if saved is not None:
-            return saved
 
-    # Highest keeps a higher score even when the first chain stalls. The budget is the limit.
-    # A rounded 1.00 in one word cannot be beaten, so the climb stops there.
-    while (
-        not objective.shortest
-        and not halted
-        and used < budget
-        and not (best is not None and site_round(objective.p(best)) >= 1.0)
-    ):
-        pending = [text for text in singles if text not in grown]
-        pending.sort(key=lambda text: objective.p(singles[text]), reverse=True)
-        if pending:
-            root = pending[0]
-            grown.add(root)
-            held = objective.p(best) if best is not None else 0.0
-            log(f"  {slug}: {held:.3f} held, growing {root}")
-            saved = await grow(root)
-            if saved is not None:
-                return saved
-            continue
-        if cursor >= len(ranked):
-            break
-        held = objective.p(best) if best is not None else 0.0
-        log(f"  {slug}: {held:.3f} held, scoring the next emoji")
-        before = cursor
-        saved = await pull(SHORTLIST)
-        if saved is not None:
-            return saved
-        if cursor == before:
-            break
-        grown.clear()
+    try:
+        log(f"{slug}: project, singles, climb, compact, budget {budget}")
+        report("running")
 
-    if halted:
-        log(f"  {slug}: stopped")
-        report("stopped")
-        return None
-    if best_phrase is None or best is None:
-        log(f"  {slug}: budget {budget} produced no score")
+        arm = "project"
+        for text in glyph_lines[:PROJECT_CAP]:
+            got, saved = await score_line(text)
+            if saved:
+                return finish_win(saved)
+            if got is None:
+                break
+        flush()
+        if halted:
+            log(f"  {slug}: stopped")
+            report("stopped")
+            return None
+
+        arm = "singles"
+        single_count = 0
+        single_queue: list[Atom] = []
+        seen_single: set[str] = set()
+        for atom in list(ranked) + list(usage_atoms):
+            if atom.text in seen_single or is_dead(atom.text, dead):
+                continue
+            seen_single.add(atom.text)
+            single_queue.append(atom)
+        for atom in single_queue:
+            if single_count >= SINGLES_CAP:
+                break
+            if atom.text in scored:
+                continue
+            got, saved = await score_line(atom.text, as_single=True)
+            if saved:
+                return finish_win(saved)
+            if got is None:
+                break
+            single_count += 1
+        flush()
+        if halted:
+            log(f"  {slug}: stopped")
+            report("stopped")
+            return None
+
+        arm = "climb"
+        cursor = best_phrase
+        cursor_score = best
+        repeat_used = False
+
+        def candidate_atoms(current: str) -> list[Atom]:
+            present = set(current.split())
+            ordered: list[Atom] = []
+            seen = set(present)
+
+            def add(atom: Atom | None) -> None:
+                if atom is None or atom.text in seen or is_dead(atom.text, dead):
+                    return
+                seen.add(atom.text)
+                ordered.append(atom)
+
+            for english in source_phrases:
+                for word in bearing(english, impacts):
+                    add(glyph_for(word, index, name_vecs if embed else None, word_vec(word) if embed else None))
+            for atom in usage_atoms:
+                add(atom)
+            for atom in ranked:
+                add(atom)
+            # Win mode off spends the budget. The shortlist is only the first handful of glyphs.
+            if not win_mode:
+                for atom in catalog:
+                    add(atom)
+            return ordered
+
+        def climb_trials(current: str, pool: list[Atom], allow_repeat: bool, skip: set[str]) -> list[str]:
+            words = current.split()
+            trials: list[str] = []
+            seen = {current}
+
+            def add(text: str) -> bool:
+                if len(trials) >= CLIMB_TRIALS:
+                    return False
+                try:
+                    phrase = check_phrase(text)
+                except RuleError:
+                    return False
+                if phrase in seen or phrase in skip:
+                    return False
+                seen.add(phrase)
+                trials.append(phrase)
+                return True
+
+            if allow_repeat and single_ps and len(words) < CLIMB_WORDS:
+                glyph = max(single_ps, key=lambda item: single_ps[item])
+                if words.count(glyph) < 2:
+                    add(" ".join(words + [glyph]))
+            if len(words) < CLIMB_WORDS:
+                added = 0
+                for atom in pool:
+                    if added >= 4 or len(trials) >= CLIMB_TRIALS:
+                        break
+                    if add(" ".join(words + [atom.text])):
+                        added += 1
+            for index_at in range(len(words) - 1, -1, -1):
+                for atom in pool:
+                    if len(trials) >= CLIMB_TRIALS:
+                        return trials
+                    new = words[:]
+                    new[index_at] = atom.text
+                    add(" ".join(new))
+            return trials
+
+        skip: set[str] = set()
+        while cursor and cursor_score is not None and not halted:
+            if objective.at_ceiling(objective.p(cursor_score)):
+                break
+            trials = climb_trials(cursor, candidate_atoms(cursor), not repeat_used, skip)
+            repeat_used = True
+            if not trials:
+                break
+            skip.update(trials)
+            advanced = False
+            stopped = False
+            fresh = 0
+            for trial in trials:
+                before = used
+                got, saved = await score_line(trial)
+                if used > before:
+                    fresh += 1
+                if saved:
+                    return finish_win(saved)
+                if got is None:
+                    stopped = True
+                    break
+            flush()
+            if stopped or halted:
+                break
+            if advanced and best_phrase is not None and best is not None:
+                log(f"  patience 0")
+                report("running")
+                cursor, cursor_score = best_phrase, best
+                skip.clear()
+                continue
+            if fresh == 0:
+                break
+            stalls += 1
+            report("running")
+            if stalls >= patience:
+                log(f"  patience {stalls}/{patience}")
+                break
+        if halted:
+            log(f"  {slug}: stopped")
+            report("stopped")
+            return None
+
+        arm = "compact"
+
+        def worth_cutting() -> bool:
+            return best is not None and best_phrase is not None and objective.units(best_phrase) >= 2
+
+        def holds(got: Score, root_round: float) -> bool:
+            if objective.shortest:
+                return objective.qualifies(objective.p(got)) or objective.reachable(got)
+            return site_round(objective.p(got)) >= root_round - 1e-9
+
+        if worth_cutting() and best_phrase is not None and best is not None:
+            log("  compact")
+            root = best_phrase
+            root_round = site_round(objective.p(best))
+            compact_calls = 0
+            while compact_calls < COMPACT_CAP and objective.units(root) >= 2 and not halted:
+                words = root.split()
+                held: tuple[str, Score] | None = None
+
+                async def try_cut(text: str) -> str | None:
+                    """None keeps compacting. A phrase is a win. '' means the budget or a halt stopped the arm."""
+                    nonlocal compact_calls, held
+                    if compact_calls >= COMPACT_CAP or not text.strip():
+                        return None
+                    try:
+                        canon = check_phrase(text)
+                    except RuleError:
+                        return None
+                    fresh = canon not in scored
+                    got, saved = await score_line(canon)
+                    if saved:
+                        return saved
+                    if got is None:
+                        return ""
+                    if fresh:
+                        compact_calls += 1
+                    if holds(got, root_round) and (
+                        held is None
+                        or objective.units(canon) < objective.units(held[0])
+                        or (
+                            objective.units(canon) == objective.units(held[0])
+                            and objective.p(got) > objective.p(held[1])
+                        )
+                    ):
+                        held = (canon, got)
+                    return None
+
+                winner: str | None = None
+                for drop_at in range(len(words)):
+                    winner = await try_cut(" ".join(words[:drop_at] + words[drop_at + 1 :]))
+                    if winner is not None:
+                        break
+                if winner is not None:
+                    if winner:
+                        return finish_win(winner)
+                    break
+                if held is None and len(words) >= 3:
+                    for drop_at in range(len(words) - 1):
+                        winner = await try_cut(" ".join(words[:drop_at] + words[drop_at + 2 :]))
+                        if winner is not None:
+                            break
+                if winner is not None:
+                    if winner:
+                        return finish_win(winner)
+                    break
+                if held is None:
+                    break
+                root = held[0]
+            flush()
+            if (
+                not halted
+                and best_phrase is not None
+                and 2 <= objective.units(best_phrase) <= 4
+                and compact_calls < COMPACT_CAP
+                and best is not None
+                and holds(best, root_round)
+            ):
+                try:
+                    joined = check_word(ZWJ.join(best_phrase.split()))
+                except RuleError:
+                    joined = ""
+                if joined:
+                    got, saved = await score_line(joined)
+                    if saved:
+                        return finish_win(saved)
+                    if got is not None:
+                        compact_calls += 1
+            flush()
+        elif best_phrase is not None:
+            log("  compact skipped, one glyph")
+
+        if halted:
+            log(f"  {slug}: stopped")
+            report("stopped")
+            return None
+        if best_phrase is None or best is None:
+            log(f"  {slug}: budget {budget} produced no score")
+            report("done")
+            return None
+        if confirm_n and used + confirm_n <= budget:
+            confirmed = await sample(best_phrase, confirm_n, reserve=False)
+            if confirmed is not None:
+                best = confirmed
+        if halted:
+            log(f"  {slug}: stopped")
+            report("stopped")
+            return None
+        phrase = best_phrase
+        units = objective.units(phrase)
+        p = objective.p(best)
+        if not objective.beats(p, units, leader):
+            log(f"  {slug}: {p:.3f}/{units} does not beat the leader")
+            report("done")
+            return None
+        vault.save(
+            slug,
+            EMOJI,
+            phrase,
+            p_mean=p,
+            p_lcb=objective.p_lcb(best),
+            spread=best.spread,
+            n=best.n,
+            units=units,
+            leader=leader,
+            beats=True,
+            title=title,
+            origin="emoji",
+            board=board,
+        )
+        log(f"  vault {p:.3f}/{units} {phrase}")
         report("done")
-        return None
-    if used + CONFIRM <= budget:
-        confirmed = await sample(best_phrase, CONFIRM)
-        if confirmed is not None:
-            best = confirmed
-    if halted:
-        log(f"  {slug}: stopped")
-        report("stopped")
-        return None
-    phrase = best_phrase
-    units = objective.units(phrase)
-    p = objective.p(best)
-    if not objective.beats(p, units, leader):
-        log(f"  {slug}: {p:.3f}/{units} does not beat the leader")
-        report("done")
-        return None
-    vault.save(
-        slug,
-        EMOJI,
-        phrase,
-        p_mean=p,
-        p_lcb=objective.p_lcb(best),
-        spread=best.spread,
-        n=best.n,
-        units=units,
-        leader=leader,
-        beats=True,
-        title=title,
-        origin="emoji",
-        board=board,
-    )
-    log(f"  vault {p:.3f}/{units} {phrase}")
-    report("done")
-    return phrase
+        return phrase
+    finally:
+        record_singles(single_ps)
 
 
 def run_slugs(

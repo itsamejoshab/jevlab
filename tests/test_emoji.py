@@ -13,6 +13,8 @@ from jevlab import vault
 from jevlab.crosspost import picks
 from jevlab.db import DB
 from jevlab.emoji.learn import TRUST_RHO, Model, atom_vectors, fit
+from jevlab.emoji.lexicon import Index
+from jevlab.emoji.project import glyph_for, project_phrase, projections
 from jevlab.emoji.rank import Atom, shortlist
 from jevlab.emoji.rules import ZWJ, RuleError, check_phrase, check_word
 from jevlab.emoji.search import load_catalog, search
@@ -89,6 +91,12 @@ def test_atom_vectors_stores_an_embedding_matrix(tmp_path, monkeypatch):
     assert set(found) == {"🥣", "🚗"}
     again = atom_vectors([("🥣", "bowl"), ("🚗", "automobile")], embed=lambda _texts: np.zeros((0, 2)))
     assert np.allclose(again["🥣"], found["🥣"])
+
+
+@pytest.fixture(autouse=True)
+def _empty_edition_vault(tmp_path, monkeypatch):
+    """Search reads this edition's Strict vault. Tests must not see the real one."""
+    monkeypatch.setattr("jevlab.transfer.edition_vault", lambda _edition: tmp_path / "edition-vault")
 
 
 def _question(db: DB, slug: str = "cereal") -> None:
@@ -307,10 +315,65 @@ def test_search_moves_on_as_soon_as_a_line_wins(tmp_path, monkeypatch):
     assert calls == [bowl.text, spoon.text, car.text]
 
 
-def test_highest_keeps_climbing_after_the_first_chain_stalls(tmp_path, monkeypatch):
-    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+def _plant_strict(tmp_path, monkeypatch, phrase: str, p_mean: float = 0.8) -> None:
+    root = tmp_path / "vault"
+    monkeypatch.setattr(vault, "VAULT", root)
+    monkeypatch.setattr("jevlab.transfer.edition_vault", lambda _edition: root)
+    vault.save(
+        "cereal",
+        STRICT,
+        phrase,
+        p_mean=p_mean,
+        p_lcb=p_mean - 0.05,
+        spread=0.01,
+        n=3,
+        units=len(phrase.split()),
+        leader=None,
+        beats=True,
+        title="cereal",
+    )
+
+
+def test_projection_keeps_phrase_order_and_drops_a_stop():
+    index = Index.build(
+        [Atom("🚫", "no entry sign"), Atom("🥄", "spoon"), Atom("🚗", "car")]
+    )
+    text = project_phrase("never the spoon car", {"spoon": 0.5, "car": 0.4}, index)
+    assert text == "🚫 🥄 🚗"
+
+
+def test_cosine_below_the_floor_does_not_map():
+    index = Index.build([Atom("😀", "grinning face"), Atom("😁", "beaming face")])
+    names = {
+        "😀": np.array([1.0, 0.0, 0.0]),
+        "😁": np.array([0.0, 1.0, 0.0]),
+    }
+    assert glyph_for("mystery", index, names, np.array([0.0, 0.0, 1.0])) is None
+
+
+def test_second_projection_skips_a_matching_bearing_set():
+    index = Index.build([Atom("🚫", "no entry sign"), Atom("🥄", "spoon")])
+    lines = [{"phrase": "never spoon"}, {"phrase": "spoon never"}]
+    assert projections(lines, {"spoon": 1.0}, index) == ["🚫 🥄"]
+
+
+def test_project_scores_the_spaced_pair_and_vaults_it(tmp_path, monkeypatch):
     db = DB(tmp_path / "t.db")
     _question(db)
+    _plant_strict(tmp_path, monkeypatch, "spoon car")
+    db.execute(
+        "INSERT INTO word_impacts VALUES (?, ?, 0, ?)",
+        (
+            "cereal",
+            STRICT,
+            json.dumps(
+                [
+                    {"word": "spoon", "averageImpact": 0.4},
+                    {"word": "car", "averageImpact": 0.3},
+                ]
+            ),
+        ),
+    )
     db.execute(
         "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
         (
@@ -320,13 +383,14 @@ def test_highest_keeps_climbing_after_the_first_chain_stalls(tmp_path, monkeypat
             json.dumps([{"userId": "them", "name": "them", "probability": 0.6, "wordCount": 1}]),
         ),
     )
-    bowl, spoon, car = Atom("🥣", "bowl of cereal"), Atom("🥄", "spoon"), Atom("🚗", "car")
-    pair = check_word(spoon.text + ZWJ + car.text)
+    spoon, car = Atom("🥄", "spoon"), Atom("🚗", "car")
+    pair = f"{spoon.text} {car.text}"
+    joined = spoon.text + ZWJ + car.text
 
     def value(phrase: str) -> float:
         if phrase == pair:
             return 0.9
-        return {bowl.text: 0.5, spoon.text: 0.4, car.text: 0.2}.get(phrase, 0.3)
+        return 0.2
 
     calls: list[str] = []
 
@@ -341,15 +405,30 @@ def test_highest_keeps_climbing_after_the_first_chain_stalls(tmp_path, monkeypat
             budget=20,
             log=lambda _message: None,
             score=score,
-            catalog=[bowl, spoon, car],
+            catalog=[spoon, car],
             embed=False,
             win_mode=False,
         )
     )
     assert pair in calls
     assert phrase == pair
+    assert joined not in calls or value(joined) < 0.9
 
     calls.clear()
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            SHORTEST_YES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.8, "wordCount": 1}]),
+        ),
+    )
+
+    async def low(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
     asyncio.run(
         search(
             db,
@@ -357,13 +436,404 @@ def test_highest_keeps_climbing_after_the_first_chain_stalls(tmp_path, monkeypat
             board=SHORTEST_YES,
             budget=20,
             log=lambda _message: None,
-            score=score,
-            catalog=[bowl, spoon, car],
+            score=low,
+            catalog=[spoon, car],
             embed=False,
             win_mode=False,
         )
     )
-    assert pair not in calls
+    assert all(ZWJ not in phrase for phrase in calls)
+
+
+def test_usage_atom_joins_singles_and_a_raising_probe_adds_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.9, "wordCount": 1}]),
+        ),
+    )
+    bowl = Atom("🥣", "bowl")
+    fire = Atom("🔥", "fire")
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=10,
+            log=lambda _message: None,
+            score=score,
+            catalog=[bowl],
+            embed=False,
+            usage=lambda _phrase, _index: [fire],
+        )
+    )
+    assert fire.text in calls
+
+    calls.clear()
+
+    def boom(_phrase, _index):
+        raise RuntimeError("probe down")
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=10,
+            log=lambda _message: None,
+            score=score,
+            catalog=[bowl],
+            embed=False,
+            usage=boom,
+        )
+    )
+    assert bowl.text in calls
+    assert fire.text not in calls
+
+
+def test_usage_glyphs_are_empty_when_the_model_is_not_cached(monkeypatch):
+    from jevlab.emoji import usage
+
+    def missing():
+        usage._PROBLEM = "model not cached"
+        usage._BUNDLE = None
+        usage._TRIED = True
+        return None
+
+    monkeypatch.setattr(usage, "_load", missing)
+    found = usage.usage_glyphs("the soup is hot", Index.build([Atom("🔥", "fire")]))
+    assert found == []
+    assert usage.usage_problem() == "model not cached"
+
+
+def test_embed_false_does_not_load_an_embedder_or_bertweet(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("model loaded")
+
+    import sys
+
+    module = sys.modules["jevlab.emoji.search"]
+    monkeypatch.setattr(module, "_local_embed", boom)
+    monkeypatch.setattr(module, "question_vector", boom)
+    monkeypatch.setattr(module, "atom_vectors", boom)
+    monkeypatch.setattr(module, "load_model", boom)
+    monkeypatch.setattr(module, "usage_glyphs", boom)
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=1,
+            log=lambda _message: None,
+            score=score,
+            catalog=[Atom("🥣", "bowl")],
+            embed=False,
+        )
+    )
+
+
+def test_compact_drops_a_glyph_whose_round_holds(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_strict(tmp_path, monkeypatch, "alpha beta gamma")
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.7, "wordCount": 1}]),
+        ),
+    )
+    alpha, beta, gamma = Atom("😀", "alpha"), Atom("😁", "beta"), Atom("😂", "gamma")
+    full = f"{alpha.text} {beta.text} {gamma.text}"
+    kept = f"{alpha.text} {gamma.text}"
+    fallen = f"{alpha.text} {beta.text}"
+
+    def value(phrase: str) -> float:
+        if phrase in {full, kept}:
+            return 0.80
+        return 0.40
+
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [value(phrase)] * n)
+
+    phrase = asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=40,
+            log=lambda _message: None,
+            score=score,
+            catalog=[alpha, beta, gamma],
+            embed=False,
+        )
+    )
+    assert kept in calls
+    assert fallen in calls
+    assert phrase == kept
+
+
+def test_call_count_never_exceeds_the_budget(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_strict(tmp_path, monkeypatch, "spoon automobile")
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.9, "wordCount": 1}]),
+        ),
+    )
+    catalog = [Atom("🥄", "spoon"), Atom("🚗", "automobile"), Atom("🥣", "cereal bowl")]
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=5,
+            log=lambda _message: None,
+            score=score,
+            catalog=catalog,
+            embed=False,
+        )
+    )
+    assert calls
+    assert len(calls) <= 5
+
+
+def test_patience_ends_the_question_after_that_many_stalls(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.9, "wordCount": 1}]),
+        ),
+    )
+    catalog = [Atom(f"{index}\u20e3", f"digit {index}") for index in range(30)]
+    notes: list[str] = []
+    calls: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        calls.append(phrase)
+        return Score(phrase, [0.2] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=40,
+            log=notes.append,
+            score=score,
+            catalog=catalog,
+            embed=False,
+            patience=1,
+        )
+    )
+    one = len(calls)
+    assert one <= 40
+    assert any("patience 1/1" in line for line in notes)
+
+    calls.clear()
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=40,
+            log=lambda _message: None,
+            score=score,
+            catalog=catalog,
+            embed=False,
+            patience=2,
+        )
+    )
+    assert len(calls) > one
+    assert len(calls) <= 40
+
+
+def test_a_better_top_score_resets_patience(tmp_path, monkeypatch):
+    monkeypatch.setattr(vault, "VAULT", tmp_path / "vault")
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    db.execute(
+        "INSERT INTO boards VALUES (?, ?, ?, 0, ?)",
+        (
+            "cereal",
+            EMOJI,
+            HIGH_SCORES,
+            json.dumps([{"userId": "them", "name": "them", "probability": 0.9, "wordCount": 1}]),
+        ),
+    )
+    catalog = [Atom(f"{index}\u20e3", f"digit {index}") for index in range(30)]
+    notes: list[str] = []
+    two_word = 0
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        nonlocal two_word
+        if len(phrase.split()) != 2:
+            return Score(phrase, [0.2] * n)
+        two_word += 1
+        # The first pair becomes the top line. A later pair is only 0.004 higher,
+        # still the same rounded score, and that has to zero patience again.
+        return Score(phrase, [0.304 if two_word == 8 else 0.3] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=80,
+            log=notes.append,
+            score=score,
+            catalog=catalog,
+            embed=False,
+            patience=2,
+        )
+    )
+    resets = [index for index, line in enumerate(notes) if line.strip() == "patience 0"]
+    ended = next(index for index, line in enumerate(notes) if "patience 2/2" in line)
+    assert len(resets) == 2
+    assert resets[-1] < ended
+
+
+def test_compact_runs_after_patience_on_a_two_glyph_line(tmp_path, monkeypatch):
+    db = DB(tmp_path / "t.db")
+    _question(db)
+    _plant_strict(tmp_path, monkeypatch, "alpha beta")
+    alpha, beta = Atom("😀", "alpha"), Atom("😁", "beta")
+    pair = f"{alpha.text} {beta.text}"
+    notes: list[str] = []
+
+    async def score(phrase: str, n: int = 1) -> Score:
+        return Score(phrase, [0.80 if phrase == pair else 0.20] * n)
+
+    asyncio.run(
+        search(
+            db,
+            "cereal",
+            budget=40,
+            log=notes.append,
+            score=score,
+            catalog=[alpha, beta, Atom("😂", "gamma")],
+            embed=False,
+            patience=1,
+        )
+    )
+    assert any(line.strip() == "compact" for line in notes)
+    assert any("patience 1/1" in line for line in notes)
+
+
+def test_emoji_go_opens_the_lab(monkeypatch):
+    from textual.app import App, ComposeResult
+
+    from jevlab.boards import Standing
+    from jevlab.modes import EMOJI_HIGHEST
+    from jevlab.objective import Leader
+    from jevlab.tui.emoji import EmojiSetupScreen
+    from jevlab.tui.emoji_lab import EmojiLabScreen
+
+    rows = [
+        Standing("cereal", "Is cereal a soup", "noul", "yes", Leader(0.4, 3, "Ada"), None, None, False, False),
+    ]
+    monkeypatch.setattr("jevlab.tui.emoji.standings", lambda *args, **kwargs: rows)
+    monkeypatch.setattr("jevlab.tui.emoji.DB", lambda: None)
+    monkeypatch.setattr("jevlab.tui.emoji_lab.DB", lambda: object())
+    monkeypatch.setattr("jevlab.tui.emoji_lab.standings", lambda *args, **kwargs: [])
+
+    async def fake_search(*_args, **kwargs):
+        progress = kwargs["progress"]
+        progress(
+            {
+                "slug": "cereal",
+                "state": "batch",
+                "arm": "project",
+                "calls": 1,
+                "budget": kwargs["budget"],
+                "scored": [{"phrase": "🥣", "p": 0.8, "units": 1, "arm": "project", "win": True}],
+                "best": "0.800/1w",
+                "win": True,
+                "phrase": "🥣",
+            }
+        )
+        progress(
+            {
+                "slug": "cereal",
+                "state": "done",
+                "arm": "project",
+                "calls": 1,
+                "budget": kwargs["budget"],
+                "best": "0.800/1w",
+                "win": True,
+                "phrase": "🥣",
+            }
+        )
+        return "🥣"
+
+    monkeypatch.setattr("jevlab.tui.emoji_lab.search", fake_search)
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            await pilot.click("#go")
+            for _ in range(40):
+                await pilot.pause()
+                if isinstance(app.screen, EmojiLabScreen) and not app.screen.busy:
+                    break
+            screen = app.screen
+            assert isinstance(screen, EmojiLabScreen)
+            assert screen.query_one("#feed").border_title == "now trying"
+            assert "project" in str(screen.query_one("#insight").content)
+            assert screen.query_one("#table").row_count == 1
+            win_cell = screen.query_one("#table").get_row_at(0)[4]
+            assert win_cell.plain == "WIN"
+            assert "green" in repr(win_cell)
+            assert "WIN" in str(screen.query_one("#lab-header").content)
+            assert "WIN" in str(screen.query_one("#queue").content)
+            assert "green" in repr(screen.query_one("#queue").content)
+            await pilot.press("q")
+            await pilot.pause()
+            assert isinstance(app.screen, EmojiSetupScreen)
+
+    class _App(App):
+        def on_mount(self) -> None:
+            self.push_screen(EmojiSetupScreen(EMOJI_HIGHEST))
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    asyncio.run(check())
 
 
 def test_publish_splits_emoji_words_and_keeps_a_zwj_chain(tmp_path, monkeypatch):
@@ -474,6 +944,7 @@ def test_emoji_setup_lists_the_question_and_the_budget(monkeypatch):
             assert any("Is cereal a soup" in line for line in shown)
             budget = screen.query_one("#budget")
             assert budget.value == "40"
+            assert screen.query_one("#patience").value == "6"
             assert budget.region.width >= 16
             assert budget.content_region.width >= 6
             assert screen.query_one("#win-mode").value is True

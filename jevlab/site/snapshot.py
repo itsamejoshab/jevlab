@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -12,7 +13,16 @@ from ..db import DB
 from .client import MODES, SiteClient, SiteError, decode_jev_request
 
 BOARD_KEYS = ("highScores", "shortestYes", "byLength", "champions", "winner")
-RULE = "─" * 12
+BAR_WIDTH = 16
+BAR_FILL = "█"
+BAR_EMPTY = "░"
+_RULE_MARKS = ("SYNC ", "✓ ", "✗ ", "■ ", "↩ ", "▸ ")
+_ELAPSED = r"(?:\d+h \d+m|\d+m \d+s|\d+s)"
+_PROGRESS = re.compile(
+    rf"^  (?P<who>.+?)  (?P<bar>[{re.escape(BAR_FILL)}{re.escape(BAR_EMPTY)}]{{{BAR_WIDTH}}})  "
+    rf"(?P<pct>\d+)%  (?P<count>\d+/\d+)  (?P<elapsed>{_ELAPSED})"
+    rf"(?:  (?P<failed>\d+) failed)?$"
+)
 _MODE_LABEL = {
     "strict_chain": "Strict",
     "golf": "Golf",
@@ -29,16 +39,48 @@ def edition_label(edition: str) -> str:
     return edition.capitalize()
 
 
+def meter(pct: int, width: int = BAR_WIDTH) -> str:
+    """A one-line bar. Any progress shows at least one cell; only 100% is full."""
+    pct = max(0, min(100, int(pct)))
+    filled = (pct * width + 50) // 100
+    if pct > 0 and filled == 0:
+        filled = 1
+    if pct < 100 and filled == width:
+        filled = width - 1
+    return BAR_FILL * filled + BAR_EMPTY * (width - filled)
+
+
 def log_rule(title: str) -> str:
-    """A section divider. The title is what the log panel keeps in its border."""
-    return f"{RULE} {title} {RULE}"
+    """A section line. The text after the mark is what the log panel keeps in its border."""
+    if title.startswith("snapshot · "):
+        return "SYNC " + title.removeprefix("snapshot · ")
+    if " · done · " in title:
+        mark = "✓"
+    elif title.endswith(" · failed"):
+        mark = "✗"
+    elif title.startswith("stopped"):
+        mark = "■"
+    elif title.startswith("back to "):
+        mark = "↩"
+    else:
+        mark = "▸"
+    return f"{mark} {title}"
 
 
 def rule_title(message: str) -> str | None:
-    prefix, suffix = f"{RULE} ", f" {RULE}"
-    if message.startswith(prefix) and message.endswith(suffix):
-        return message[len(prefix) : -len(suffix)]
+    for mark in _RULE_MARKS:
+        if message.startswith(mark):
+            return message[len(mark) :]
     return None
+
+
+def parse_progress(message: str) -> dict[str, str] | None:
+    found = _PROGRESS.match(message)
+    return found.groupdict() if found else None
+
+
+def is_progress(message: str) -> bool:
+    return parse_progress(message) is not None
 
 
 def format_elapsed(seconds: float) -> str:
@@ -64,10 +106,16 @@ def mode_labels(modes: tuple[str, ...]) -> str:
 def progress_line(edition: str, index: int, total: int, elapsed: float, failed: int = 0, section: str = "") -> str:
     """One scan tick that still names its edition after the section header has scrolled away."""
     pct = (100 * index) // total if total else 0
-    parts = [section_mark(edition, section), f"{index}/{total}", f"{pct}%", format_elapsed(elapsed)]
+    parts = [
+        section_mark(edition, section),
+        meter(pct),
+        f"{pct}%",
+        f"{index}/{total}",
+        format_elapsed(elapsed),
+    ]
     if failed:
         parts.append(f"{failed} failed")
-    return "  " + " · ".join(parts)
+    return "  " + "  ".join(parts)
 
 
 def _fetch_errors(results: list[dict]) -> int:
@@ -86,7 +134,7 @@ def _drop_absent(db: DB, live_slugs: set[str], log) -> None:
     rows = [(slug,) for slug in gone]
     for table in _QUESTION_TABLES:
         db.executemany(f"DELETE FROM {table} WHERE slug = ?", rows)
-    log(f"  removed {len(gone)} question(s) no longer on the menu")
+    log(f"  removed  {len(gone)} question(s) no longer on the menu")
 
 
 def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, log) -> list[dict]:
@@ -101,10 +149,10 @@ def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, l
         try:
             full = client.question(revision)
         except SiteError as error:
-            log(f"  {question['slug']}: jevRequest failed ({error})")
+            log(f"  fail  {question['slug']}  {error}")
             return revision, None
         except Exception as error:
-            log(f"  {question['slug']}: jevRequest failed ({error!r})")
+            log(f"  fail  {question['slug']}  {error!r}")
             return revision, None
         return revision, full if isinstance(full, dict) else None
 
@@ -123,7 +171,7 @@ def fill_jev_requests(client: SiteClient, questions: list[dict], workers: int, l
             if full.get(key) is not None:
                 merged[key] = full[key]
         filled.append(merged)
-    log(f"  jevRequest · {len(found)}/{len(missing)} filled")
+    log(f"  requests  {len(found)}/{len(missing)}")
     return filled
 
 
@@ -149,7 +197,7 @@ def take_snapshot(
     try:
         viewer = client.viewer()
     except SiteError as error:
-        log(f"  viewer failed ({error}); continuing signed out")
+        log(f"  viewer  failed ({error}); continuing signed out")
         viewer = {}
     me = ((viewer.get("player") or {}).get("user") or {}).get("id") or ""
     (raw_dir / "menu.json").write_text(json.dumps(menu, indent=1))
@@ -189,7 +237,7 @@ def take_snapshot(
         ],
     )
     modes_bit = f" · {mode_labels(modes)}" if modes else ""
-    log(f"  snapshot {snapshot_id} · {len(questions)} questions{modes_bit} · {me or 'anonymous'}")
+    log(f"  #{snapshot_id}  {len(questions)} questions{modes_bit} · {me or 'anonymous'}")
     from ..publish import realign_vault_goals
 
     realign_vault_goals(db, previous_goals, {q["slug"] for q in questions}, log)
@@ -198,7 +246,7 @@ def take_snapshot(
         _drop_absent(db, {q["slug"] for q in menu_questions}, log)
 
     jobs = [(q, mode) for q in questions for mode in modes]
-    log(f"  fetching {len(jobs)} boards · {workers} at a time")
+    log(f"  pull  {len(jobs)} boards · {workers} at a time")
 
     def fetch(job):
         question, mode = job
@@ -279,8 +327,8 @@ def take_snapshot(
         done += f" · {errors} failed"
     log(log_rule(done))
     log(
-        f"  {len(board_rows)} boards · {len(word_rows)} word lists · {len(attempt_rows)} attempts · "
+        f"  kept  {len(board_rows)} boards · {len(word_rows)} word lists · {len(attempt_rows)} attempts · "
         f"{len(score_rows)} scores · {errors} failed"
     )
-    log(f"  saved {raw_dir}")
+    log(f"  wrote  {raw_dir}")
     return snapshot_id

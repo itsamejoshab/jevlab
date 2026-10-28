@@ -7,13 +7,13 @@ import threading
 import time
 
 from textual.app import App, ComposeResult
-from textual.widgets import Button, Select
+from textual.widgets import Button, Select, Static
 
 from jevlab.db import DB
 from jevlab.defense import QUIET, READY, DefenseRun, already_quiet, defend, lexicon, pick_decoys, scan
 from jevlab.rules import banned
 from jevlab.rules.banned import BannedPhrase
-from jevlab.modes import HIGHEST
+from jevlab.modes import EMOJI_HIGHEST, HIGHEST
 from jevlab.tui.defense import DefenseLog, DefenseScreen
 from jevlab.tui.pickers import HomeScreen
 from jevlab.tui.publish_log import TURBO_BANNER
@@ -231,6 +231,32 @@ def test_scan_preselects_a_leaking_board_and_holds_back_the_rest(tmp_path):
     assert "casual" not in with_golf
 
 
+def test_scan_emoji_opens_with_question_glyphs_and_leaves_strict_alone(tmp_path):
+    db = _db(tmp_path)
+    _question(db, "fire", "Is it okay to light a fire")
+    _question(db, "plain", "The")
+    _lead(db, "fire", "highScores", "🔥", mode="emoji")
+    _lead(db, "plain", "highScores", "alpha beta")
+    _impacts(db, "fire", [{"word": "🔥", "averageImpact": 0.9}], mode="emoji")
+    _impacts(db, "plain", [{"word": "alpha", "averageImpact": 0.5}])
+    _impacts(db, "pool", [{"word": "💧", "averageImpact": 0.99}], mode="emoji")
+
+    rows = {target.slug: target for target in scan(db, emoji=True)}
+    assert set(rows) == {"fire"}
+    assert rows["fire"].play_mode == "emoji"
+    assert rows["fire"].status == READY
+    assert rows["fire"].selected
+    decoys = list(rows["fire"].decoys)
+    assert decoys[:3] == ["✅", "🚈", "💧"]
+    assert "🔥" not in decoys
+    assert "alpha" not in decoys
+    assert all(" " not in word for word in decoys)
+    assert len(decoys) == 44
+
+    strict = {target.slug for target in scan(db)}
+    assert strict == {"plain"}
+
+
 class _Site:
     def __init__(self, lead=True, choices=None, chain=None, phrase="alpha beta", word_rows=None):
         self.lead = lead
@@ -430,6 +456,36 @@ def test_defend_posts_the_whole_cover_in_one_pass(tmp_path):
     posted = [op.split(":", 1)[1] for op in site.ops if op.startswith("append:")]
     assert [len(text.split()) for text in posted] == [25, 15]
     assert site.ops[-1] == "clear:"
+
+
+def test_defend_posts_each_emoji_on_its_own_turn(tmp_path, monkeypatch):
+    from jevlab.emoji.lexicon import Index
+    from jevlab.emoji.rank import Atom
+
+    atoms = [Atom("✅", "check"), Atom("💧", "droplet"), Atom("⭐", "star"), Atom("🔥", "fire")]
+    monkeypatch.setattr("jevlab.defense._emoji_pool", lambda: (Index.build(atoms), [atom.text for atom in atoms]))
+    db = _db(tmp_path)
+    _impacts(db, "pool", [{"word": "💧", "averageImpact": 0.9}], mode="emoji")
+
+    class _EmojiSite(_Site):
+        def menu(self):
+            data = super().menu()
+            data["questions"][0]["title"] = "Is it okay"
+            return data
+
+    site = _EmojiSite(phrase="🔥", word_rows=[{"word": "🔥", "averageImpact": 0.8}])
+    lines: list[str] = []
+    result = defend(
+        [("q", "emoji")],
+        log=lines.append,
+        db=db,
+        client=site,
+        lock_path=tmp_path / "lock",
+        word_by_word=False,
+    )
+    assert result.posted == 3
+    assert site.ops == ["append:✅", "append:💧", "append:⭐", "clear:"]
+    assert any("one emoji at a time" in line for line in lines)
 
 
 def test_defend_word_by_word_posts_each_decoy_alone(tmp_path):
@@ -691,6 +747,78 @@ def test_defense_screen_preselects_only_ready_boards(monkeypatch, tmp_path):
             await pilot.pause()
             selected = set(app.screen.query_one("#def-picker").selected)
             assert selected == {"strict_chain:q", "strict_chain:short"}
+
+    asyncio.run(check())
+
+
+def test_emoji_countermeasures_lists_only_emoji_boards(monkeypatch, tmp_path):
+    db = _db(tmp_path)
+    _question(db, "fire", "Is it okay to light a fire")
+    _question(db, "plain", "The")
+    _lead(db, "fire", "highScores", "🔥", mode="emoji")
+    _lead(db, "plain", "highScores", "alpha beta")
+    _impacts(db, "fire", [{"word": "🔥", "averageImpact": 0.9}], mode="emoji")
+    _impacts(db, "plain", [{"word": "alpha", "averageImpact": 0.5}])
+    monkeypatch.setattr("jevlab.tui.defense.DB", lambda: db)
+    monkeypatch.setattr("jevlab.activity.log", lambda *_args, **_kwargs: None)
+
+    class _App(App):
+        def __init__(self):
+            super().__init__()
+            self.game_mode = EMOJI_HIGHEST
+
+        def on_mount(self) -> None:
+            self.push_screen(DefenseScreen(self.game_mode))
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert [target.key for target in screen.targets] == ["emoji:fire"]
+            assert set(screen.query_one("#def-picker").selected) == {"emoji:fire"}
+            words = screen.query_one("#by-word")
+            assert str(words.label) == "One emoji at a time"
+            assert words.value is True
+            assert words.disabled is True
+            assert not screen.query("#golf")
+            assert not screen.query("#casual")
+            help_text = screen.query_one("#def-help", Static).content.plain
+            assert "single emoji" in help_text
+            assert screen.query_one("EditionMark").content.plain.endswith(" | Emoji Highest Mode")
+
+    asyncio.run(check())
+
+
+def test_home_emoji_opens_emoji_countermeasures(monkeypatch, tmp_path):
+    monkeypatch.setattr("jevlab.tui.pickers.DB", lambda: DB(tmp_path / "home.db"))
+
+    class _App(App):
+        def __init__(self):
+            super().__init__()
+            self.game_mode = HIGHEST
+
+        def on_mount(self) -> None:
+            self.push_screen(HomeScreen())
+
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+    async def check() -> None:
+        app = _App()
+        async with app.run_test(size=(120, 48)) as pilot:
+            await pilot.pause()
+            app.screen.query_one("#game-mode", Select).value = "emoji-highest"
+            await pilot.pause()
+            app.screen.action_defense()
+            await pilot.pause()
+            assert isinstance(app.screen, DefenseScreen)
+            assert app.screen._emoji()
+            assert not app.screen.query("#golf")
+            assert str(app.screen.query_one("#by-word").label) == "One emoji at a time"
 
     asyncio.run(check())
 

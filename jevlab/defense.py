@@ -5,6 +5,9 @@ Rivals mine the top of it. Defense posts the question's own words and a few loca
 synonyms first, then other boards' strongest words, skipping function words, so
 that list stops being a copy of our winning phrase. The board keeps every row we
 post, so a decoy that takes a lead stays there.
+
+Emoji is the same idea on the emoji word list. Question glyphs come first, then glyphs
+that score on other emoji boards, then the rest of the catalog. Each emoji is its own turn.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .db import DB
-from .modes import CASUAL, GOLF, HIGH_SCORES, SHORTEST_YES, STRICT
+from .modes import CASUAL, EMOJI, GOLF, HIGH_SCORES, SHORTEST_YES, STRICT
 from .objective import Leader, board_leader, objective_for
 from .publish import LOCK_PATH, SENTENCE_WORDS, TURBO_BOARDS, WordRejected, turn_with_retry
 from .rules import RuleError, check_word, drop_clashing, option_clash
@@ -43,6 +46,7 @@ _ORDER = {READY: 0, QUIET: 1, BARE: 2, BLIND: 3}
 SYNONYMS_PER_WORD = 3
 _TOKEN = re.compile(r"[A-Za-z0-9]+")
 _wordnet = None
+_EMOJI_POOL: tuple | None = None
 
 # Function words. They rank at the top of almost every board, so planting them does not hide our phrase.
 STOPWORDS = frozenset(
@@ -136,6 +140,47 @@ def topic_decoys(text: str) -> list[str]:
             seen.add(syn)
             out.append(syn)
     return out
+
+
+def _emoji_pool() -> tuple:
+    """Catalog index plus glyph order. Loaded once; tests can replace this."""
+    global _EMOJI_POOL
+    if _EMOJI_POOL is None:
+        from .emoji.lexicon import Index
+        from .emoji.search import load_catalog
+
+        catalog = load_catalog()
+        _EMOJI_POOL = (Index.build(catalog), [atom.text for atom in catalog])
+    return _EMOJI_POOL
+
+
+def emoji_topic(text: str, index) -> list[str]:
+    """One catalog glyph per content word of the question, in order."""
+    from .emoji.project import glyph_for
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for word in sentence_words(text):
+        atom = glyph_for(word, index)
+        if atom is None or atom.text in seen:
+            continue
+        seen.add(atom.text)
+        out.append(atom.text)
+    return out
+
+
+def glyph_key(word: str) -> str:
+    """The site's emoji word, or the folded text when it is not an emoji."""
+    from .emoji.rules import RuleError as EmojiRuleError
+    from .emoji.rules import check_word as check_emoji
+
+    text = str(word or "").strip()
+    if not text:
+        return ""
+    try:
+        return fold(check_emoji(text))
+    except EmojiRuleError:
+        return fold(text)
 
 
 def words_of(phrases: list[str]) -> set[str]:
@@ -247,6 +292,36 @@ def pick_decoys(
     return out
 
 
+def pick_emoji_decoys(
+    ranked: list[str],
+    present: set[str],
+    protected: set[str],
+    top_n: int,
+    choices: list | None = None,
+) -> list[str]:
+    """Up to `top_n` new emoji. Skips our glyphs, glyphs already on the list, and anything the site would refuse."""
+    from .emoji.rules import RuleError as EmojiRuleError
+    from .emoji.rules import check_word as check_emoji
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for word in ranked:
+        try:
+            clean = check_emoji(str(word))
+        except EmojiRuleError:
+            continue
+        key = fold(clean)
+        if not key or key in seen or key in present or key in protected:
+            continue
+        if option_clash(clean, choices):
+            continue
+        seen.add(key)
+        out.append(clean)
+        if len(out) >= top_n:
+            break
+    return out
+
+
 def _hold(rows: list[dict], me: str, question: dict, board: str) -> tuple[bool, str]:
     """Whether our row leads `board`, and the phrase sitting on it."""
     if not me:
@@ -314,6 +389,44 @@ def plan_board(
     return Plan(status, tuple(decoys), ours_in_top, len(top), len(public), tuple(kept), answer_words, need)
 
 
+def _plan_emoji(
+    impacts: list[dict],
+    ranked: list[str],
+    phrases: list[str],
+    posted: set[str],
+    choices: list | None,
+    topic: list[str],
+    fillers: list[str],
+) -> Plan:
+    """Same quiet line as an English board. Decoys are glyphs, not words."""
+    protected = {key for phrase in phrases for word in phrase.split() if (key := glyph_key(word))}
+    stats: dict[str, float] = {}
+    for row in impacts:
+        key = glyph_key(str(row.get("word") or ""))
+        if not key:
+            continue
+        impact = float(row.get("averageImpact") or 0)
+        stats[key] = max(stats.get(key, 0.0), impact)
+    public = set(stats)
+    top = [key for key, _impact in sorted(stats.items(), key=lambda item: (-item[1], item[0]))[:HEADLINE_WORDS]]
+    ours_in_top = sum(1 for word in top if word in protected)
+    answer_words = sum(1 for word in public if word in protected)
+    quiet = already_quiet(ours_in_top, len(top), len(public), answer_words)
+    need = 0 if quiet else decoys_needed(answer_words, len(public))
+    planted = {key for word in posted if (key := glyph_key(word))}
+    decoys = pick_emoji_decoys(topic + ranked + fillers, public | planted, protected, need, choices)
+    kept = [phrase for phrase in phrases if phrase.split()]
+    if not kept:
+        status = BLIND
+    elif quiet:
+        status = QUIET
+    elif not decoys:
+        status = BARE
+    else:
+        status = READY
+    return Plan(status, tuple(decoys), ours_in_top, len(top), len(public), tuple(kept), answer_words, need)
+
+
 @dataclass(frozen=True)
 class DefenseTarget:
     slug: str
@@ -354,15 +467,25 @@ def _posted(db: DB, mode: str) -> dict[str, set[str]]:
     return out
 
 
-def scan(db: DB, include_casual: bool = False, include_golf: bool = False) -> list[DefenseTarget]:
-    """Boards we lead, from the snapshot. Ready rows are the ones worth posting on."""
+def scan(db: DB, include_casual: bool = False, include_golf: bool = False, *, emoji: bool = False) -> list[DefenseTarget]:
+    """Boards we lead, from the snapshot. Ready rows are the ones worth posting on.
+
+    `emoji` scans the emoji word list only. Highest and Shortest still share that list.
+    """
     me = db.me()
     questions = db.questions()
-    modes = [STRICT]
-    if include_golf:
-        modes.append(GOLF)
-    if include_casual:
-        modes.append(CASUAL)
+    if emoji:
+        modes = [EMOJI]
+    else:
+        modes = [STRICT]
+        if include_golf:
+            modes.append(GOLF)
+        if include_casual:
+            modes.append(CASUAL)
+    emoji_index = None
+    fillers: list[str] = []
+    if emoji:
+        emoji_index, fillers = _emoji_pool()
     found: list[DefenseTarget] = []
     for mode in modes:
         impacts = _impacts(db, mode)
@@ -380,14 +503,26 @@ def scan(db: DB, include_casual: bool = False, include_golf: bool = False) -> li
             phrases = [
                 phrase for lead, phrase in ((high_lead, high_phrase), (short_lead, short_phrase)) if lead and phrase
             ]
-            decided = plan_board(
-                impacts.get(slug, []),
-                ranked,
-                phrases,
-                posted.get(slug, set()),
-                choices,
-                question.get("title") or question.get("instructions") or "",
-            )
+            question_text = question.get("title") or question.get("instructions") or ""
+            if emoji:
+                decided = _plan_emoji(
+                    impacts.get(slug, []),
+                    ranked,
+                    phrases,
+                    posted.get(slug, set()),
+                    choices,
+                    emoji_topic(question_text, emoji_index),
+                    fillers,
+                )
+            else:
+                decided = plan_board(
+                    impacts.get(slug, []),
+                    ranked,
+                    phrases,
+                    posted.get(slug, set()),
+                    choices,
+                    question_text,
+                )
             held = tuple(name for lead, name in ((high_lead, "Highest"), (short_lead, "Shortest")) if lead)
             found.append(
                 DefenseTarget(
@@ -622,14 +757,28 @@ def _defend_one(
         log("  no longer leading; skipping")
         return DefenseRun(0, 0, 1)
     phrases = [phrase for lead, phrase in ((high_lead, high_phrase), (short_lead, short_phrase)) if lead and phrase]
-    decided = plan_board(
-        impacts,
-        ranked,
-        phrases,
-        _posted(db, mode).get(slug, set()),
-        choices,
-        live.get("title") or live.get("instructions") or "",
-    )
+    question_text = live.get("title") or live.get("instructions") or ""
+    if mode == EMOJI:
+        word_by_word = True
+        index, fillers = _emoji_pool()
+        decided = _plan_emoji(
+            impacts,
+            ranked,
+            phrases,
+            _posted(db, mode).get(slug, set()),
+            choices,
+            emoji_topic(question_text, index),
+            fillers,
+        )
+    else:
+        decided = plan_board(
+            impacts,
+            ranked,
+            phrases,
+            _posted(db, mode).get(slug, set()),
+            choices,
+            question_text,
+        )
     if decided.status == BLIND:
         log("  leading phrase is missing; skipping so we do not repost our own words")
         return DefenseRun(0, 0, 1)
@@ -643,7 +792,12 @@ def _defend_one(
     if dry_run:
         log(f"  {sentence}\n  dry run.")
         return DefenseRun(0, 0, 0, 1)
-    how = " one word at a time" if word_by_word else ""
+    if mode == EMOJI:
+        how = " one emoji at a time"
+    elif word_by_word:
+        how = " one word at a time"
+    else:
+        how = ""
     log(f"  {sentence}\n  submitting...{how}")
     attempt = client.attempt(live["revisionId"], mode) or client.start(live["revisionId"], mode)
     try:
@@ -696,7 +850,9 @@ def defend(
         menu = {q["slug"]: q for q in client.menu().get("questions") or []}
         modes = {mode for _, mode in jobs}
         ranked_by_mode = {mode: lexicon(list(_impacts(db, mode).values())) for mode in modes}
-        if turbo:
+        if EMOJI in modes:
+            _emoji_pool()
+        if turbo and any(mode != EMOJI for mode in modes):
             _thesaurus()
 
         def one(item: tuple[int, tuple[str, str]]) -> tuple[bool, DefenseRun]:

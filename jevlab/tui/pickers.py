@@ -352,7 +352,7 @@ class HomeScreen(Screen):
     def action_defense(self) -> None:
         from .defense import DefenseScreen
 
-        self.app.push_screen(DefenseScreen())
+        self.app.push_screen(DefenseScreen(self.app.game_mode))
 
     def action_search(self) -> None:
         if not self.app.game_mode.publishable:

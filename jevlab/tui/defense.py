@@ -16,7 +16,7 @@ from textual.widgets.selection_list import Selection
 from .. import activity
 from ..db import DB
 from ..defense import BARE, BLIND, QUIET, READY, DefenseTarget, defend, scan
-from ..modes import CASUAL, GOLF
+from ..modes import CASUAL, EMOJI, GOLF, GameMode
 from .chrome import EditionMark
 from .copyselect import SelectableRichLog
 from .pickers import RunKeys, Setting
@@ -28,6 +28,8 @@ def _mode_name(play_mode: str) -> str:
         return "Casual"
     if play_mode == GOLF:
         return "Golf"
+    if play_mode == EMOJI:
+        return "Emoji"
     return "Strict"
 
 
@@ -103,13 +105,24 @@ class DefenseScreen(RunKeys, Screen):
         Binding("escape", "back", "back"),
     ]
 
-    def __init__(self):
+    def __init__(self, game_mode: GameMode | None = None):
         super().__init__()
+        self.game_mode = game_mode
         self.targets: list[DefenseTarget] = []
         self.transcript = DefenseLog()
 
+    def _mode(self) -> GameMode | None:
+        if self.game_mode is not None:
+            return self.game_mode
+        return getattr(self.app, "game_mode", None)
+
+    def _emoji(self) -> bool:
+        mode = self._mode()
+        return bool(mode is not None and mode.emoji)
+
     def compose(self) -> ComposeResult:
-        mode = getattr(self.app, "game_mode", None)
+        mode = self._mode()
+        emoji = self._emoji()
         yield EditionMark("Countermeasures", mode.label if mode is not None else None)
         with Horizontal(id="def-body"):
             with Vertical(id="def-side"):
@@ -122,15 +135,20 @@ class DefenseScreen(RunKeys, Screen):
                     with Horizontal(classes="opt"):
                         yield Setting("Dry run", False, id="dry", compact=True)
                         yield Static("nothing is sent", classes="hint")
-                    with Horizontal(classes="opt"):
-                        yield Setting("Word by word", False, id="by-word", compact=True)
-                        yield Static("one row per word on the words table", classes="hint")
-                    with Horizontal(classes="opt"):
-                        yield Setting("Include golf (no longer on website)", False, id="golf", compact=True)
-                        yield Static("leave this off", classes="hint")
-                    with Horizontal(classes="opt"):
-                        yield Setting("Include casual", False, id="casual", compact=True)
-                        yield Static("casual keeps its own word list", classes="hint")
+                    if emoji:
+                        with Horizontal(classes="opt"):
+                            yield Setting("One emoji at a time", True, id="by-word", compact=True, disabled=True)
+                            yield Static("the site takes one emoji per turn", classes="hint")
+                    else:
+                        with Horizontal(classes="opt"):
+                            yield Setting("Word by word", False, id="by-word", compact=True)
+                            yield Static("one row per word on the words table", classes="hint")
+                        with Horizontal(classes="opt"):
+                            yield Setting("Include golf (no longer on website)", False, id="golf", compact=True)
+                            yield Static("leave this off", classes="hint")
+                        with Horizontal(classes="opt"):
+                            yield Setting("Include casual", False, id="casual", compact=True)
+                            yield Static("casual keeps its own word list", classes="hint")
                     with Horizontal(classes="opt"):
                         yield Setting("Turbo", False, id="turbo", compact=True)
                         yield Static("several questions at once; the log is tagged", classes="hint")
@@ -145,16 +163,23 @@ class DefenseScreen(RunKeys, Screen):
         self.reload()
 
     def reload(self) -> None:
-        include_casual = self.query_one("#casual", Checkbox).value
-        include_golf = self.query_one("#golf", Checkbox).value
         db = DB()
         snap = db.latest_snapshot()
-        self.targets = scan(db, include_casual=include_casual, include_golf=include_golf) if snap and db.me() else []
+        emoji = self._emoji()
+        if snap and db.me():
+            if emoji:
+                self.targets = scan(db, emoji=True)
+            else:
+                include_casual = self.query_one("#casual", Checkbox).value
+                include_golf = self.query_one("#golf", Checkbox).value
+                self.targets = scan(db, include_casual=include_casual, include_golf=include_golf)
+        else:
+            self.targets = []
         picker = self.query_one("#def-picker", SelectionList)
         picker.clear_options()
         for target in self.targets:
             picker.add_option(Selection(_row(target), target.key, target.selected))
-        self.query_one("#def-help", Static).update(_help(self.targets, snap, db.me()))
+        self.query_one("#def-help", Static).update(_help(self.targets, snap, db.me(), emoji=emoji))
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id in {"casual", "golf"} and not self.busy:
@@ -194,7 +219,7 @@ class DefenseScreen(RunKeys, Screen):
             self.notify("nothing selected", severity="warning")
             return
         dry = self.query_one("#dry", Checkbox).value
-        word_by_word = self.query_one("#by-word", Checkbox).value
+        word_by_word = True if self._emoji() else self.query_one("#by-word", Checkbox).value
         turbo = self.query_one("#turbo", Checkbox).value
         self.begin_run()
         self.query_one("#defend", Button).disabled = True
@@ -254,7 +279,7 @@ def _row(target: DefenseTarget) -> Text:
     return text
 
 
-def _help(targets: list[DefenseTarget], snap, me: str) -> Text:
+def _help(targets: list[DefenseTarget], snap, me: str, emoji: bool = False) -> Text:
     text = Text()
     text.append("Defense  ", style="bold")
     if snap is None:
@@ -273,12 +298,22 @@ def _help(targets: list[DefenseTarget], snap, me: str) -> Text:
             f"{counts[READY]} ready, preselected. {counts[QUIET]} already crowded. "
             f"{counts[BARE] + counts[BLIND]} with nothing safe to add."
         )
-    text.append(
-        "\nThe words list is per play mode. Highest and Shortest share it, so one Strict pass covers both. "
-        "Casual has its own. "
-        "A board is left unselected once the list has 40 or more words and our answer is at most "
-        "a quarter of the top 20 by impact, or at most a quarter of the whole list. "
-        "Each pass adds a few more words than that line needs, so it still finishes if a banned word is skipped. "
-        "Words in our leading phrase, words already on the list, words already planted, and stop words are skipped.",
-    )
+    if emoji:
+        text.append(
+            "\nEmoji Highest and Shortest share one list, so one pass covers both. "
+            "Each turn is a single emoji. Question glyphs come first, then glyphs that score on other boards, "
+            "then the rest of the catalog. "
+            "A board is left unselected once the list has 40 or more emoji and our answer is at most "
+            "a quarter of the top 20 by impact, or at most a quarter of the whole list. "
+            "Glyphs in our leading phrase, glyphs already on the list, and glyphs already planted are skipped.",
+        )
+    else:
+        text.append(
+            "\nThe words list is per play mode. Highest and Shortest share it, so one Strict pass covers both. "
+            "Casual has its own. "
+            "A board is left unselected once the list has 40 or more words and our answer is at most "
+            "a quarter of the top 20 by impact, or at most a quarter of the whole list. "
+            "Each pass adds a few more words than that line needs, so it still finishes if a banned word is skipped. "
+            "Words in our leading phrase, words already on the list, words already planted, and stop words are skipped.",
+        )
     return text

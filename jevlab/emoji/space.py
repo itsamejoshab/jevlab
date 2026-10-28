@@ -148,8 +148,12 @@ def cached_table() -> Table | None:
         blob = np.load(path, allow_pickle=False)
         word_keys = [str(key) for key in blob["word_keys"]]
         glyph_keys = [str(key) for key in blob["glyph_keys"]]
-        words = {key: blob["word_vecs"][index] for index, key in enumerate(word_keys)}
-        glyphs = {key: blob["glyph_vecs"][index] for index, key in enumerate(glyph_keys)}
+        # NpzFile reads the whole array on every lookup, and a row view keeps that
+        # copy. Indexing inside the loop would retain one full matrix per word.
+        word_vecs = blob["word_vecs"]
+        glyph_vecs = blob["glyph_vecs"]
+        words = {key: word_vecs[index] for index, key in enumerate(word_keys)}
+        glyphs = {key: glyph_vecs[index] for index, key in enumerate(glyph_keys)}
     except (OSError, ValueError, KeyError):
         return None
     _TABLE = Table(words, glyphs)

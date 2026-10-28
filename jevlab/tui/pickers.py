@@ -164,7 +164,7 @@ class HomeScreen(Screen):
     #home-rule { color: $primary-darken-2; margin: 1 0 0 0; }
     #home-mode { height: 3; margin-top: 1; align: center middle; }
     #home-mode Label { padding: 1 1 0 0; text-style: bold; color: $accent; }
-    #game-mode { width: 40; }
+    #game-mode { width: 54; }
     #edition-label { margin-left: 2; }
     #edition { width: 18; }
     #home-cards { height: 4; margin-top: 1; }
@@ -329,7 +329,11 @@ class HomeScreen(Screen):
 
         text.append("SNAPSHOT ", style="bold")
         text.append(f"{snap['taken_at']}  ·  {len(rows)} questions, {len(searchable)} searchable", style="dim")
-        if not mode.searchable:
+        if mode.emoji:
+            text.append(
+                "\nLocal emoji search. The oracle budget is capped, and nothing is cross-posted.", style="yellow"
+            )
+        elif not mode.searchable:
             text.append(
                 "\nPublish only: fill this vault with `jevlab crosspost` from the Strict vault.", style="yellow"
             )
@@ -353,6 +357,11 @@ class HomeScreen(Screen):
     def action_search(self) -> None:
         if not self.app.game_mode.publishable:
             self.app.push_screen(LiveSetupScreen())
+            return
+        if self.app.game_mode.emoji:
+            from .emoji import EmojiSetupScreen
+
+            self.app.push_screen(EmojiSetupScreen(self.app.game_mode))
             return
         if not self.app.game_mode.searchable:
             self.notify(
@@ -410,7 +419,7 @@ class HomeScreen(Screen):
         self.app.call_from_thread(finish, "Vacuum finished", failed=False)
 
 
-SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"))
+SNAPSHOT_MODES = (("Strict", "strict_chain"), ("Golf", "golf"), ("Casual", "word_chain"), ("Emoji", "emoji"))
 
 
 def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=None) -> None:
@@ -1278,18 +1287,22 @@ class PublishScreen(RunKeys, Screen):
                 self._rows_off = cached
         self.rows = sorted((s for s in cached if s.entry_beats), key=lambda s: s.search_order)
         self.long_rows = sorted((s for s in cached if s.long_shot), key=lambda s: s.search_order) if with_long else []
-        from ..crosspost import picks as golf_picks
+        if self.game_mode.emoji:
+            self.golf_picks = []
+            self.casual_picks = []
+        else:
+            from ..crosspost import picks as golf_picks
 
-        if need_golf:
-            self._golf_all = golf_picks(DB(), entries=loaded)
-        self.golf_picks = list(self._golf_all)
-        self.casual_picks = []
-        if include_casual:
-            from ..crosspost import casual_picks
+            if need_golf:
+                self._golf_all = golf_picks(DB(), entries=loaded)
+            self.golf_picks = list(self._golf_all)
+            self.casual_picks = []
+            if include_casual:
+                from ..crosspost import casual_picks
 
-            if need_casual:
-                self._casual_all = casual_picks(DB(), entries=loaded)
-            self.casual_picks = list(self._casual_all)
+                if need_casual:
+                    self._casual_all = casual_picks(DB(), entries=loaded)
+                self.casual_picks = list(self._casual_all)
         if not include_leading:
             self.rows = [s for s in self.rows if not s.we_lead]
             self.golf_picks = [pick for pick in self.golf_picks if not _already_leading(pick)]

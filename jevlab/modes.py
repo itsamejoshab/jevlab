@@ -1,7 +1,8 @@
 """Game modes: a site play mode plus the board we compete on. Each keeps its own run memory, vault file, and
 publish records; oracle samples are shared because a phrase scores the same whichever board it goes to.
 
-Golf modes are publish-only: their vault lines are cross-posted from Strict, never searched."""
+Golf and casual are publish-only: their vault lines are cross-posted from Strict, never searched.
+Emoji is searched by jevlab.emoji, not by the Strict engine, and is not a crosspost destination."""
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ BOARDS = (HIGH_SCORES, SHORTEST_YES)
 STRICT = "strict_chain"
 GOLF = "golf"
 CASUAL = "word_chain"
+EMOJI = "emoji"
 SEARCHABLE_KINDS = ("noul", "choice", "score")
 
 
@@ -42,6 +44,10 @@ class GameMode:
         return self.play_mode == STRICT
 
     @property
+    def emoji(self) -> bool:
+        return self.play_mode == EMOJI
+
+    @property
     def unit(self) -> str:
         return "char" if self.golf else "word"
 
@@ -61,11 +67,21 @@ GOLF_HIGHEST = GameMode("golf-highest", "Golf Highest", play_mode=GOLF)
 GOLF_SHORTEST = GameMode("golf-shortest", "Golf Shortest", play_mode=GOLF, board=SHORTEST_YES)
 CASUAL_HIGHEST = GameMode("casual-highest", "Casual Highest", play_mode=CASUAL)
 CASUAL_SHORTEST = GameMode("casual-shortest", "Casual Shortest", play_mode=CASUAL, board=SHORTEST_YES)
+EMOJI_HIGHEST = GameMode("emoji-highest", "Emoji Highest", play_mode=EMOJI)
+EMOJI_SHORTEST = GameMode("emoji-shortest", "Emoji Shortest", play_mode=EMOJI, board=SHORTEST_YES)
 LIVE = GameMode("live", "Live Mode")
-PUBLISH_MODES = GAME_MODES + (GOLF_HIGHEST, GOLF_SHORTEST, CASUAL_HIGHEST, CASUAL_SHORTEST)
+PUBLISH_MODES = GAME_MODES + (
+    GOLF_HIGHEST,
+    GOLF_SHORTEST,
+    CASUAL_HIGHEST,
+    CASUAL_SHORTEST,
+    EMOJI_HIGHEST,
+    EMOJI_SHORTEST,
+)
 MODES = PUBLISH_MODES + (LIVE,)
 # Golf and the casual proxy are Strict follow-ups, not modes you enter from home.
-HOME_MODES = GAME_MODES + (LIVE,)
+# Emoji is its own search, so it is on the home screen.
+HOME_MODES = GAME_MODES + (EMOJI_HIGHEST, EMOJI_SHORTEST, LIVE)
 
 
 def from_name(name: str) -> GameMode:

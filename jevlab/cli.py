@@ -147,6 +147,26 @@ def cmd_search(args) -> int:
     return 0
 
 
+def cmd_emoji(args) -> int:
+    """Local emoji search. No generator, and the oracle budget is the cap for each question."""
+    from .db import DB
+    from .emoji.search import run_slugs
+    from .modes import HIGH_SCORES, SHORTEST_YES
+
+    board = SHORTEST_YES if args.board == "shortest" else HIGH_SCORES
+    db = DB()
+    if args.q:
+        slugs = [question_slug(item) for item in args.q]
+    else:
+        slugs = [row["slug"] for row in db.all("SELECT slug FROM questions ORDER BY slug")]
+    if not slugs:
+        print("no questions in the snapshot")
+        return 1
+    print(f"emoji {args.board}: {len(slugs)} question(s), {args.budget} oracle calls each")
+    run_slugs(db, slugs, board=board, budget=args.budget, log=print)
+    return 0
+
+
 def search_targets(db, slug: str, args) -> list[str]:
     """--target runs one answer, --all-targets every answer of a choice question; "" is the whole question."""
     from .rules import option_names
@@ -625,6 +645,12 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--plateau", type=int, default=0, help="flat rounds per level (0 = run to budget)")
         p.set_defaults(func=func)
 
+    p = sub.add_parser("emoji", help="emoji search: local shortlist, capped oracle, no generator")
+    p.add_argument("--q", nargs="*", help="question slugs or play URLs (default: every question in the snapshot)")
+    p.add_argument("--board", default="highest", choices=board_names, help="emoji board to compete on")
+    p.add_argument("--budget", type=int, default=40, help="max oracle calls per question")
+    p.set_defaults(func=cmd_emoji)
+
     p = sub.add_parser(
         "triage",
         help="score the most promising existing lines (Jev's vault and history, "
@@ -670,7 +696,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--mode",
-        choices=["strict", "golf"],
+        choices=["strict", "golf", "emoji"],
         help="play mode (list: default every mode; queue/unqueue/drop: default strict)",
     )
     p.set_defaults(func=cmd_vault)
@@ -695,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-verify", action="store_true", help="skip the oracle check after a loss")
     p.add_argument("--delay", type=float, default=0.01, help="seconds between site turns")
     p.add_argument("--board", choices=board_names, help="only this game mode board (default every board)")
-    p.add_argument("--mode", choices=["strict", "golf"], help="only this play mode (default every mode)")
+    p.add_argument("--mode", choices=["strict", "golf", "emoji"], help="only this play mode (default every mode)")
     p.add_argument(
         "--no-crosspost", action="store_true", help="do not follow each landed Strict line with its Golf cross-posts"
     )

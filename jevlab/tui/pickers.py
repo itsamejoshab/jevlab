@@ -466,7 +466,7 @@ def run_snapshots(editions: tuple[str, ...], modes: tuple[str, ...], log, halt=N
 
 
 def snapshot_line(message: str) -> Text:
-    """Timestamp plus a colored snapshot line. The words stay the log line; the color is the screen's."""
+    """Timestamp plus the snapshot line, colored for this screen."""
     line = Text(f"{time.strftime('%H:%M:%S')}  ", style="dim")
     line.append_text(_paint_snapshot(message))
     return line
@@ -544,7 +544,7 @@ def _paint_failed(title: str) -> Text:
 
 def _paint_back(title: str) -> Text:
     text = Text()
-    text.append("↩  ", style="cyan")
+    text.append("↩ ", style="cyan")
     text.append("back to ", style="dim")
     text.append(title.removeprefix("back to "), style="bold")
     return text
@@ -589,7 +589,7 @@ def _paint_progress(message: str) -> Text:
     text = Text()
     text.append(message[:who_at])
     text.append(message[who_at:bar_at], style="bold")
-    text.append(message[bar_at : pct_at], style=hot)
+    text.append(message[bar_at:pct_at], style=hot)
     text.append(message[pct_at:pct_end], style=hot)
     if has_failed and failed_at > pct_end:
         text.append(message[pct_end:failed_at], style="dim")
